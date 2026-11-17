@@ -347,6 +347,7 @@ tools/
 
 ## 13. 更新日志
 
+- **2026-11-17** 仓库所有者的 GitHub 用户名改为 UnknownGlyph：公开仓库现为 https://github.com/UnknownGlyph/atlas-forge，README、`Cargo.toml`、交接报告与发布说明中的链接随之更新。
 - **2026-11-17** 持续集成在 GitHub 上首次全部通过：修正了测试程序找不到随附字体（较新 cargo 的目录更深）与工具名称在并行测试中被翻译的两个问题；`cargo test` 加 `--no-fail-fast`。
 - **2026-11-17** 公开仓库的贡献者：Claude（不写具体模型）、仓库所有者（第二）、ChatGPT；README 与发布说明同步。
 - **2026-11-17** v0.1.0-alpha：导出中国名优先于河流与线路名（滑动、偏移、缩小），河名沿线让位；随附 Noto Sans SC；MIT；可移植的构建脚本与路径重映射的打包；公开仓库与预发布。
