@@ -101,7 +101,7 @@ assets/fonts       随附字体 Noto Sans SC（SIL OFL 1.1）
 ### 贡献者与致谢
 
 - **Claude**（Anthropic）——**第一贡献者**：设计并编写了 Atlas Forge 的大部分代码、测试与文档。
-- **仓库所有者**——项目发起人与产品负责人：提出构想，确定方向与规则，审阅每一个里程碑。
+- **[@UnknownGlyph](https://github.com/UnknownGlyph)**（仓库所有者）——**第二贡献者**，项目发起人与产品负责人：提出构想，确定方向与规则，审阅每一个里程碑。
 
 感谢 Rust 以及 wgpu、egui/eframe、tiny-skia、ab_glyph、ttf-parser、imbl、geo、image、serde 等开源项目；感谢 Google 与 Adobe 的 Noto Sans SC 字体；感谢在测试中参与创作的 Gemini 与 DeepSeek 模型。
 
@@ -166,7 +166,7 @@ The code is released under the [MIT License](LICENSE). The bundled font, Noto Sa
 ### Contributors and thanks
 
 - **Claude** (Anthropic) — **first contributor**: designed and wrote most of Atlas Forge's code, tests and documentation.
-- **The repository owner** — founder and product lead: had the idea, set the direction and the rules, and reviewed every milestone.
+- **[@UnknownGlyph](https://github.com/UnknownGlyph)** (the repository owner) — **second contributor**, founder and product lead: had the idea, set the direction and the rules, and reviewed every milestone.
 
 Thanks to Rust and to the open-source projects this is built on, including wgpu, egui/eframe, tiny-skia, ab_glyph, ttf-parser, imbl, geo, image and serde; to Google and Adobe for the Noto Sans SC font; and to the Gemini and DeepSeek models that took part in the tests.
 
