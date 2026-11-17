@@ -1,0 +1,11 @@
+[package]
+name = "map_bench"
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+edition.workspace = true
+
+[dependencies]
+map_core.workspace = true
+map_io.workspace = true
+map_render.workspace = true

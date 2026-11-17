@@ -1,0 +1,4 @@
+target/
+*.atlas.tmp
+dist/
+tools/local.cmd

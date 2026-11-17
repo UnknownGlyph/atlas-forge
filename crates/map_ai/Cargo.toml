@@ -1,0 +1,17 @@
+[package]
+name = "map_ai"
+version.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Atlas Forge - an assistant that edits a draft of the world through the map_api tools, with a language model (Gemini or OpenAI-compatible) over HTTPS"
+
+[[bin]]
+name = "atlas-agent"
+path = "src/bin/atlas-agent.rs"
+
+[dependencies]
+map_core.workspace = true
+map_io.workspace = true
+map_api = { path = "../map_api" }
+serde_json.workspace = true

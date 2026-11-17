@@ -1,0 +1,20 @@
+[package]
+name = "map_api"
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+edition.workspace = true
+description = "Atlas Forge — structured, read-only queries of a world for scripts and AI clients"
+
+[[bin]]
+name = "atlas-query"
+path = "src/main.rs"
+
+[[bin]]
+name = "atlas-mcp"
+path = "src/bin/atlas-mcp.rs"
+
+[dependencies]
+map_core.workspace = true
+map_io.workspace = true
+serde_json.workspace = true
