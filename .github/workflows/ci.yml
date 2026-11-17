@@ -17,6 +17,6 @@ jobs:
       - name: Build
         run: cargo build --workspace --release --all-targets
       - name: Test
-        run: cargo test --workspace --release
+        run: cargo test --workspace --release --no-fail-fast
       - name: Clippy
         run: cargo clippy --workspace --release --all-targets

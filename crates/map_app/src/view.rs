@@ -72,6 +72,12 @@ impl Tool {
         l.rsplit_once("  ").map_or(l, |x| x.0)
     }
 
+    /// The name as written (Chinese), without its key.
+    pub fn source_name(self) -> &'static str {
+        let l = self.source_label();
+        l.rsplit_once("  ").map_or(l, |x| x.0)
+    }
+
     /// The key that selects the tool.
     pub fn key(self) -> egui::Key {
         use egui::Key;

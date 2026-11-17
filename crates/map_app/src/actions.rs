@@ -201,7 +201,9 @@ fn table_with(translate: bool) -> Vec<Action> {
         a(Act::ExitFocus, Menu::View, "退出局部视图", None, ""),
     ];
     for tool in Tool::ALL {
-        t.push(a(Act::Tool(tool), Menu::Tools, tool.name(), key(NONE, tool.key()), tool.help()));
+        // (the text as written: translated with the rest of the table, not
+        // in whatever language happens to be set while it is built)
+        t.push(a(Act::Tool(tool), Menu::Tools, tool.source_name(), key(NONE, tool.key()), tool.source_help()));
     }
     t.extend([
         a(Act::Timeline, Menu::Time, "按年份查看与编辑", key(CMD, Key::T), "开启后地图显示所选年份的状态，修改从该年起生效；关闭则显示最新状态。"),
