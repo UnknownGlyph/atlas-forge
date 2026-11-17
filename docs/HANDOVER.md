@@ -295,7 +295,7 @@ tools/
   - `map_core::path_text::along_path_shifted`：沿线放字，可从中点前后移动（`along_path` 是移动 0 的情形）。
   - 结果：Gemini 的世界 8/8、DeepSeek 的 9/9 个国名（以前 2/8、8/9）；`docs/ai_create_from_nothing.png` 重新生成（以 1400×780 渲染后缩小，图例大小与以前一致）。
 - **随附字体**：`assets/fonts/NotoSansSC-Regular.ttf`（Noto Sans SC，SIL OFL 1.1；许可 `OFL.txt` 与说明 `README.md` 在旁）。来源是 google/fonts 官方仓库的 `ofl/notosanssc/NotoSansSC[wght].ttf`；这个可变字体的默认实例是 Thin（wght 100），所以用 fontTools 的 instancer 取 wght=400 的静态实例（Google Fonts 自己的静态文件也是这样得到的；10.6 MB，30890 个字符；名称不含 OFL 保留名 "Source"）。
-  - `map_io::fonts::{BUNDLED, bundled_dirs, bundled}`：先找程序旁的 `fonts\`（打包后），再找程序所在目录及其上 4 级中的 `assetsonts\`（源码树中的构建与测试）；不把构建机的路径编进程序。
+  - `map_io::fonts::{BUNDLED, bundled_dirs, bundled}`：先找程序旁的 `fonts\`（打包后），再找程序所在目录及其上各级中的 `assets\fonts\`（源码树中的构建与测试；较新的 cargo 把测试程序放在 `target\release\build\<crate>\<hash>\out` 这样深的地方）；不把构建机的路径编进程序。
   - `png::find_system_font()` 先用随附字体，找不到才用系统字体（应用界面、导出、自检、`map_api` 都经过它）；`font_dirs()` 把随附字体的目录排在最前，所以也能按族名 "Noto Sans SC" 选它。SVG 的默认字体列表以 Noto Sans SC 开头。
   - 自检报告多一行"字体：随附的 Noto Sans SC"（找不到时说明用了系统字体，或给出警告）。
 - **发布准备**：

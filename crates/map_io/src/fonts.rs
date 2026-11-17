@@ -49,13 +49,14 @@ pub struct FontFamily {
 pub const BUNDLED: &str = "NotoSansSC-Regular.ttf";
 
 /// Folders the bundled font may be in: `fonts` beside the program (as
-/// packaged), else `assets/fonts` in a folder above the program (a build in
-/// the source tree, and the tests).
+/// packaged), else `assets/fonts` in any folder above the program (a build
+/// in the source tree, and the tests: newer cargo puts test programs as
+/// deep as `target/release/build/<crate>/<hash>/out`).
 pub fn bundled_dirs() -> Vec<PathBuf> {
     let mut v = Vec::new();
     if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)) {
         v.push(dir.join("fonts"));
-        v.extend(dir.ancestors().take(5).map(|a| a.join("assets").join("fonts")));
+        v.extend(dir.ancestors().map(|a| a.join("assets").join("fonts")));
     }
     v
 }
