@@ -985,7 +985,7 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
             }
         }
     }
-    s.shade = hill_shading(doc, &m);
+    s.shade = surface_shading(doc, &m);
     furniture(&mut s, doc, &m, o, k);
     if o.legend {
         let mut items: Vec<(String, LegendKey)> = theme.legend.iter().map(|i| (i.label.clone(), LegendKey::Color(i.color))).collect();
@@ -1049,16 +1049,37 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
     s
 }
 
-/// The terrain's hill shading resampled onto the picture, as strong as
-/// the style says (none without terrain, or when turned off).
-fn hill_shading(doc: &Document, m: &Mapper) -> Option<Vec<u8>> {
-    let t = doc.terrain.as_ref()?;
+/// Draw the same optional surface rasters as the map, below linework.
+fn surface_shading(doc: &Document, m: &Mapper) -> Option<Vec<u8>> {
     let k = doc.style.hillshade.clamp(0.0, 1.0);
-    if k <= 0.0 {
-        return None;
+    let mut base = doc.terrain.as_ref().filter(|_| k > 0.).map(|t| {
+        project_raster(&t.shade(doc.radius(), 1.0), t.w as usize, t.h as usize, k, m)
+    });
+    let Some(p) = doc.climate.as_deref().filter(|p| p.visible && p.opacity > 0.0) else {
+        return base;
+    };
+    let Some(s) = p.shown() else { return base };
+    let (w, h, rgba) = s.raster(p.field, p.period);
+    let top = project_raster(&rgba, w, h, p.opacity, m);
+    if let Some(bottom) = &mut base {
+        for (a, b) in bottom.as_chunks_mut::<4>().0.iter_mut().zip(top.as_chunks::<4>().0) {
+            if b[3] == 0 {
+                continue;
+            }
+            let alpha = f32::from(b[3]) / 255.0;
+            let remain = f32::from(a[3]) / 255.0 * (1.0 - alpha);
+            for i in 0..3 {
+                a[i] = ((f32::from(b[i]) * alpha + f32::from(a[i]) * remain) / (alpha + remain)).round() as u8;
+            }
+            a[3] = ((alpha + remain) * 255.0).round() as u8;
+        }
+    } else {
+        base = Some(top);
     }
-    let src = t.shade(doc.radius(), 1.0);
-    let (tw, th) = (t.w as usize, t.h as usize);
+    base
+}
+
+fn project_raster(src: &[u8], tw: usize, th: usize, k: f32, m: &Mapper) -> Vec<u8> {
     let (w, h) = (m.w as usize, m.h as usize);
     let mut out = vec![0u8; w * h * 4];
     for y in 0..h {
@@ -1085,7 +1106,7 @@ fn hill_shading(doc: &Document, m: &Mapper) -> Option<Vec<u8>> {
             }
         }
     }
-    Some(out)
+    out
 }
 
 /// The longest piece (cut at the seam) of a lon/lat path, on the image.

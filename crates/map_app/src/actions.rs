@@ -72,6 +72,7 @@ pub enum Act {
     Names,
     Roads,
     Assistant,
+    Climate,
     Events,
 }
 
@@ -214,6 +215,7 @@ fn table_with(translate: bool) -> Vec<Action> {
         g(Act::Events, Menu::Time, "事件时间线…", None, "给一年或一段年份起名（战争、条约、继承），附说明并关联局部视图；在时间轴上显示为标记；导出编年表。"),
         g(Act::Names, Menu::Tools, "名称生成器…", None, "按风格生成国名、城市名、地区、海洋、河流、山脉与人名；单击即给所选国家或城市改名，或复制。"),
         a(Act::Assistant, Menu::Tools, "AI 助手…", None, "把任务交给语言模型（Gemini 或 DeepSeek）：它查看地图并修改一份草稿，看过前后对比再决定是否采用。"),
+        a(Act::Climate, Menu::Tools, "行星环境与气候…", None, "根据恒星、行星与地图地理计算逐月气候参考图。"),
         a(Act::Roads, Menu::Tools, "道路与旅行…", None, "在城市之间生成道路网（绕开海与湖，陡坡代价更高），预览后应用为线路；查两城之间沿线路的路程与步行、骑马等所需天数。"),
         a(Act::Palette, Menu::Help, "命令面板…", key(CMD, Key::K), "按名称查找并执行任何命令。"),
         a(Act::Shortcuts, Menu::Help, "快捷键一览", key(NONE, Key::F1), ""),
@@ -475,6 +477,7 @@ impl App {
             Act::Names => self.names_open = true,
             Act::Roads => self.roads.open = true,
             Act::Assistant => self.ai.open = true,
+            Act::Climate => self.climate_open(),
             Act::Events => self.events_open = true,
         }
     }

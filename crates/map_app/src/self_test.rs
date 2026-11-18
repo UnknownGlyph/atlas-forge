@@ -28,10 +28,24 @@ pub fn run(dir: &Path) -> Result<String, String> {
     let roads = d.road_plan(&RoadSpec::default())?;
     d.apply_roads(&roads)?;
     out.push(format!("道路：{} 条", roads.roads.len()));
+    // A saved reference can be inspected immediately in both map views.
+    use map_core::climate::{self, Project, Scenario, Surface};
+    let settings = climate::preset(0);
+    let ground = climate::sample(&d, &Default::default(), Surface::Unknown);
+    let reference = Scenario::new(settings.clone(), d.year, Default::default(), &ground)?;
+    let means = reference.summary(reference.region);
+    out.push(format!("气候：12 个轨道月份，区域年平均 {:.1} °C、年降水 {:.0} mm", means[0], means[1]));
+    d.climate = Some(std::sync::Arc::new(Project {
+        settings, current: Some(std::sync::Arc::new(reference)), ..Project::default()
+    }));
     // saved and read back the same
     let file = dir.join("自检.atlas");
     map_io::project::save_with_backups(&file, &d, 1)?;
     let back = map_io::project::load(&file)?;
+    if back.climate != d.climate { return Err("气候参考未能完整读回".into()); }
+    let climate = back.climate.as_ref().unwrap();
+    let (w,h,rgba) = climate.current.as_ref().unwrap().raster(climate.field,climate.period);
+    image::save_buffer(dir.join("气候参考.png"), &rgba, w as u32, h as u32, image::ColorType::Rgba8).map_err(|e|e.to_string())?;
     if back.topo.faces.len() != d.topo.faces.len() || back.entities.len() != d.entities.len() {
         return Err("保存后读回的世界不同".into());
     }

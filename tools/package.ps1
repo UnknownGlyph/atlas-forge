@@ -39,6 +39,7 @@ Copy-Item "$root\assets\fonts\NotoSansSC-Regular.ttf", "$root\assets\fonts\OFL.t
 Copy-Item "$root\LICENSE" (Join-Path $out "LICENSE.txt")
 Copy-Item "$root\docs\USER_GUIDE.md" (Join-Path $out "使用说明.md")
 Copy-Item "$root\docs\USER_GUIDE.en.md" (Join-Path $out "USER_GUIDE.en.md")
+Copy-Item "$root\docs\CLIMATE.md" (Join-Path $out "CLIMATE.md")
 Copy-Item "$root\crates\map_io\tests\fixtures\v1_world.atlas" (Join-Path $out "示例\示例世界.atlas")
 # no path or name of this computer in the programs
 $private = @($root, $env:USERPROFILE, $env:USERNAME) | Where-Object { $_ -and $_.Length -ge 3 }

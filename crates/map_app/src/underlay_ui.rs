@@ -113,6 +113,17 @@ impl App {
             };
             out.push(UnderlayFrame { key: e.key, image: img.clone(), uniform, above_land: u.above_land });
         }
+        if let Some(p) = self.doc.climate.as_deref().filter(|p| p.visible && p.opacity > 0.0) {
+            if let Some((key, image)) = self.climate_ui.image() {
+                let size = [image.w, image.h];
+                let g = map_core::terrain::global_georef(image.w, image.h);
+                let uniform = match kind {
+                    ViewKind::Flat => UnderlayUniform::for_2d(&g, size, p.opacity, cam, w, h),
+                    ViewKind::Globe => UnderlayUniform::for_globe(&g, size, p.opacity, globe, w, h),
+                };
+                out.push(UnderlayFrame { key, image, uniform, above_land: true });
+            }
+        }
         out
     }
 

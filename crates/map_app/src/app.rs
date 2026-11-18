@@ -141,6 +141,7 @@ pub struct App {
     pub roads: crate::roads_ui::Roads,
     /// The AI assistant (its window, task and draft).
     pub ai: crate::ai_ui::Assistant,
+    pub climate_ui: crate::climate_ui::ClimateUi,
     /// The layout view (the export page with its furniture to drag).
     pub page: crate::pageview_ui::PageView,
     pub name_style: map_core::names::NameStyle,
@@ -390,6 +391,7 @@ impl App {
             names_open: false,
             roads: Default::default(),
             ai: Default::default(),
+            climate_ui: Default::default(),
             page: Default::default(),
             events_open: false,
             wizard: Default::default(),
@@ -573,6 +575,7 @@ impl App {
     }
 
     fn reset_view_state(&mut self) {
+        self.climate_ui = Default::default();
         self.draw_style.clear();
         self.style_open = None;
         self.style_rename = None;
@@ -1206,6 +1209,7 @@ impl eframe::App for App {
         self.refresh_derived();
         mark(0, &mut lap);
         self.poll_underlays(&ctx);
+        self.climate_tick(&ctx);
         self.poll_bg_edit(&ctx);
         self.poll_test_world(&ctx);
         ctx.input(|i| {
@@ -1278,6 +1282,7 @@ impl eframe::App for App {
         self.names_window(&ctx);
         self.roads_window(&ctx);
         self.assistant_window(&ctx);
+        self.climate_window(&ctx);
         self.page_window(&ctx);
         self.events_window(&ctx);
         self.wizard_window(&ctx);

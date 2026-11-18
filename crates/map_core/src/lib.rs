@@ -8,6 +8,7 @@ pub mod stack;
 pub mod styles;
 pub mod broad;
 pub mod calendar;
+pub mod climate;
 pub mod build;
 pub mod change;
 pub mod colouring;

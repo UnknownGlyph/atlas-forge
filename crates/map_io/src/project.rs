@@ -14,11 +14,16 @@ const MAGIC: &[u8; 8] = b"ATLASMAP";
 pub const EXTENSION: &str = "atlas";
 
 pub fn to_bytes(doc: &Document) -> Result<Vec<u8>, String> {
-    let body = rmp_serde::to_vec_named(doc).map_err(|e| format!("序列化失败: {e}"))?;
+    // Older readers must reject climate projects instead of silently
+    // stripping the reference layers on their next save.
+    let version = if doc.climate.is_some() { FORMAT_VERSION } else { 1 };
+    let mut stored = doc.clone();
+    stored.format_version = version;
+    let body = rmp_serde::to_vec_named(&stored).map_err(|e| format!("序列化失败: {e}"))?;
     let packed = lz4_flex::compress_prepend_size(&body);
     let mut out = Vec::with_capacity(packed.len() + 12);
     out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+    out.extend_from_slice(&version.to_le_bytes());
     out.extend_from_slice(&packed);
     Ok(out)
 }
@@ -33,6 +38,7 @@ pub fn from_bytes(bytes: &[u8]) -> Result<Document, String> {
     }
     let body = lz4_flex::decompress_size_prepended(&bytes[12..]).map_err(|e| format!("解压失败: {e}"))?;
     let mut doc: Document = rmp_serde::from_slice(&body).map_err(|e| format!("文件损坏: {e}"))?;
+    if let Some(p) = &doc.climate { p.validate_storage()?; }
     migrate(&mut doc, version);
     // merges before the fix could leave a unit its own parent
     doc.drop_self_parents();

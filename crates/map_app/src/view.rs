@@ -307,7 +307,8 @@ impl App {
             }
         }
         // a drag on the selected river, route or area moves it instead of the map
-        let moving = self.curve_drag(&resp, &vg) || self.move_drag(&resp, &vg);
+        let climate_pick = self.climate_ui.open && self.climate_ui.picking;
+        let moving = !climate_pick && (self.curve_drag(&resp, &vg) || self.move_drag(&resp, &vg));
         let nav = resp.dragged_by(egui::PointerButton::Secondary)
             || resp.dragged_by(egui::PointerButton::Middle)
             || (resp.dragged_by(egui::PointerButton::Primary) && (self.space_pan || (matches!(self.tool, crate::view::Tool::Select) && !moving)));
@@ -332,7 +333,11 @@ impl App {
             self.cursor = hover_ll;
         }
         // a press that began with Space held pans; the tool does not see it
-        if !self.space_pan {
+        if climate_pick && !self.space_pan {
+            if resp.clicked_by(egui::PointerButton::Primary) {
+                if let Some(point) = hover_ll { self.climate_pick(point); }
+            }
+        } else if !self.space_pan {
             self.tool_input(&resp, &vg, hover_ll);
         }
         // the select tool's context menu (other tools use the right button)

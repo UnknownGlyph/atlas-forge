@@ -181,6 +181,8 @@ pub const EN: &[(&str, &str)] = &[
     ("先用选择工具选中要修改的线路、区域、文字或符号，再用吸管单击作样板的要素：所选的同类要素换成它的外观；样板使用某个样式时，它们也使用这个样式。", "Select the routes, areas, text or symbols to change with the select tool, then click a feature with the eyedropper: the selected features of the same kind take its look; when it uses a style, they use it too."),
     ("双击空白处添加地图文字；拖动国家标注到想要的位置（所有年份相同，始终显示，导出同样生效）；单击标注选中国家，在国家属性中旋转、缩放、隐藏或恢复自动。此工具下显示全部标注（含被避让和隐藏的）。", "Double-click empty space to add map text; drag a country label where you want it (the same in every year, always shown, exported too); click a label to select its country and rotate, scale, hide or restore it in the country's properties. This tool shows every label, the ones hidden or crowded out included."),
     ("AI 助手…", "AI assistant…"),
+    ("行星环境与气候…", "Planetary environment and climate…"),
+    ("根据恒星、行星与地图地理计算逐月气候参考图。", "Generate monthly climate reference maps from the star, planet and mapped geography."),
     ("把任务交给语言模型（Gemini 或 DeepSeek）：它查看地图并修改一份草稿，看过前后对比再决定是否采用。", "Give a task to a language model (Gemini or DeepSeek): it looks at the map and edits a draft, which you apply after seeing it before and after."),
     ("文件", "File"),
     ("编辑", "Edit"),

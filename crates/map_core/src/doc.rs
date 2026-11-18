@@ -206,7 +206,7 @@ pub struct Layer {
     pub shares: ShareStore,
 }
 
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 /// Built-in, geometry-derived field key.
 pub const AREA_KEY: &str = "area_km2";
 
@@ -930,6 +930,8 @@ impl Default for Style {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub climate: Option<std::sync::Arc<crate::climate::Project>>,
     pub format_version: u32,
     pub meta: Meta,
     pub topo: Topology,
@@ -1107,6 +1109,7 @@ impl Document {
     pub fn new(name: &str, radius_km: f64) -> Self {
         Self {
             format_version: FORMAT_VERSION,
+            climate: None,
             meta: Meta { name: name.into(), planet_radius_km: radius_km, description: String::new() },
             topo: Topology::default(),
             entities: OrdMap::new(),

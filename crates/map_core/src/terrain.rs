@@ -97,13 +97,18 @@ impl Terrain {
 impl Terrain {
     /// Where the grid's pictures lie: the whole world, equirectangular.
     pub fn georef(&self) -> crate::underlay::Georef {
-        use crate::projection::Projection;
-        let p = Projection::Equirectangular;
-        let (xw, xe) = (p.forward_deg(-180.0, 0.0)[0], p.forward_deg(180.0, 0.0)[0]);
-        let (yn, ys) = (p.forward_deg(0.0, 90.0)[1], p.forward_deg(0.0, -90.0)[1]);
-        let (sx, sy) = (self.w as f64 / (xe - xw), self.h as f64 / (yn - ys));
-        crate::underlay::Georef { proj: p, lon0: 0.0, m: [[sx, 0.0, -xw * sx], [0.0, -sy, yn * sy]] }
+        global_georef(self.w, self.h)
     }
+}
+
+/// Georeference of a global equirectangular raster with north at the top.
+pub fn global_georef(w: u32, h: u32) -> crate::underlay::Georef {
+    use crate::projection::Projection;
+    let p = Projection::Equirectangular;
+    let (xw, xe) = (p.forward_deg(-180.0, 0.0)[0], p.forward_deg(180.0, 0.0)[0]);
+    let (yn, ys) = (p.forward_deg(0.0, 90.0)[1], p.forward_deg(0.0, -90.0)[1]);
+    let (sx, sy) = (w as f64 / (xe - xw), h as f64 / (yn - ys));
+    crate::underlay::Georef { proj: p, lon0: 0.0, m: [[sx, 0.0, -xw * sx], [0.0, -sy, yn * sy]] }
 }
 
 /// `Option<Arc<Terrain>>` saved as the terrain itself.

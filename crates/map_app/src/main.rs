@@ -6,6 +6,7 @@
 
 mod actions;
 mod ai_ui;
+mod climate_ui;
 mod annotation_ui;
 mod area_ui;
 mod app;

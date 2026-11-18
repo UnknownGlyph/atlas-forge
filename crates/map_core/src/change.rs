@@ -79,6 +79,16 @@ impl ChangeSet {
         diff_map(&a.rivers, &b.rivers, &mut rivers, &mut bytes, |r| r.pts.capacity() * 16);
         c.rivers = !rivers.is_empty();
         c.settings = a.style != b.style || a.theme != b.theme || a.meta != b.meta || a.year != b.year;
+        if let Some(old) = &a.climate {
+            if b.climate.as_ref().is_none_or(|p| !std::sync::Arc::ptr_eq(old,p)) {
+                let mut kept: BTreeSet<_> = b.climate.iter().flat_map(|p|p.scenarios()).map(|s|std::sync::Arc::as_ptr(&s.cells)).collect();
+                for s in old.scenarios() {
+                    if kept.insert(std::sync::Arc::as_ptr(&s.cells)) {
+                        bytes += s.cells.capacity() * std::mem::size_of::<crate::climate::Cell>();
+                    }
+                }
+            }
+        }
         c.old_bytes = bytes;
         c
     }
