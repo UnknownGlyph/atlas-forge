@@ -8,8 +8,8 @@ use eframe::egui_wgpu;
 use map_core::geom::{self, LonLat};
 use map_core::topo::{FaceKind, BACKGROUND};
 use map_core::EntityKind;
-use map_render::camera::{Camera2D, GlobeCamera};
-use map_render::gpu::{FrameData, LineStyle, MapGpu, ViewUniform};
+use map_render::camera::{Camera2D, GlobeCamera, GlobeProjection};
+use map_render::gpu::{globe_raster_zoom, FrameData, GlobeDetail, LineStyle, MapGpu, ViewUniform};
 use map_render::tess::rgba;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -162,6 +162,7 @@ impl Tool {
 /// What the draw-land tool does where the shape overlaps existing land.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DrawMode {
+    Province(map_core::EntityId),
     AddLand,
     Expand,
     Take,
@@ -182,24 +183,39 @@ pub struct ViewGeom {
     pub rect: Rect,
     pub cam: Camera2D,
     pub globe: GlobeCamera,
+    projection: Option<GlobeProjection>,
+    paper: Option<map_core::paper::Paper>,
 }
 
 impl ViewGeom {
+    fn new(kind: ViewKind, rect: Rect, cam: Camera2D, globe: GlobeCamera) -> Self {
+        let projection = (kind == ViewKind::Globe).then(|| globe.projection(rect.width() as f64, rect.height() as f64));
+        Self { kind, rect, cam, globe, projection, paper: None }
+    }
     fn d(&self, p: Pos2) -> [f64; 2] {
         let c = self.rect.center();
         [(p.x - c.x) as f64, (p.y - c.y) as f64]
     }
     pub fn to_lonlat(&self, p: Pos2) -> Option<LonLat> {
+        if self.paper_rect().is_some_and(|rect| !rect.contains(p)) {
+            return None;
+        }
         match self.kind {
             ViewKind::Flat => self.cam.screen_to_lonlat(self.d(p)),
-            ViewKind::Globe => self.globe.pick(self.d(p), self.rect.width() as f64, self.rect.height() as f64),
+            ViewKind::Globe => self.projection?.pick(self.d(p)),
         }
+    }
+    fn paper_rect(&self) -> Option<Rect> {
+        let [x, y] = self.paper?.half_extents();
+        let a = self.to_screen(LonLat::new(-x, y))?;
+        let b = self.to_screen(LonLat::new(x, -y))?;
+        Some(Rect::from_two_pos(a, b))
     }
     pub fn to_screen(&self, ll: LonLat) -> Option<Pos2> {
         let c = self.rect.center();
         let s = match self.kind {
             ViewKind::Flat => Some(self.cam.lonlat_to_screen(ll)),
-            ViewKind::Globe => self.globe.project(ll, self.rect.width() as f64, self.rect.height() as f64),
+            ViewKind::Globe => self.projection?.project(ll),
         }?;
         Some(Pos2::new(c.x + s[0] as f32, c.y + s[1] as f32))
     }
@@ -220,6 +236,60 @@ impl ViewGeom {
     }
 }
 
+#[derive(Default)]
+pub struct GlobeInertia {
+    velocity: Vec2,
+    last_drag: f64,
+    dragging: bool,
+    surface: Option<(u64, u64, u64)>,
+    warm_after: f64,
+}
+
+impl GlobeInertia {
+    pub fn stop(&mut self) {
+        self.velocity = Vec2::ZERO;
+        self.dragging = false;
+    }
+
+    fn record(&mut self, delta: Vec2, velocity: Vec2, now: f64, speed_limit: f32) {
+        if delta != Vec2::ZERO {
+            let speed = velocity.length();
+            self.velocity = velocity * (speed_limit / speed.max(speed_limit));
+            self.last_drag = now;
+        }
+    }
+
+    fn coast(&mut self, released: bool, held: bool, now: f64, dt: f32) -> Vec2 {
+        if held || (released && now - self.last_drag > 0.10) || self.velocity.length_sq() < 12.0 * 12.0 {
+            self.stop();
+            return Vec2::ZERO;
+        }
+        let decay = (-dt.clamp(0.0, 0.05) / 0.115).exp();
+        let step = self.velocity * (0.115 * (1.0 - decay));
+        self.velocity *= decay;
+        step
+    }
+
+    fn detail(&mut self, ctx: &egui::Context, surface: (u64, u64, u64), moving: bool) -> GlobeDetail {
+        let (now, held) = ctx.input(|i| (i.time, i.pointer.any_down()));
+        if self.surface != Some(surface) {
+            self.surface = Some(surface);
+            self.warm_after = now + 0.12;
+        }
+        if moving {
+            return GlobeDetail::Moving;
+        }
+        if held {
+            return GlobeDetail::Full;
+        }
+        if now < self.warm_after {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(self.warm_after - now));
+            return GlobeDetail::Full;
+        }
+        GlobeDetail::Prewarm
+    }
+}
+
 struct MapCallback(FrameData);
 
 impl egui_wgpu::CallbackTrait for MapCallback {
@@ -228,11 +298,11 @@ impl egui_wgpu::CallbackTrait for MapCallback {
         device: &egui_wgpu::wgpu::Device,
         queue: &egui_wgpu::wgpu::Queue,
         _sd: &egui_wgpu::ScreenDescriptor,
-        _enc: &mut egui_wgpu::wgpu::CommandEncoder,
+        enc: &mut egui_wgpu::wgpu::CommandEncoder,
         res: &mut egui_wgpu::CallbackResources,
     ) -> Vec<egui_wgpu::wgpu::CommandBuffer> {
         if let Some(gpu) = res.get_mut::<MapGpu>() {
-            gpu.prepare(device, queue, &self.0);
+            gpu.prepare(device, queue, enc, &self.0);
         }
         vec![]
     }
@@ -245,13 +315,18 @@ impl egui_wgpu::CallbackTrait for MapCallback {
 }
 
 impl App {
-    fn line_styles(&self, ppp: f32) -> [LineStyle; 12] {
+    fn line_styles(&self, ppp: f32, detail: crate::map_detail::Detail) -> [LineStyle; map_render::gpu::LINE_CLASSES] {
         let s = &self.doc.style;
         let ls = |c: [u8; 4], w: f32| LineStyle { color: rgba(c), width: w * ppp };
+        let admin = |rank, weight| {
+            let mut style = ls(s.internal, s.internal_width * weight);
+            style.color[3] *= detail.opacity(rank);
+            style
+        };
         [
             ls(s.coast, s.coast_width),
             ls(s.border, s.border_width),
-            ls(s.internal, s.internal_width),
+            admin(1, 1.25),
             ls(s.river, s.river_width),
             ls([255, 120, 0, 255], 2.6),
             ls([20, 90, 220, 220], 1.8),
@@ -263,6 +338,9 @@ impl App {
             ls(s.glow_bands()[0], s.coast_glow_width * 2.0),
             ls(s.glow_bands()[1], s.coast_glow_width * 4.0 / 3.0),
             ls(s.glow_bands()[2], s.coast_glow_width * 2.0 / 3.0),
+            admin(2, 1.0),
+            admin(3, 0.85),
+            admin(4, 0.6),
         ]
     }
 
@@ -280,16 +358,32 @@ impl App {
             self.last_flat_rect = rect;
         }
         if self.fit_pending && kind == ViewKind::Flat {
-            self.cam2d.fit(rect.width() as f64, rect.height() as f64);
+            let bounds = if let Some(paper) = self.doc.paper {
+                paper.bounds()
+            } else if let Some((view, [lon, lat])) = self.doc.home_view
+                .filter(|view| view.valid() && view.projection == self.cam2d.proj && view.central_meridian == self.cam2d.lon0)
+                .and_then(|view| view.flat_extent.map(|extent| (view, extent)))
+            {
+                let min_lat = (view.globe_latitude - lat * 0.5).max(-90.0);
+                let max_lat = (view.globe_latitude + lat * 0.5).min(90.0);
+                let project = |lon, lat| self.cam2d.proj.forward_deg(lon, lat);
+                let (x, y) = (project(-lon * 0.5, min_lat), project(lon * 0.5, max_lat));
+                let half_width = project(lon * 0.5, 0.0_f64.clamp(min_lat, max_lat))[0];
+                [-half_width, x[1], half_width, y[1]]
+            } else {
+                self.cam2d.proj.bounds()
+            };
+            self.cam2d.fit_bounds(rect.width() as f64, rect.height() as f64, bounds);
             self.nav_touched = false;
-            if self.layout == crate::app::Layout::Flat || self.layout == crate::app::Layout::Split {
+            if self.doc.paper.is_some() || self.layout == crate::app::Layout::Flat || self.layout == crate::app::Layout::Split {
                 self.fit_pending = false;
             }
         }
         if self.fit_pending && self.layout == crate::app::Layout::Globe {
             self.fit_pending = false;
         }
-        let mut vg = ViewGeom { kind, rect, cam: self.cam2d, globe: self.globe };
+        let mut vg = ViewGeom::new(kind, rect, self.cam2d, self.globe);
+        let mut globe_moving = false;
 
         // navigation
         if resp.hovered() {
@@ -302,7 +396,11 @@ impl App {
                         self.cam2d.zoom_at(vg.d(p), f);
                         self.nav_touched = true;
                     }
-                    ViewKind::Globe => self.globe.zoom(f),
+                    ViewKind::Globe => {
+                        self.globe_inertia.stop();
+                        self.globe.zoom(f);
+                        globe_moving = true;
+                    },
                 }
             }
         }
@@ -315,18 +413,44 @@ impl App {
         if resp.hovered() && ui.input(|i| i.key_down(egui::Key::Space)) && !ui.ctx().egui_wants_keyboard_input() {
             ui.ctx().set_cursor_icon(if self.space_pan { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
         }
-        if nav {
-            let d = resp.drag_delta();
+        // A move can arrive in the same batch as the release event. egui
+        // clears dragged_by on that frame, but the globe still needs the
+        // last motion before inertia can take over.
+        let globe_release = kind == ViewKind::Globe && self.globe_inertia.dragging && resp.drag_stopped();
+        if kind == ViewKind::Globe {
+            self.globe_inertia.dragging = nav;
+        }
+        if nav || globe_release {
+            let d = if globe_release { ui.input(|i| i.pointer.delta()) } else { resp.drag_delta() };
             match kind {
                 ViewKind::Flat => {
                     self.cam2d.pan_px([d.x as f64, d.y as f64]);
                     self.nav_touched = true;
                 }
-                ViewKind::Globe => self.globe.rotate_px([d.x as f64, d.y as f64], rect.width() as f64, rect.height() as f64),
+                ViewKind::Globe => {
+                    globe_moving = true;
+                    self.globe.rotate_px([d.x as f64, d.y as f64], rect.width() as f64, rect.height() as f64);
+                    let speed_limit = (self.globe.px_per_rad(rect.width() as f64, rect.height() as f64) * 2.0) as f32;
+                    ui.input(|i| self.globe_inertia.record(d, i.pointer.velocity(), i.time, speed_limit.clamp(30.0, 1300.0)));
+                    if globe_release {
+                        // A deliberate stop before release should not coast.
+                        if ui.input(|i| i.pointer.any_down() || i.time - self.globe_inertia.last_drag > 0.10) {
+                            self.globe_inertia.stop();
+                        }
+                        ui.ctx().request_repaint();
+                    }
+                },
+            }
+        } else if kind == ViewKind::Globe {
+            let step = ui.input(|i| self.globe_inertia.coast(resp.drag_stopped(), i.pointer.any_down() || i.pointer.any_pressed(), i.time, i.stable_dt));
+            if step != Vec2::ZERO {
+                globe_moving = true;
+                self.globe.rotate_px([step.x as f64, step.y as f64], rect.width() as f64, rect.height() as f64);
+                ui.ctx().request_repaint();
             }
         }
-        vg.cam = self.cam2d;
-        vg.globe = self.globe;
+        vg = ViewGeom::new(kind, rect, self.cam2d, self.globe);
+        vg.paper = self.doc.paper;
 
         let hover_ll = resp.hover_pos().and_then(|p| vg.to_lonlat(p));
         if resp.hovered() {
@@ -337,6 +461,10 @@ impl App {
             if resp.clicked_by(egui::PointerButton::Primary) {
                 if let Some(point) = hover_ll { self.climate_pick(point); }
             }
+        } else if globe_moving && self.pending.is_none() {
+            // Picking successively exposed faces would rebuild their hover
+            // outlines while the user is only rotating the camera.
+            self.hover_face = None;
         } else if !self.space_pan {
             self.tool_input(&resp, &vg, hover_ll);
         }
@@ -348,7 +476,14 @@ impl App {
         // GPU paint
         let ppp = ui.ctx().pixels_per_point();
         let (w, h) = (rect.width() * ppp, rect.height() * ppp);
-        let styles = self.line_styles(ppp);
+        let dense_globe = kind == ViewKind::Globe && (self.scene.vertex_count() >= 420_000 || self.scene.line_count() >= 100_000);
+        let light_overlays = dense_globe && globe_moving && self.pending.is_none();
+        let globe_detail = if dense_globe && self.pending.is_none() && globe_raster_zoom(self.globe.px_per_rad(w as f64, h as f64)) {
+            self.globe_inertia.detail(ui.ctx(), (self.scene.geometry_gen, self.scene.color_gen, self.glow.0), globe_moving)
+        } else {
+            GlobeDetail::Full
+        };
+        let styles = self.line_styles(ppp, self.map_detail(&vg));
         let mut c = self.cam2d;
         c.zoom *= ppp as f64;
         let uniform = match kind {
@@ -363,37 +498,92 @@ impl App {
             colors: (self.scene.color_gen, self.scene.colors.clone()),
             overlay: self.overlay.clone(),
             glow: self.glow.clone(),
-            graticule: self.graticule,
+            graticule: self.graticule && vg.paper.is_none(),
+            draw_overlay: !light_overlays,
             underlays: self.underlay_frames(kind, &c, &self.globe, w, h),
+            geometry_gen: self.scene.geometry_gen,
+            globe_detail,
         };
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, Color32::from_gray(40));
+        let painter = if let Some(board) = vg.paper_rect() {
+            painter.rect_stroke(board, 0.0, Stroke::new(1.0, Color32::from_gray(100)), egui::StrokeKind::Outside);
+            let clipped = board.intersect(rect);
+            if !clipped.is_positive() { return; }
+            painter.with_clip_rect(clipped)
+        } else { painter };
         painter.add(egui_wgpu::Callback::new_paint_callback(rect, MapCallback(data)));
         let t_ov = std::time::Instant::now();
-        self.draw_overlays(&painter, &vg, hover_ll);
+        if light_overlays {
+            self.draw_globe_navigation(&painter, &vg);
+        } else {
+            self.draw_overlays(&painter, &vg, if globe_moving { None } else { hover_ll });
+            self.draw_selection(&painter, &vg);
+            self.draw_reshape(&painter, &vg);
+            self.draw_river_marks(&painter, &vg, hover_ll);
+            self.draw_curve_overlay(&painter, &vg, hover_ll);
+            self.draw_area_handles(&painter, &vg, hover_ll);
+            self.draw_draft(&painter, &vg, hover_ll);
+            self.draw_measure(&painter, &vg, hover_ll);
+            self.draw_underlay_marks(&painter, &vg);
+        }
         if self.prof.is_some() {
             eprintln!("OVERLAYS {} {:.2}", if vg.kind == ViewKind::Flat { "flat" } else { "globe" }, t_ov.elapsed().as_secs_f32() * 1000.0);
+            if globe_moving {
+                eprintln!("GLOBE MOVING {globe_detail:?}");
+            }
         }
-        self.draw_selection(&painter, &vg);
-        self.draw_reshape(&painter, &vg);
-        self.draw_river_marks(&painter, &vg, hover_ll);
-        self.draw_curve_overlay(&painter, &vg, hover_ll);
-        self.draw_area_handles(&painter, &vg, hover_ll);
-        self.draw_draft(&painter, &vg, hover_ll);
-        self.draw_measure(&painter, &vg, hover_ll);
-        self.draw_underlay_marks(&painter, &vg);
         if kind == ViewKind::Globe && self.layout == crate::app::Layout::Split {
             painter.text(rect.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP, "三维球体", egui::FontId::proportional(13.0), Color32::from_gray(230));
         }
+        self.draw_book_points(&painter,&vg);
+    }
+
+    fn draw_globe_navigation(&self, painter: &egui::Painter, vg: &ViewGeom) {
+        // Keep the map readable without recomputing curved labels or
+        // projecting every detailed feature while the camera moves.
+        if self.doc.style.show_labels {
+            let [r, g, b, a] = self.doc.style.label;
+            let ink = Color32::from_rgba_unmultiplied(r, g, b, a);
+            let shade = map_core::doc::halo_for(self.doc.style.label)[0];
+            let backdrop = Color32::from_rgba_unmultiplied(shade, shade, shade, 145);
+            let style = self.doc.style.label_type(map_core::label_type::Tier::Country);
+            let font = egui::FontId::new(13.0, self.font_family(style.font, style.bold));
+            let mut taken: Vec<Rect> = Vec::new();
+            for (id, path) in &self.labels {
+                let Some(entity) = self.doc.entities.get(id) else { continue };
+                let Some(center) = vg.to_screen(path.middle()).filter(|p| vg.rect.contains(*p)) else { continue };
+                let galley = painter.layout_no_wrap(entity.name.clone(), font.clone(), ink);
+                let area = Rect::from_center_size(center, galley.size()).expand(3.0);
+                if taken.iter().any(|r| r.intersects(area)) {
+                    continue;
+                }
+                painter.rect_filled(area, 2.0, backdrop);
+                painter.galley(center - galley.size() * 0.5, galley, ink);
+                taken.push(area);
+                if taken.len() >= 40 {
+                    break;
+                }
+            }
+        }
+        self.draw_furniture(painter, vg);
     }
 
     fn tool_input(&mut self, resp: &egui::Response, vg: &ViewGeom, ll: Option<LonLat>) {
         use egui::PointerButton::{Primary, Secondary};
         let tol = resp.hover_pos().map(|p| vg.deg_per_px(p, 8.0)).unwrap_or(0.5);
+        if resp.clicked() && self.book_ui.pick.is_some() {
+            if let Some(p)=ll {
+                let feature=resp.interact_pointer_pos().and_then(|at|self.feature_at(at,vg));
+                if self.book_pick(p,tol,feature){return;}
+            }
+        }
         // hover face (for highlighting)
         self.hover_face = match (self.tool, ll) {
             (Tool::Select | Tool::Assign | Tool::MergeFaces, Some(p)) if resp.hovered() => {
                 Some(self.doc.topo.face_at(p)).filter(|f| *f != BACKGROUND || self.doc.background_kind() == FaceKind::Land)
+                    .filter(|f| self.tool != Tool::Select || self.doc.owner.get(f)
+                        .is_none_or(|owner| self.map_detail(vg).owner(&self.doc, *owner) == *owner))
             }
             _ => None,
         };
@@ -428,21 +618,42 @@ impl App {
                 // a right click selects what is under it too, for its menu
                 let picked = resp.clicked() || resp.secondary_clicked();
                 // drawn features first (one or several, see `select_ui`)
+                let board=map_core::world_book::WorldBook::current(&self.doc);
+                if resp.clicked() && self.doc.book.is_some() {
+                    if let Some(place)=self.book_place_at(p,tol) {
+                        if !self.book_related(place,resp.double_clicked()){self.book_context(place);}
+                        return;
+                    }
+                    if let Some((edge,_,_))=self.doc.topo.nearest_on_edge(p,tol) {
+                        if self.book_related(map_core::world_book::Node::Edge(board,edge.0),resp.double_clicked()){return;}
+                    }
+                }
                 if picked && self.select_feature_click(resp, vg) {
+                    if resp.clicked() && self.doc.book.is_some() {
+                        if let Some(f)=resp.interact_pointer_pos().and_then(|at|self.feature_at(at,vg)) {
+                            self.book_related(map_core::world_book::feature(board,f),resp.double_clicked());
+                        }
+                    }
                     return;
                 }
                 if picked {
                     self.clear_selection();
                 }
-                if picked && !self.city_select_click(p, tol) {
+                if picked && !self.city_select_click(p, tol, self.map_detail(vg)) {
                     let f = self.doc.topo.face_at(p);
                     self.selected_face = (f != BACKGROUND || self.doc.background_kind() == FaceKind::Land).then_some(f);
-                    self.selected = self.doc.owner.get(&f).copied();
+                    self.selected = self.doc.owner.get(&f).map(|owner| self.map_detail(vg).owner(&self.doc, *owner));
                     if let Some(e) = self.selected {
                         self.tab = crate::panels::Tab::Countries;
                         let name = self.doc.entities[&e].name.clone();
                         self.set_status(format!("已选择 {name}"), false);
                     }
+                }
+                if resp.clicked() && self.doc.book.is_some(){
+                    if let Some(e)=self.selected{
+                        if self.book_related(map_core::world_book::Node::Entity(board,e.0),resp.double_clicked()){return;}
+                    }
+                    if let Some(f)=self.selected_face{self.book_related(map_core::world_book::Node::Face(board,f.0),resp.double_clicked());}
                 }
             }
             Tool::Hatch => {
@@ -608,31 +819,39 @@ impl App {
         self.draw_export_frame(painter, vg);
         self.draw_partition(painter, vg);
         self.draw_roads(painter, vg);
+        self.draw_diplomatic_lines(painter, vg);
         let t_b = std::time::Instant::now();
+        let detail = self.map_detail(vg);
         self.draw_line_names(painter, vg, &mut taken);
         let t_lines = t_b.elapsed().as_secs_f32() * 1000.0;
         let t_b = std::time::Instant::now();
         self.draw_country_labels(painter, vg, &mut taken);
+        self.draw_region_labels(painter, vg, &mut taken);
         if self.prof.is_some() {
             eprintln!("PARTS features {:.2} line_names {:.2} countries {:.2}", t_features, t_lines, t_b.elapsed().as_secs_f32() * 1000.0);
         }
         if style.show_cities {
-            for (_, e) in self.doc.entities.iter() {
+            for (id, e) in self.doc.entities.iter() {
                 let (EntityKind::City, Some(p)) = (e.kind, e.pos) else { continue };
-                if !e.exists_in(self.doc.year) {
+                if !e.exists_in(self.doc.year) || !self.city_shown(*id, detail) {
                     continue;
                 }
                 let Some(s) = vg.to_screen(p) else { continue };
                 if !rect.contains(s) {
                     continue;
                 }
-                painter.circle(s, 3.5, Color32::from_gray(40), Stroke::new(1.2, Color32::WHITE));
-                let r = Rect::from_min_size(s + Vec2::new(6.0, -8.0), Vec2::new(e.name.chars().count() as f32 * 12.0, 16.0));
+                let capital = self.detail_cache.city_rank(*id) == 0;
+                painter.circle(s, if capital { 4.5 } else { 3.5 }, Color32::from_gray(40), Stroke::new(1.2, Color32::WHITE));
+                let tier = if capital { map_core::label_type::Tier::Capital } else { map_core::label_type::Tier::City };
+                let design = style.label_type(tier);
+                let font = egui::FontId::new(design.size, self.font_family(design.font, design.bold));
+                let lc = style.label;
+                let ink = if map_core::doc::halo_for(lc) == [255, 255, 255, 255] { Color32::from_gray(25) } else { Color32::from_rgb(lc[0], lc[1], lc[2]) };
+                let galley = painter.layout_no_wrap(e.name.clone(), font, ink);
+                let r = Rect::from_min_size(s + Vec2::new(6.0, -galley.size().y * 0.5), galley.size()).expand(1.0);
                 if !taken.iter().any(|t| t.intersects(r)) {
-                    // dark names, or a dark theme's light ones
-                    let lc = self.doc.style.label;
-                    let ink = if map_core::doc::halo_for(lc) == [255, 255, 255, 255] { Color32::from_gray(25) } else { Color32::from_rgb(lc[0], lc[1], lc[2]) };
-                    painter.text(s + Vec2::new(6.0, 0.0), egui::Align2::LEFT_CENTER, &e.name, egui::FontId::proportional(12.0), ink);
+                    painter.galley(r.min + Vec2::splat(1.0), galley, ink);
+                    taken.push(r);
                 }
             }
         }
@@ -683,5 +902,23 @@ impl App {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod inertia_tests {
+    use super::*;
+
+    #[test]
+    fn drag_release_decelerates_and_new_input_stops_motion() {
+        let mut motion = GlobeInertia::default();
+        motion.record(Vec2::new(5.0, 0.0), Vec2::new(550.0, 0.0), 1.0, 1000.0);
+        let first = motion.coast(true, false, 1.02, 0.016);
+        let next = motion.coast(false, false, 1.04, 0.016);
+        assert!(first.x > next.x && next.x > 0.0);
+        assert_eq!(motion.coast(false, true, 1.05, 0.016), Vec2::ZERO);
+        assert_eq!(motion.coast(false, false, 1.07, 0.016), Vec2::ZERO);
+        motion.record(Vec2::new(5.0, 0.0), Vec2::new(550.0, 0.0), 2.0, 1000.0);
+        assert_eq!(motion.coast(true, false, 2.3, 0.016), Vec2::ZERO);
     }
 }

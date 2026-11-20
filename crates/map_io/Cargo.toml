@@ -19,3 +19,6 @@ miniz_oxide = "0.8"
 image.workspace = true
 geo = "0.33"
 encoding_rs = "0.8"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+zip = { version = "4", default-features = false }
+base64 = "0.22"

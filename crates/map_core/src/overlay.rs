@@ -32,6 +32,8 @@ pub enum DrawIntent {
     /// Everything inside the polygon goes to the country, including land
     /// taken from neighbours.
     Take(EntityId),
+    /// Reassign only land currently held directly by the parent.
+    Subdivide { parent: EntityId, child: EntityId },
     /// Land inside the polygon becomes water.
     CarveWater,
 }
@@ -247,6 +249,17 @@ fn emit(
             out.push((parts, owner, Some(*fid)));
             continue;
         }
+        if let DrawIntent::Subdivide { parent, child } = intent {
+            if owner == Some(parent) {
+                out.push((from_mp(&f_mp.difference(&prep.p_mp)), owner, Some(*fid)));
+                out.push((inter, Some(child), Some(*fid)));
+                *taken.entry(owner).or_default() += inter_area;
+                changed.insert(*fid);
+            } else {
+                out.push((parts, owner, Some(*fid)));
+            }
+            continue;
+        }
         land_union = land_union.union(&f_mp);
         let rest = || from_mp(&f_mp.difference(&prep.p_mp));
         match intent {
@@ -276,6 +289,7 @@ fn emit(
                 rep.carved_km2 += inter_area;
                 changed.insert(*fid);
             }
+            DrawIntent::Subdivide { .. } => unreachable!(),
         }
         // faces touched by new land along their coast are rebuilt too
         changed.insert(*fid);
@@ -283,7 +297,7 @@ fn emit(
     let new_owner = match intent {
         DrawIntent::AddLand => Some(None),
         DrawIntent::Expand(x) | DrawIntent::Take(x) => Some(Some(x)),
-        DrawIntent::CarveWater => None,
+        DrawIntent::CarveWater | DrawIntent::Subdivide { .. } => None,
     };
     if let Some(owner) = new_owner {
         let fresh = from_mp(&prep.p_mp.difference(&land_union));
@@ -341,6 +355,12 @@ fn emit_explicit(doc: &Document, faces: &[FaceId], prep: &Prepared, intent: Draw
         covered = covered.union(&f_mp);
         let rest = from_mp(&f_mp.difference(&prep.p_mp));
         match (is_water, intent) {
+            (false, DrawIntent::Subdivide { parent, child }) if owner == Some(parent) => {
+                push(&mut out, (rest, owner, Some(*fid)), false);
+                push(&mut out, (inter, Some(child), Some(*fid)), false);
+                *taken.entry(owner).or_default() += ia;
+            }
+            (_, DrawIntent::Subdivide { .. }) => push(&mut out, (parts, owner, Some(*fid)), is_water),
             (false, DrawIntent::AddLand) => push(&mut out, (parts, owner, Some(*fid)), false),
             (false, DrawIntent::Expand(_)) if owner.is_some() => push(&mut out, (parts, owner, Some(*fid)), false),
             (false, DrawIntent::Take(x)) if owner == Some(x) => push(&mut out, (parts, owner, Some(*fid)), false),
@@ -374,16 +394,21 @@ fn emit_explicit(doc: &Document, faces: &[FaceId], prep: &Prepared, intent: Draw
     let ba = area(&bgp, r);
     if ba > 0.0 && doc.background_kind() == FaceKind::Water {
         // a sea background: new land
-        match intent {
-            DrawIntent::AddLand => push(&mut out, (bgp, None, bg), false),
-            DrawIntent::Expand(x) | DrawIntent::Take(x) => push(&mut out, (bgp, Some(x), bg), false),
-            DrawIntent::CarveWater => {}
-        }
-        if intent != DrawIntent::CarveWater {
+        if matches!(intent, DrawIntent::AddLand | DrawIntent::Expand(_) | DrawIntent::Take(_)) {
+            let who = match intent {
+                DrawIntent::Expand(x) | DrawIntent::Take(x) => Some(x),
+                _ => None,
+            };
+            push(&mut out, (bgp, who, bg), false);
             rep.added_km2 += ba;
         }
     } else if ba > 0.0 {
         match intent {
+            DrawIntent::Subdivide { parent, child } if bg_owner == Some(parent) => {
+                push(&mut out, (bgp, Some(child), bg), false);
+                *taken.entry(bg_owner).or_default() += ba;
+            }
+            DrawIntent::Subdivide { .. } => {}
             DrawIntent::AddLand => {}
             DrawIntent::Expand(x) if bg_owner.is_none() => {
                 push(&mut out, (bgp, Some(x), bg), false);

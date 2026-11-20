@@ -18,20 +18,25 @@ enum Msg {
 }
 
 struct Finished {
+    label: String,
     draft: Option<Document>,
     edits: Vec<String>,
     summary: String,
     pictures: Vec<egui::ColorImage>,
 }
 
+struct Connection {
+    model: String,
+    endpoint: String,
+    effort: String,
+    key: String,
+}
+
 /// The window's state.
 pub struct Assistant {
     pub open: bool,
-    /// 0: Gemini, 1: DeepSeek.
-    provider: usize,
-    model: [String; 2],
-    effort: [String; 2],
-    key: String,
+    provider: map_ai::Provider,
+    connections: [Connection; map_ai::Provider::ALL.len()],
     task: String,
     log: Vec<String>,
     job: Option<mpsc::Receiver<Msg>>,
@@ -46,10 +51,13 @@ impl Default for Assistant {
     fn default() -> Self {
         Assistant {
             open: false,
-            provider: 0,
-            model: ["gemini-4-hydrogen".into(), "deepseek-flash".into()],
-            effort: ["high".into(), String::new()],
-            key: String::new(),
+            provider: map_ai::Provider::Gemini,
+            connections: map_ai::Provider::ALL.map(|provider| Connection {
+                model: provider.default_model().into(),
+                endpoint: provider.default_url().into(),
+                effort: String::new(),
+                key: String::new(),
+            }),
             task: String::new(),
             log: vec![],
             job: None,
@@ -61,18 +69,20 @@ impl Default for Assistant {
     }
 }
 
-const ENV: [&str; 2] = ["GEMINI_API_KEY", "DEEPSEEK_API_KEY"];
-
 impl App {
     fn start_assistant(&mut self) {
         let a = &mut self.ai;
-        let key = if a.key.trim().is_empty() { std::env::var(ENV[a.provider]).unwrap_or_default() } else { a.key.trim().to_string() };
-        if key.is_empty() {
-            a.error = Some(format!("没有密钥：在下面填入，或设置环境变量 {}", ENV[a.provider]));
+        let profile = &a.connections[a.provider as usize];
+        let key = if profile.key.trim().is_empty() {
+            std::env::var(a.provider.key_env()).unwrap_or_default()
+        } else {
+            profile.key.trim().to_owned()
+        };
+        let cfg = a.provider.configure(&profile.model, &profile.endpoint, &key, Some(&profile.effort));
+        if let Err(error) = cfg.validate() {
+            a.error = Some(error);
             return;
         }
-        let effort = Some(a.effort[a.provider].trim()).filter(|e| !e.is_empty());
-        let cfg = if a.provider == 0 { map_ai::Config::gemini(a.model[0].trim(), &key, effort) } else { map_ai::Config::deepseek(a.model[1].trim(), &key, effort) };
         let (tx, rx) = mpsc::channel();
         let (doc, task, year) = (self.doc.clone(), a.task.trim().to_string(), self.doc.year);
         a.log = vec![format!("模型：{}　任务：{task}", cfg.label())];
@@ -110,7 +120,8 @@ impl App {
                         let _ = std::fs::remove_file(&path);
                     }
                 }
-                Box::new(Finished { draft: session.draft().cloned(), edits: session.edit_log().to_vec(), summary: o.summary, pictures })
+                let label = format!("AI（{}）：{}", cfg.model, task.chars().take(30).collect::<String>());
+                Box::new(Finished { label, draft: session.draft().cloned(), edits: session.edit_log().to_vec(), summary: o.summary, pictures })
             });
             let _ = tx.send(Msg::Done(finished));
         });
@@ -154,17 +165,33 @@ impl App {
             let busy = a.job.is_some();
             ui.add_enabled_ui(!busy, |ui| {
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut a.provider, 0, "Gemini");
-                    ui.radio_value(&mut a.provider, 1, "DeepSeek");
+                    ui.label("提供方");
+                    egui::ComboBox::from_id_salt("atlas-ai-provider").selected_text(a.provider.name()).show_ui(ui, |ui| {
+                        for provider in map_ai::Provider::ALL {
+                            ui.selectable_value(&mut a.provider, provider, provider.name());
+                        }
+                    });
+                });
+                let profile = &mut a.connections[a.provider as usize];
+                ui.horizontal(|ui| {
+                    ui.label("API 地址");
+                    ui.add(egui::TextEdit::singleline(&mut profile.endpoint).desired_width(375.0)
+                        .hint_text("https://服务地址/v1"));
+                });
+                ui.horizontal(|ui| {
                     ui.label("模型");
-                    ui.add(egui::TextEdit::singleline(&mut a.model[a.provider]).desired_width(150.0));
-                    ui.label("思考强度");
-                    ui.add(egui::TextEdit::singleline(&mut a.effort[a.provider]).desired_width(60.0).hint_text("默认"));
+                    ui.add(egui::TextEdit::singleline(&mut profile.model).desired_width(240.0)
+                        .hint_text("填写支持工具调用的模型"));
+                    if a.provider.api() != map_ai::Api::Anthropic {
+                        ui.label("思考强度");
+                        ui.add(egui::TextEdit::singleline(&mut profile.effort).desired_width(60.0).hint_text("默认"));
+                    }
                 });
                 ui.horizontal(|ui| {
                     ui.label("密钥");
-                    ui.add(egui::TextEdit::singleline(&mut a.key).password(true).desired_width(260.0).hint_text(format!("留空则用环境变量 {}", ENV[a.provider])))
-                        .on_hover_text("只保存在内存中，不写入文件。");
+                    ui.add(egui::TextEdit::singleline(&mut profile.key).password(true).desired_width(300.0)
+                        .hint_text(format!("留空读取 {}", a.provider.key_env())))
+                        .on_hover_text("密钥保存在内存中。本机回环服务可以留空。");
                 });
                 ui.label("任务");
                 ui.add(egui::TextEdit::multiline(&mut a.task).desired_rows(3).desired_width(f32::INFINITY).hint_text("例如：从 1500 年起，把甲国东半部划给东边的邻国，并在时间轴上记一笔"));
@@ -232,8 +259,7 @@ impl App {
         if apply {
             if self.history.generation() != self.ai.base {
                 self.ai.error = Some("AI 开始之后地图又被修改过，草稿与现在的地图不一致；请重新运行任务。".into());
-            } else if let Some(draft) = self.ai.done.as_mut().and_then(|f| f.draft.take()) {
-                let label = format!("AI（{}）：{}", self.ai.model[self.ai.provider].trim(), self.ai.task.trim().chars().take(30).collect::<String>());
+            } else if let Some((draft, label)) = self.ai.done.as_mut().and_then(|f| f.draft.take().map(|d| (d, f.label.clone()))) {
                 // the draft keeps the map's year and layer as they were
                 if self.edit(&label, move |d| {
                     *d = draft;

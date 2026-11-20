@@ -8,6 +8,7 @@
 
 use crate::change::ChangeSet;
 use crate::doc::Document;
+use crate::world_book::WorldBook;
 
 struct Entry {
     label: String,
@@ -60,7 +61,7 @@ impl History {
     /// an interactive drag).
     pub fn push(&mut self, label: &str, before: Document, after: &Document) {
         self.generation += 1;
-        let bytes = ChangeSet::between(&before, after).old_bytes;
+        let bytes = ChangeSet::between(&before, after).old_bytes + WorldBook::retained_bytes(&before, after);
         self.undo.push(Entry { label: label.to_string(), doc: before, bytes });
         self.undo_bytes += bytes;
         self.redo.clear();

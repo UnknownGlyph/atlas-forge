@@ -11,7 +11,7 @@
 
 use crate::queries::find_entity;
 use crate::{ApiError, ApiResult, Context, Session};
-use map_core::doc::{Document, EntityId, EntityKind, LineFeature, LineId};
+use map_core::doc::{Document, EntityId, EntityKind, FieldKind, LineFeature, LineId, Value as FieldValue};
 use map_core::geom::LonLat;
 use serde_json::{json, Value};
 
@@ -88,6 +88,54 @@ fn area_of(d: &Document, e: EntityId) -> f64 {
     d.areas_by_entity().get(&e).copied().unwrap_or(0.0)
 }
 
+fn year_arg(args: &Value, key: &str) -> Result<Option<i32>, ApiError> {
+    let Some(value) = args.get(key).filter(|value| !value.is_null()) else { return Ok(None) };
+    value.as_i64().and_then(|year| i32::try_from(year).ok()).map(Some)
+        .ok_or_else(|| ApiError::BadRequest(format!("{key} 须为年份整数或 null")))
+}
+
+fn bool_arg(args: &Value, key: &str) -> Result<Option<bool>, ApiError> {
+    args.get(key).map(|value| {
+        value.as_bool().ok_or_else(|| ApiError::BadRequest(format!("{key} 须为布尔值")))
+    }).transpose()
+}
+
+fn set_visibility(doc: &mut Document, args: &Value) -> ApiResult {
+    let labels = bool_arg(args, "labels")?;
+    let cities = bool_arg(args, "cities")?;
+    let visible = bool_arg(args, "visible")?;
+    let group = if let Some(group) = args.get("group") {
+        let mut matches = doc.groups.iter().filter(|entry| {
+            group.as_u64() == Some(entry.id.0) || group.as_str() == Some(entry.name.as_str())
+        });
+        let id = matches.next().ok_or_else(|| ApiError::NotFound("没有匹配的要素图层".into()))?.id;
+        if matches.next().is_some() {
+            return Err(ApiError::BadRequest("图层名称重复，请使用图层 ID".into()));
+        }
+        let visible = visible.ok_or_else(|| ApiError::BadRequest("指定 group 时需要 visible".into()))?;
+        doc.set_group_hidden(id, !visible).map_err(ApiError::Failed)?;
+        Some(json!({"id": id.0, "visible": visible}))
+    } else {
+        if visible.is_some() || (labels.is_none() && cities.is_none()) {
+            return Err(ApiError::BadRequest("提交 labels、cities，或提交 group 和 visible".into()));
+        }
+        None
+    };
+    if let Some(show) = labels { doc.style.show_labels = show; }
+    if let Some(show) = cities { doc.style.show_cities = show; }
+    Ok(json!({"labels": doc.style.show_labels, "cities": doc.style.show_cities, "group": group}))
+}
+
+fn field_value(kind: FieldKind, value: &Value) -> Result<Option<FieldValue>, ApiError> {
+    if value.is_null() { return Ok(None); }
+    let typed = match kind {
+        FieldKind::Number => value.as_f64().filter(|x| x.is_finite()).map(FieldValue::Num),
+        FieldKind::Text | FieldKind::Category => value.as_str().map(|s| FieldValue::Text(s.to_owned())),
+        FieldKind::Bool => value.as_bool().map(FieldValue::Bool),
+    };
+    typed.map(Some).ok_or_else(|| ApiError::BadRequest(format!("value 与字段类型 {kind:?} 不符")))
+}
+
 impl Session {
     /// The draft (made from the world on the first edit).
     fn draft_mut(&mut self) -> &mut Document {
@@ -103,7 +151,11 @@ impl Session {
         }
         let id = req.get("id").cloned().unwrap_or(Value::Null);
         let args = req.get("args").cloned().unwrap_or(json!({}));
-        let out = self.context(req.get("context")).and_then(|ctx| self.edit(op, &args, &ctx));
+        let out = if args.is_object() {
+            self.context(req.get("context")).and_then(|ctx| self.edit(op, &args, &ctx))
+        } else {
+            Err(ApiError::BadRequest("args 必须是对象".into()))
+        };
         match out {
             Ok(result) => json!({"id": id, "ok": true, "version": self.version, "result": result}),
             Err(e) => json!({"id": id, "ok": false, "version": self.version, "error": {"kind": e.kind(), "message": e.message()}}),
@@ -188,9 +240,9 @@ impl Session {
             }
             "edit.set_lifespan" => {
                 let e = entity_arg(&d, args, "entity")?;
-                let y = |k: &str| args.get(k).and_then(Value::as_i64).map(|v| v as i32);
-                d.set_lifespan(e, y("founded"), y("ended")).map_err(ApiError::Failed)?;
-                (json!({"entity": e.0}), format!("{} 的存续期改为 {:?}–{:?}", d.entities[&e].name, y("founded"), y("ended")))
+                let (founded, ended) = (year_arg(args, "founded")?, year_arg(args, "ended")?);
+                d.set_lifespan(e, founded, ended).map_err(ApiError::Failed)?;
+                (json!({"entity": e.0}), format!("{} 的存续期改为 {founded:?}–{ended:?}", d.entities[&e].name))
             }
             "edit.set_parent" => {
                 let e = entity_arg(&d, args, "entity")?;
@@ -215,8 +267,8 @@ impl Session {
             "edit.add_event" => {
                 let name = s_arg(args, "name")?;
                 // (a tool call's `year` arrives as the request's context)
-                let year = args.get("year").and_then(Value::as_i64).map(|v| v as i32).or(ctx.year).ok_or_else(|| ApiError::BadRequest("缺少 year".into()))?;
-                let end = args.get("end").and_then(Value::as_i64).map(|v| v as i32);
+                let year = year_arg(args, "year")?.or(ctx.year).ok_or_else(|| ApiError::BadRequest("缺少 year".into()))?;
+                let end = year_arg(args, "end")?;
                 let id = d.add_event(name, year, end);
                 if let Some(note) = args.get("note").and_then(Value::as_str) {
                     if let Some(mut ev) = d.event(id).cloned() {
@@ -267,6 +319,41 @@ impl Session {
                 let id = LineId(d.topo.alloc());
                 d.rivers.insert(id, LineFeature { name: name.clone(), pts, route: None, legend: String::new(), show_name: !name.is_empty(), hidden: false });
                 (json!({"river": id.0}), format!("河流“{name}”"))
+            }
+            "edit.set_visibility" => (set_visibility(&mut d, args)?, "修改地图显示".into()),
+            "edit.add_field" => {
+                let key = s_arg(args, "key")?;
+                let name = s_arg(args, "name")?;
+                let kind = match s_arg(args, "kind")? {
+                    "number" => FieldKind::Number,
+                    "text" => FieldKind::Text,
+                    "bool" => FieldKind::Bool,
+                    "category" => FieldKind::Category,
+                    _ => return Err(ApiError::BadRequest("kind 可选 number、text、bool 或 category".into())),
+                };
+                let id = d.add_field(key, name, kind, None).map_err(ApiError::BadRequest)?;
+                (json!({"field": id.0, "key": key}), format!("新增字段“{name}”"))
+            }
+            "edit.set_value" => {
+                let entity = entity_arg(&d, args, "entity")?;
+                let key = s_arg(args, "key")?;
+                let id = d.field_by_key(key).ok_or_else(|| ApiError::NotFound(format!("字段“{key}”不存在")))?;
+                let field = &d.fields[&id];
+                if field.expr.is_some() {
+                    return Err(ApiError::BadRequest("计算字段的值来自公式".into()));
+                }
+                let value = args.get("value").ok_or_else(|| ApiError::BadRequest("缺少 value；用 null 删除记录".into()))?;
+                let value = field_value(field.kind, value)?;
+                d.set_value(entity, id, ctx.year, value);
+                (json!({"entity": entity.0, "key": key, "year": ctx.year}), format!("更新字段“{key}” · {when}"))
+            }
+            "edit.import_table" => {
+                let csv = s_arg(args, "csv")?;
+                let create_missing = bool_arg(args, "create_missing")?.unwrap_or(false);
+                let report = map_io::table::import(&mut d, csv, create_missing).map_err(ApiError::BadRequest)?;
+                let note = format!("导入 CSV：{} 行，写入 {} 项", report.rows, report.values_set);
+                (json!({"rows": report.rows, "values_set": report.values_set, "fields_created": report.fields_created,
+                    "entities_created": report.entities_created, "unmatched": report.unmatched}), note)
             }
             "edit.add_label" => {
                 let text = s_arg(args, "text")?;

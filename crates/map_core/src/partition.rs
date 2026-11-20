@@ -166,8 +166,45 @@ fn to_geo(rings: &[Vec<P2>]) -> geo::MultiPolygon<f64> {
 }
 
 impl Document {
+    /// Start a subordinate unit in the active exclusive layer.
+    pub fn add_subdivision(&mut self, parent: EntityId, name: &str) -> TResult<EntityId> {
+        let source = self.entities.get(&parent)
+            .filter(|e| e.kind == EntityKind::Country && e.layer == self.active_layer && e.exists_in(self.year))
+            .ok_or("请在当前分区层和年份选择有效的上级单位")?;
+        if self.active_is_shares() {
+            return Err("请在独占分区层中创建省份".into());
+        }
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("省份名称不能为空".into());
+        }
+        let lifespan = (self.year.or(source.founded), source.ended);
+        let color = source.color;
+        let id = self.add_entity(EntityKind::Country, name);
+        self.entities.get_mut(&id).unwrap().color = color;
+        self.set_lifespan(id, lifespan.0, lifespan.1)?;
+        self.record_parent(id, Some(parent))?;
+        Ok(id)
+    }
+
+    /// Create a unit and give it a whole face, atomically.
+    pub fn subdivision_on_face(&mut self, parent: EntityId, name: &str, face: crate::FaceId) -> TResult<EntityId> {
+        if self.owner.get(&face) != Some(&parent) {
+            return Err("请选择由上级单位直接管辖的陆地".into());
+        }
+        let mut draft = self.clone();
+        let id = draft.add_subdivision(parent, name)?;
+        draft.assign(face, Some(id))?;
+        *self = draft;
+        Ok(id)
+    }
+
     /// Work out how a country's land would be cut into units.
     pub fn partition_plan(&self, e: EntityId, spec: &PartitionSpec) -> TResult<Plan> {
+        if self.active_is_shares()
+            || self.entities.get(&e).is_none_or(|x| x.kind != EntityKind::Country || x.layer != self.active_layer || !x.exists_in(self.year)) {
+            return Err("请在当前独占分区层和年份选择有效的领土单位".into());
+        }
         let n = spec.units.clamp(2, 60);
         let mut pieces: Vec<PlanarPolygon> = self.dissolve(e);
         if pieces.is_empty() {
@@ -551,11 +588,18 @@ impl Document {
     /// or provinces under it; the new inner borders smoothed. Returns the
     /// units' entities.
     pub fn apply_partition(&mut self, plan: &Plan, spec: &PartitionSpec) -> TResult<Vec<EntityId>> {
+        let mut draft = self.clone();
+        let units = draft.apply_partition_to_draft(plan, spec)?;
+        *self = draft;
+        Ok(units)
+    }
+
+    fn apply_partition_to_draft(&mut self, plan: &Plan, spec: &PartitionSpec) -> TResult<Vec<EntityId>> {
         let e = plan.target;
         let old = self.entities.get(&e).ok_or("国家不存在")?.clone();
         let taken: HashSet<String> = self.entities.values().map(|x| x.name.clone()).collect();
         let kind = if spec.provinces { NameKind::Region } else { NameKind::Country };
-        let names = names::unique(spec.style, kind, plan.units.len(), spec.seed + 101, &taken);
+        let names = names::unique(spec.style, kind, plan.units.len(), spec.seed.wrapping_add(101), &taken);
         let mut ents: Vec<EntityId> = Vec::new();
         for k in 0..plan.units.len() {
             if k == 0 && !spec.provinces {
@@ -563,13 +607,14 @@ impl Document {
                 continue;
             }
             let name = names.get(k).cloned().unwrap_or_else(|| format!("{}{}", old.name, k + 1));
-            let id = self.add_entity(EntityKind::Country, &name);
+            let id = if spec.provinces {
+                self.add_subdivision(e, &name)?
+            } else {
+                self.add_entity(EntityKind::Country, &name)
+            };
             // as long-lived as the country it comes from
-            if old.founded.is_some() || old.ended.is_some() {
+            if !spec.provinces && (old.founded.is_some() || old.ended.is_some()) {
                 let _ = self.set_lifespan(id, old.founded, old.ended);
-            }
-            if spec.provinces {
-                self.record_parent(id, Some(e))?;
             }
             ents.push(id);
         }
@@ -584,7 +629,12 @@ impl Document {
                 continue;
             }
             // with its holes: a lake or an enclave inside stays as it is
-            let (next, _) = overlay::apply_with_holes(self, &part.outer, &part.holes, DrawIntent::Take(ents[k])).map_err(|err| format!("这个方案无法应用（{err}）；可以换一个方案或改变单位数"))?;
+            let intent = if spec.provinces {
+                DrawIntent::Subdivide { parent: e, child: ents[k] }
+            } else {
+                DrawIntent::Take(ents[k])
+            };
+            let (next, _) = overlay::apply_with_holes(self, &part.outer, &part.holes, intent).map_err(|err| format!("这个方案无法应用（{err}）；可以换一个方案或改变单位数"))?;
             *self = next;
         }
         // provinces: whatever is left directly with the country goes to its neighbouring unit

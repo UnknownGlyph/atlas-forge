@@ -10,6 +10,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use ttf_parser::{Face, GlyphId, OutlineBuilder};
 
+mod book_pages;
+pub(crate) use book_pages::render as dossier_pdf;
+
 /// Points per pixel of the picture.
 const PT: f64 = 0.75;
 

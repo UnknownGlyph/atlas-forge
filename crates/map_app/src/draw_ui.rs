@@ -6,7 +6,7 @@
 use crate::app::App;
 use crate::view::{DrawMode, Tool, ViewGeom, ViewKind};
 use eframe::egui::{self, Color32, Pos2, Stroke, Vec2};
-use map_core::doc::Document;
+use map_core::doc::{Document, EntityId, LayerId};
 use map_core::geom::{self, LonLat};
 use map_core::overlay::{DrawIntent, OverlayReport};
 use map_core::topo::FaceKind;
@@ -33,11 +33,12 @@ pub struct BgEdit {
     /// History generation when it started: if anything else is edited in
     /// the meantime the result no longer applies.
     pub generation: u64,
+    pub year: Option<i32>,
+    pub layer: LayerId,
     pub started: Instant,
     /// The draft, restored when the result cannot be used.
     pub pts: Vec<LonLat>,
-    /// Name of the country created by this drawing, if any.
-    pub new_country: Option<String>,
+    pub created: Option<EntityId>,
     pub handle: std::thread::JoinHandle<Result<(Document, OverlayReport), String>>,
 }
 
@@ -356,6 +357,7 @@ impl App {
             DrawMode::Take => brush.map(DrawIntent::Take).ok_or("“夺取”需要先选择画笔国家"),
             // the country is created when the shape is applied
             DrawMode::NewCountry => Ok(DrawIntent::Take(map_core::EntityId(u64::MAX))),
+            DrawMode::Province(parent) => Ok(DrawIntent::Subdivide { parent, child: EntityId(u64::MAX) }),
         }
     }
 
@@ -376,7 +378,6 @@ impl App {
                     return;
                 }
                 let kind = if self.tool == Tool::DrawLand { FaceKind::Land } else { FaceKind::Water };
-                let label = if kind == FaceKind::Land { "绘制陆地" } else { "绘制湖泊" };
                 let intent = if kind == FaceKind::Water {
                     DrawIntent::CarveWater
                 } else {
@@ -385,13 +386,19 @@ impl App {
                         Err(e) => return self.set_status(e, true),
                     }
                 };
+                let province = match intent {
+                    DrawIntent::Subdivide { parent, .. } => Some(parent),
+                    _ => None,
+                };
+                let label = if province.is_some() { "绘制下级地区" }
+                    else if kind == FaceKind::Land { "绘制陆地" } else { "绘制湖泊" };
                 let pts = self.densified(true);
                 let new_country = (kind == FaceKind::Land && self.draw_mode == DrawMode::NewCountry).then(|| self.new_country_name());
                 // fast path: a closed shape inside open water, or a lake inside
                 // one land face, keeps every existing face id
                 let container = self.doc.topo.face_at(pts[0]);
                 let in_water = self.doc.topo.faces[&container].kind == FaceKind::Water;
-                if in_water || kind == FaceKind::Water {
+                if province.is_none() && (in_water || kind == FaceKind::Water) {
                     let mut d = self.doc.clone();
                     let created = new_country.as_ref().map(|n| d.add_entity(map_core::EntityKind::Country, n));
                     if let Ok(f) = d.add_ring_face(&pts, kind) {
@@ -416,16 +423,24 @@ impl App {
                 }
                 // crosses existing boundaries: boolean overlay + rebuild, off the UI thread
                 let mut doc = self.doc.clone();
-                let ring = pts.clone();
-                let name = new_country.clone();
-                let handle = std::thread::spawn(move || {
-                    let intent = match &name {
-                        Some(n) => DrawIntent::Take(doc.add_entity(map_core::EntityKind::Country, n)),
-                        None => intent,
+                let (intent, created) = if let Some(parent) = province {
+                    let n = doc.entities.values().filter(|e| e.parent == Some(parent) && e.kind == map_core::EntityKind::Country).count() + 1;
+                    let noun = if doc.entities.get(&parent).is_some_and(|e| e.parent.is_none()) { "省份" } else { "下级地区" };
+                    let child = match doc.add_subdivision(parent, &format!("新{noun}{n}")) {
+                        Ok(id) => id,
+                        Err(e) => return self.set_status(e, true),
                     };
-                    map_core::overlay::apply(&doc, &ring, intent)
-                });
-                self.bg_edit = Some(BgEdit { label, generation: self.history.generation(), started: Instant::now(), pts: self.draft.clone(), new_country, handle });
+                    (DrawIntent::Subdivide { parent, child }, Some(child))
+                } else if let Some(name) = new_country {
+                    let id = doc.add_entity(map_core::EntityKind::Country, &name);
+                    (DrawIntent::Take(id), Some(id))
+                } else {
+                    (intent, None)
+                };
+                let handle = std::thread::spawn(move || map_core::overlay::apply(&doc, &pts, intent));
+                self.bg_edit = Some(BgEdit { label, generation: self.history.generation(),
+                    year: self.doc.year, layer: self.doc.active_layer, started: Instant::now(),
+                    pts: self.draft.clone(), created, handle });
                 self.clear_draft();
                 self.set_status(format!("{label}：正在计算…"), false);
             }
@@ -447,7 +462,9 @@ impl App {
                 let doc = self.doc.clone();
                 let handle = std::thread::spawn(move || map_core::redraw::apply(&doc, &plan));
                 let label = "重画国界";
-                self.bg_edit = Some(BgEdit { label, generation: self.history.generation(), started: Instant::now(), pts: self.draft.clone(), new_country: None, handle });
+                self.bg_edit = Some(BgEdit { label, generation: self.history.generation(),
+                    year: self.doc.year, layer: self.doc.active_layer, started: Instant::now(),
+                    pts: self.draft.clone(), created: None, handle });
                 self.clear_draft();
                 self.set_status(format!("{label}：正在计算…"), false);
             }
@@ -522,7 +539,8 @@ impl App {
         let bg = self.bg_edit.take().unwrap();
         let label = bg.label;
         let result = bg.handle.join().unwrap_or_else(|_| Err("计算线程意外退出".into()));
-        let changed = self.history.generation() != bg.generation || self.pending.is_some();
+        let changed = self.history.generation() != bg.generation || self.pending.is_some()
+            || self.doc.year != bg.year || self.doc.active_layer != bg.layer;
         match result {
             Ok(_) if changed => {
                 self.draft = bg.pts;
@@ -535,10 +553,9 @@ impl App {
                 self.dirty = true;
                 self.selected_face = None;
                 self.selected = None;
-                if let Some(n) = &bg.new_country {
-                    let id = self.doc.entities.iter().filter(|(_, e)| &e.name == n).map(|(id, _)| *id).max();
-                    self.selected = id;
-                    self.brush = id;
+                if bg.created.is_some() {
+                    self.selected = bg.created;
+                    self.brush = bg.created;
                 }
                 let name = |e: Option<map_core::EntityId>| e.and_then(|e| self.doc.entities.get(&e)).map(|x| x.name.clone()).unwrap_or("无主地".into());
                 let mut msg = format!("{label}：");
@@ -715,6 +732,7 @@ impl App {
                 (Tool::DrawLake, _) => "变为水域".to_string(),
                 (_, Ok(DrawIntent::AddLand)) => "新增陆地（不动已有陆地）".into(),
                 (_, Ok(DrawIntent::Expand(x))) => format!("扩张：{}", self.doc.entities.get(&x).map_or("", |e| e.name.as_str())),
+                (_, Ok(DrawIntent::Subdivide { parent, .. })) => format!("划分直属陆地 · {}", self.doc.entities.get(&parent).map_or("", |e| e.name.as_str())),
                 (_, Ok(DrawIntent::Take(_))) if self.draw_mode == DrawMode::NewCountry => format!("新建国家：{}", self.new_country_name()),
                 (_, Ok(DrawIntent::Take(x))) => format!("夺取：{}", self.doc.entities.get(&x).map_or("", |e| e.name.as_str())),
                 (_, Err(e)) => e.to_string(),

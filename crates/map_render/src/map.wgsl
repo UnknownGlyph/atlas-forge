@@ -7,8 +7,8 @@ struct View {
     center: vec4<f32>,       // 2D: cx, cy (projected units), zoom (px/unit), lon0 (deg)
     viewport: vec4<f32>,     // width px, height px, mode (0 = 2D, 1 = globe), projection id
     light: vec4<f32>,        // globe light direction
-    line_color: array<vec4<f32>, 12>,
-    line_width: array<vec4<f32>, 12>,
+    line_color: array<vec4<f32>, 15>,
+    line_width: array<vec4<f32>, 15>,
 };
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -81,9 +81,13 @@ struct FillOut {
 @vertex
 fn vs_fill(@location(0) ll: vec2<f32>, @location(1) slot: u32) -> FillOut {
     var o: FillOut;
-    o.pos = to_clip(ll);
     o.color = colors[slot];
-    o.world = sphere(ll);
+    if (is_globe()) {
+        o.world = sphere(ll);
+        o.pos = view.view_proj * vec4<f32>(o.world, 1.0);
+    } else {
+        o.pos = to_clip(ll);
+    }
     return o;
 }
 
@@ -111,8 +115,31 @@ struct LineOut {
 fn vs_line(@builtin(vertex_index) vi: u32, @location(0) p0: vec2<f32>, @location(1) p1: vec2<f32>, @location(2) cls: u32) -> LineOut {
     var ends = array<f32, 6>(0.0, 1.0, 1.0, 0.0, 1.0, 0.0);
     var sides = array<f32, 6>(-1.0, -1.0, 1.0, -1.0, 1.0, 1.0);
-    let c0 = to_clip(p0);
-    let c1 = to_clip(p1);
+    var o: LineOut;
+    o.color = view.line_color[cls];
+    if (o.color.a == 0.0 || view.line_width[cls].x <= 0.0) {
+        o.pos = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+        return o;
+    }
+    var c0: vec4<f32>;
+    var c1: vec4<f32>;
+    if (is_globe()) {
+        let a = sphere(p0);
+        let b = sphere(p1);
+        // Segments are at most two degrees long. The interpolated positions
+        // have length at least cos(1°), so both endpoints this far behind
+        // the horizon cannot produce a visible fragment.
+        if (max(dot(a, view.cam_pos.xyz), dot(b, view.cam_pos.xyz)) < 0.9995) {
+            o.pos = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+            return o;
+        }
+        c0 = view.view_proj * vec4<f32>(a, 1.0);
+        c1 = view.view_proj * vec4<f32>(b, 1.0);
+        o.world = mix(a, b, ends[vi]);
+    } else {
+        c0 = to_clip(p0);
+        c1 = to_clip(p1);
+    }
     let half = view.viewport.xy * 0.5;
     let s0 = c0.xy / c0.w * half;
     let s1 = c1.xy / c1.w * half;
@@ -131,10 +158,7 @@ fn vs_line(@builtin(vertex_index) vi: u32, @location(0) p0: vec2<f32>, @location
     let s = mix(s0, s1, e) + dir * (e * 2.0 - 1.0) * hw + nrm * sd * w;
     let cw = mix(c0.w, c1.w, e);
     let cz = mix(c0.z / c0.w, c1.z / c1.w, e);
-    var o: LineOut;
     o.pos = vec4<f32>(s / half * cw, cz * cw, cw);
-    o.color = view.line_color[cls];
-    o.world = mix(sphere(p0), sphere(p1), e);
     o.across = sd * w;
     o.half_width = hw;
     o.screen = s;

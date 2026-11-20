@@ -27,6 +27,11 @@ pub enum Format {
 }
 
 impl Format {
+    pub fn geographic(self) -> bool {
+        matches!(self, Self::GeoJsonCountries | Self::GeoJsonFaces | Self::GeoJsonRivers
+            | Self::ShpCountries | Self::ShpFaces | Self::ShpRivers)
+    }
+
     pub fn ext(self) -> &'static str {
         match self {
             Format::Png => "png",
@@ -47,6 +52,9 @@ pub fn write_one(doc: &Document, format: Format, opts: &ExportOptions, font: Opt
 /// As [`write_one`], with a thematic scale shared by all years worked out
 /// once by the caller (see [`map_core::theme::fixed_scale`]).
 pub(crate) fn write_with(doc: &Document, format: Format, opts: &ExportOptions, font: Option<&[u8]>, path: &Path, fixed: Option<&FixedScale>) -> Result<(), String> {
+    if doc.paper.is_some() && format.geographic() {
+        return Err("平面画布请导出 PNG、SVG 或 PDF。地理坐标文件适用于地理地图。".into());
+    }
     let io = |r: std::io::Result<()>| r.map_err(|e| format!("{}: {e}", path.display()));
     match format {
         Format::Png | Format::Svg | Format::Pdf => {

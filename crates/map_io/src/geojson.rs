@@ -352,10 +352,20 @@ pub fn import_topology_with(text: &str, mode: &ImportMode) -> Result<(Document, 
     doc.topo = topo;
     // one country per feature, owning all of its polygons
     let mut entity_of: std::collections::HashMap<usize, map_core::EntityId> = std::collections::HashMap::new();
-    for (fi, face) in assigned.iter().map(|(fi, f)| (*fi, Some(f))) {
-        let Some(face) = face else { continue };
+    let mut water_faces = std::collections::BTreeSet::new();
+    for &(fi, face) in &assigned {
+        let props = &feats[fi]["properties"];
+        // Atlas face exports describe both sides of a lake. The polygon
+        // can participate in topology construction without becoming land.
+        if props["face_id"].as_u64().is_some() && props["kind"] == "water" {
+            if let Err(error) = doc.record_kind(face, FaceKind::Water) {
+                rep.problems.push(format!("要素 {} 的水域还原失败：{error}", fi + 1));
+                return Err(rep);
+            }
+            water_faces.insert(face);
+            continue;
+        }
         let e = *entity_of.entry(fi).or_insert_with(|| {
-            let props = &feats[fi]["properties"];
             let name = NAME_KEYS.iter().find_map(|k| props[*k].as_str()).map(str::to_string).unwrap_or_else(|| format!("要素{}", fi + 1));
             let id = doc.add_entity(EntityKind::Country, &name);
             if let Some(code) = CODE_KEYS.iter().find_map(|k| props[*k].as_str().map(str::to_string).or_else(|| props[*k].as_i64().map(|v| v.to_string()))) {
@@ -365,7 +375,7 @@ pub fn import_topology_with(text: &str, mode: &ImportMode) -> Result<(Document, 
             }
             id
         });
-        let _ = doc.assign(*face, Some(e));
+        let _ = doc.assign(face, Some(e));
     }
     // feature properties become fields (numbers and text)
     for (fi, e) in &entity_of {
@@ -404,7 +414,7 @@ pub fn import_topology_with(text: &str, mode: &ImportMode) -> Result<(Document, 
     rep.countries = entity_of.len();
     rep.faces = brep.faces;
     rep.edges = brep.edges;
-    rep.lakes = brep.lakes;
+    rep.lakes = brep.lakes + water_faces.len();
     rep.skipped_rings = brep.skipped_rings;
     Ok((doc, rep))
 }
@@ -412,6 +422,28 @@ pub fn import_topology_with(text: &str, mode: &ImportMode) -> Result<(Document, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_water_faces_round_trip_without_becoming_countries() {
+        let square = |left:f64,right:f64| {
+            [LonLat::new(left,left),LonLat::new(right,left),LonLat::new(right,right),LonLat::new(left,right)]
+        };
+        let mut original = Document::default();
+        let land = original.add_ring_face(&square(0.0,10.0), FaceKind::Land).unwrap();
+        original.add_ring_face(&square(3.0,7.0),FaceKind::Water).unwrap();
+        let owner = original.add_entity(EntityKind::Country,"环礁");
+        original.assign(land,Some(owner)).unwrap();
+        let bytes = export_faces(&original);
+        for mode in [ImportMode::Strict, ImportMode::Repair(Default::default())] {
+            let (result, report) = import_topology_with(&bytes,&mode).unwrap();
+            let lagoon = result.topo.face_at(LonLat::new(5.0,5.0));
+            assert_ne!(lagoon,BACKGROUND);
+            assert_eq!(result.topo.faces[&lagoon].kind,FaceKind::Water);
+            assert!(!result.owner.contains_key(&lagoon));
+            assert_eq!((report.countries,report.lakes),(1,1));
+            result.topo.validate().unwrap();
+        }
+    }
 
     #[test]
     fn land_background_is_exported_as_territory() {

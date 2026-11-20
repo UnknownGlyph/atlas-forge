@@ -71,6 +71,18 @@ impl UnderlayUniform {
         u.light = [l[0] as f32, l[1] as f32, l[2] as f32, 0.0];
         u
     }
+
+    /// The interactive globe samples already premultiplied map layers.
+    pub(crate) fn for_globe_raster(view: &crate::gpu::ViewUniform, lit: bool) -> Self {
+        let mut u = Self::zeroed();
+        u.inv_view_proj = glam::Mat4::from_cols_array_2d(&view.view_proj).inverse().to_cols_array_2d();
+        u.viewport = view.viewport;
+        u.light = view.light;
+        u.src = [0.0, view.center[3], 1.0, if lit { 1.0 } else { 2.0 }];
+        u.m0 = [1.0 / std::f32::consts::TAU, 0.0, 0.5, 0.0];
+        u.m1 = [0.0, -1.0 / std::f32::consts::PI, 0.5, 0.0];
+        u
+    }
 }
 
 /// One underlay in one frame.
@@ -83,9 +95,30 @@ pub struct UnderlayFrame {
     pub above_land: bool,
 }
 
-struct Slot {
+pub(crate) struct Slot {
     ubuf: wgpu::Buffer,
     bind: wgpu::BindGroup,
+}
+
+impl Slot {
+    fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, texture: &wgpu::TextureView, sampler: &wgpu::Sampler) -> Self {
+        let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("underlay uniform"),
+            size: std::mem::size_of::<UnderlayUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("underlay bind"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(texture) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+            ],
+        });
+        Self { ubuf, bind }
+    }
 }
 
 pub(crate) struct UnderlayGpu {
@@ -178,6 +211,20 @@ impl UnderlayGpu {
         tex.create_view(&Default::default())
     }
 
+    pub(crate) fn texture_slot(&self, device: &wgpu::Device, texture: &wgpu::TextureView, sampler: &wgpu::Sampler) -> Slot {
+        Slot::new(device, &self.bgl, texture, sampler)
+    }
+
+    pub(crate) fn set_uniform(slot: &Slot, queue: &wgpu::Queue, uniform: &UnderlayUniform) {
+        queue.write_buffer(&slot.ubuf, 0, bytemuck::bytes_of(uniform));
+    }
+
+    pub(crate) fn paint_slot(&self, pass: &mut wgpu::RenderPass<'_>, slot: &Slot) {
+        pass.set_pipeline(&self.pipe);
+        pass.set_bind_group(0, &slot.bind, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
     pub(crate) fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, view_id: u32, frames: &[UnderlayFrame]) {
         for f in frames {
             if !self.textures.contains_key(&f.key) {
@@ -187,24 +234,9 @@ impl UnderlayGpu {
                 self.slots.retain(|(_, k), _| *k != f.key);
             }
             let slot = self.slots.entry((view_id, f.key)).or_insert_with(|| {
-                let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("underlay uniform"),
-                    size: std::mem::size_of::<UnderlayUniform>() as u64,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-                let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("underlay bind"),
-                    layout: &self.bgl,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.textures[&f.key]) },
-                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                    ],
-                });
-                Slot { ubuf, bind }
+                Slot::new(device, &self.bgl, &self.textures[&f.key], &self.sampler)
             });
-            queue.write_buffer(&slot.ubuf, 0, bytemuck::bytes_of(&f.uniform));
+            Self::set_uniform(slot, queue, &f.uniform);
         }
         self.drawn.insert(view_id, frames.iter().map(|f| (f.key, f.above_land)).collect());
         // free what no view draws any more
@@ -220,9 +252,7 @@ impl UnderlayGpu {
                 continue;
             }
             if let Some(s) = self.slots.get(&(view_id, *key)) {
-                pass.set_pipeline(&self.pipe);
-                pass.set_bind_group(0, &s.bind, &[]);
-                pass.draw(0..3, 0..1);
+                self.paint_slot(pass, s);
             }
         }
     }

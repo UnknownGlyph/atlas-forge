@@ -184,8 +184,6 @@ impl App {
             let c = self.doc.style.label;
             Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
         };
-        let family = self.font_family(&self.doc.style.label_font, self.doc.style.label_bold);
-        let font = |size: f32| egui::FontId::new(size, family.clone());
         let paths: HashMap<EntityId, &LabelPath> = self.labels.iter().map(|(e, p)| (*e, p)).collect();
         // placed labels first (they always show), then the automatic ones largest first
         let mut items: Vec<(EntityId, Option<LabelPlace>)> = self
@@ -194,7 +192,8 @@ impl App {
             .into_iter()
             // a placed label shows only in years its country exists
             .filter(|e| self.doc.exists_in(*e, self.doc.year))
-            .filter_map(|e| self.doc.entities.get(&e).and_then(|x| x.label).map(|pl| (e, Some(pl))))
+            .filter_map(|e| self.doc.entities.get(&e).filter(|x| editing || x.parent.is_none())
+                .and_then(|x| x.label).map(|pl| (e, Some(pl))))
             .collect();
         items.extend(self.labels.iter().filter(|(e, _)| self.doc.entities.get(e).is_some_and(|x| x.label.is_none())).map(|(e, _)| (*e, None)));
         // all laid out first, so the glyph atlas holds every glyph when
@@ -202,6 +201,10 @@ impl App {
         let mut laid: Vec<Laid> = Vec::new();
         for (e, place) in items {
             let Some(ent) = self.doc.entities.get(&e) else { continue };
+            let tier = map_core::label_type::Tier::administrative(self.doc.ancestors(e).count().saturating_sub(1));
+            let style = self.doc.style.label_type(tier);
+            let family = self.font_family(style.font, style.bold);
+            let font = |size: f32| egui::FontId::new(size, family.clone());
             if ent.label_hidden && !editing {
                 continue;
             }
@@ -219,7 +222,7 @@ impl App {
             let (line, size, spacing, len) = match place {
                 Some(pl) => {
                     // as large as its automatic name would be here, times its own scale
-                    let base = path.and_then(|p| Line::on(vg, p).map(|l| l.room(vg, p))).map_or(14.0, |(len, room)| (name_size(len as f64, room as f64, em as f64) as f32).clamp(MIN_PX, MAX_PX));
+                    let base = path.and_then(|p| Line::on(vg, p).map(|l| l.room(vg, p))).map_or(style.size, |(len, room)| (name_size(len as f64, room as f64, em as f64) as f32).clamp(MIN_PX, MAX_PX));
                     let size = (base * pl.scale).clamp(6.0, 120.0);
                     let line = match vg.kind {
                         ViewKind::Flat => {
@@ -294,7 +297,8 @@ impl App {
             self.doc
                 .entities
                 .iter()
-                .filter(|(_, x)| x.kind == map_core::EntityKind::City && x.exists_in(self.doc.year))
+                .filter(|(id, x)| x.kind == map_core::EntityKind::City && x.exists_in(self.doc.year)
+                    && self.city_shown(**id, self.map_detail(vg)))
                 .filter_map(|(_, x)| x.pos.and_then(|p| vg.to_screen(p)))
                 .map(|p| Rect::from_center_size(p, Vec2::splat(9.0)))
                 .collect()

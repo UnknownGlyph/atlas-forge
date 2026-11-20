@@ -22,8 +22,11 @@ impl Camera2D {
     }
 
     pub fn fit(&mut self, w: f64, h: f64) {
-        let b = self.proj.bounds();
-        self.center = [0.0, 0.0];
+        self.fit_bounds(w, h, self.proj.bounds());
+    }
+
+    pub fn fit_bounds(&mut self, w: f64, h: f64, b: [f64; 4]) {
+        self.center = [(b[0] + b[2]) * 0.5, (b[1] + b[3]) * 0.5];
         self.zoom = (w / (b[2] - b[0])).min(h / (b[3] - b[1])) * 0.95;
     }
 
@@ -101,6 +104,15 @@ pub struct GlobeCamera {
     pub fov_y: f64,
 }
 
+/// Shared transforms for projecting many labels and features in one view.
+#[derive(Clone, Copy)]
+pub struct GlobeProjection {
+    size: [f64; 2],
+    eye: DVec3,
+    matrix: DMat4,
+    inverse: DMat4,
+}
+
 impl Default for GlobeCamera {
     fn default() -> Self {
         Self { center_lon: 0.0, center_lat: 20.0, dist: 3.2, fov_y: 35f64.to_radians() }
@@ -139,9 +151,36 @@ impl GlobeCamera {
         perspective_rh(self.fov_for(w, h), (w / h).max(1e-3), 0.01, 100.0) * look_at_rh(self.eye(), DVec3::ZERO, up)
     }
 
+    pub fn projection(&self, w: f64, h: f64) -> GlobeProjection {
+        let matrix = self.view_proj(w, h);
+        GlobeProjection { size: [w, h], eye: self.eye(), matrix, inverse: matrix.inverse() }
+    }
+
     /// Screen offset from viewport centre (px, y down) → surface point.
     pub fn pick(&self, d: [f64; 2], w: f64, h: f64) -> Option<LonLat> {
-        let inv = self.view_proj(w, h).inverse();
+        self.projection(w, h).pick(d)
+    }
+
+    pub fn project(&self, ll: LonLat, w: f64, h: f64) -> Option<[f64; 2]> {
+        self.projection(w, h).project(ll)
+    }
+
+    pub fn rotate_px(&mut self, d: [f64; 2], w: f64, h: f64) {
+        let rad_per_px = 1.0 / self.px_per_rad(w, h);
+        let deg = rad_per_px.to_degrees();
+        self.center_lon = geom::wrap_lon(self.center_lon - d[0] * deg / self.center_lat.to_radians().cos().max(0.2));
+        self.center_lat = (self.center_lat + d[1] * deg).clamp(-89.0, 89.0);
+    }
+
+    pub fn zoom(&mut self, factor: f64) {
+        self.dist = (1.0 + (self.dist - 1.0) / factor).clamp(1.02, 12.0);
+    }
+}
+
+impl GlobeProjection {
+    pub fn pick(&self, d: [f64; 2]) -> Option<LonLat> {
+        let [w, h] = self.size;
+        let inv = self.inverse;
         let ndc = [d[0] / (w * 0.5), -d[1] / (h * 0.5)];
         let near = inv * DVec4::new(ndc[0], ndc[1], 0.0, 1.0);
         let far = inv * DVec4::new(ndc[0], ndc[1], 1.0, 1.0);
@@ -161,25 +200,16 @@ impl GlobeCamera {
     }
 
     /// Surface point → screen offset (px, y down), None if behind the horizon.
-    pub fn project(&self, ll: LonLat, w: f64, h: f64) -> Option<[f64; 2]> {
+    pub fn project(&self, ll: LonLat) -> Option<[f64; 2]> {
+        let [w, h] = self.size;
         let p = DVec3::from_array(projection::sphere_pos(ll.lon, ll.lat));
-        if p.dot(self.eye()) < 1.0 {
+        if p.dot(self.eye) < 1.0 {
             return None;
         }
-        let c = self.view_proj(w, h) * p.extend(1.0);
+        let c = self.matrix * p.extend(1.0);
         Some([c.x / c.w * w * 0.5, -c.y / c.w * h * 0.5])
     }
 
-    pub fn rotate_px(&mut self, d: [f64; 2], w: f64, h: f64) {
-        let rad_per_px = 1.0 / self.px_per_rad(w, h);
-        let deg = rad_per_px.to_degrees();
-        self.center_lon = geom::wrap_lon(self.center_lon - d[0] * deg / self.center_lat.to_radians().cos().max(0.2));
-        self.center_lat = (self.center_lat + d[1] * deg).clamp(-89.0, 89.0);
-    }
-
-    pub fn zoom(&mut self, factor: f64) {
-        self.dist = (1.0 + (self.dist - 1.0) / factor).clamp(1.02, 12.0);
-    }
 }
 
 #[cfg(test)]

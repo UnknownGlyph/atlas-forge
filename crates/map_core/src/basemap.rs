@@ -27,7 +27,7 @@ impl MapTheme {
     pub fn apply(&self, st: &mut Style, font: Option<String>) {
         let t = self.style();
         let keep = (st.show_labels, st.show_cities, st.overlay_layer, st.overlay_color, st.overlay_width);
-        *st = Style { label_font: font, ..t };
+        *st = Style { label_font: font, admin_typography: st.admin_typography, ..t };
         (st.show_labels, st.show_cities, st.overlay_layer, st.overlay_color, st.overlay_width) = keep;
     }
 

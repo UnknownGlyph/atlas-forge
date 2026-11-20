@@ -1,5 +1,6 @@
 [package]
 name = "map_bench"
+default-run = "map_bench"
 version.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -9,3 +10,5 @@ edition.workspace = true
 map_core.workspace = true
 map_io.workspace = true
 map_render.workspace = true
+pollster = "0.4"
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "dx12", "vulkan", "metal"] }

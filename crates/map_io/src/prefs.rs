@@ -19,6 +19,10 @@ pub struct Prefs {
     pub ui_scale: f32,
     /// Seconds between recovery snapshots of unsaved work.
     pub autosave_secs: u64,
+    pub autosave_on: bool,
+    pub autosave_keep: usize,
+    /// Additional trigger, in committed history operations. Zero is time only.
+    pub autosave_steps: u64,
     /// Show the start window when the program opens without a file.
     pub welcome: bool,
     /// Open the latest file at start instead of the sample world.
@@ -26,6 +30,7 @@ pub struct Prefs {
     /// "flat", "globe" or "split".
     pub layout: String,
     pub graticule: bool,
+    pub progressive_detail: bool,
     /// A scale bar and a north arrow on the map views.
     pub furniture: bool,
     /// Frame times, triangle counts and memory in the status bar.
@@ -38,7 +43,7 @@ pub struct Prefs {
 
 impl Default for Prefs {
     fn default() -> Self {
-        Self { recent: vec![], ui_scale: 1.0, autosave_secs: 60, welcome: true, reopen_last: false, layout: "split".into(), graticule: true, furniture: true, perf_in_status: false, undo_limit: 500, language: "zh".into() }
+        Self { recent: vec![], ui_scale: 1.0, autosave_secs: 60, autosave_on: true, autosave_keep: 20, autosave_steps: 10, welcome: true, reopen_last: false, layout: "split".into(), graticule: true, progressive_detail: true, furniture: true, perf_in_status: false, undo_limit: 500, language: "zh".into() }
     }
 }
 
@@ -47,6 +52,8 @@ impl Prefs {
     fn tidy(mut self) -> Self {
         self.ui_scale = if self.ui_scale.is_finite() { self.ui_scale.clamp(0.5, 3.0) } else { 1.0 };
         self.autosave_secs = self.autosave_secs.clamp(5, 3600);
+        self.autosave_keep = self.autosave_keep.clamp(1, 1000);
+        self.autosave_steps = self.autosave_steps.min(1000);
         self.undo_limit = self.undo_limit.clamp(20, 5000);
         self.recent.truncate(RECENT_MAX);
         if !matches!(self.layout.as_str(), "flat" | "globe" | "split") {

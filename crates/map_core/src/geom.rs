@@ -317,31 +317,47 @@ pub fn interior_point(outer: &[P2], holes: &[Vec<P2>]) -> Option<(P2, f64)> {
         return None;
     }
     let mut best: Option<(P2, f64)> = None;
-    let steps = 16;
-    for s in 0..steps {
-        let y = bb[1] + (bb[3] - bb[1]) * (s as f64 + 0.5) / steps as f64;
-        let mut xs: Vec<f64> = Vec::new();
-        for ring in std::iter::once(outer).chain(holes.iter().map(|h| h.as_slice())) {
-            let n = ring.len();
-            for i in 0..n {
-                let a = ring[i];
-                let b = ring[(i + 1) % n];
-                if (a[1] > y) != (b[1] > y) {
-                    xs.push(a[0] + (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]));
-                }
-            }
-        }
+    let ys: [f64; 16] = std::array::from_fn(|s| bb[1] + (bb[3] - bb[1]) * (s as f64 + 0.5) / 16.0);
+    let intersections = scan_crossings::<1, 16>(&ys, std::iter::once(outer).chain(holes.iter().map(Vec::as_slice)));
+    for (y, mut xs) in ys.into_iter().zip(intersections) {
         xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
         for pair in xs.chunks(2) {
             if pair.len() == 2 {
                 let w = (pair[1] - pair[0]) * y.to_radians().cos();
-                if best.map_or(true, |b| w > b.1) {
+                if best.is_none_or(|b| w > b.1) {
                     best = Some(([(pair[0] + pair[1]) * 0.5, y], w));
                 }
             }
         }
     }
     best
+}
+
+/// Intersections with sorted parallel scan lines. A dense coastline usually
+/// crosses no lines on an individual edge, so visit each edge once and only
+/// interpolate on the lines it actually crosses. The upper end is excluded.
+pub(crate) fn scan_crossings<'a, const AXIS: usize, const N: usize>(
+    samples: &[f64; N],
+    rings: impl IntoIterator<Item = &'a [P2]>,
+) -> [Vec<f64>; N] {
+    let mut out: [Vec<f64>; N] = std::array::from_fn(|_| Vec::new());
+    for ring in rings {
+        for (&a, &b) in ring.iter().zip(ring.iter().cycle().skip(1)) {
+            let (lo, hi) = (a[AXIS].min(b[AXIS]), a[AXIS].max(b[AXIS]));
+            if hi <= samples[0] || lo > samples[N - 1] || hi == lo {
+                continue;
+            }
+            let start = samples.partition_point(|v| *v < lo);
+            if samples[start] >= hi {
+                continue;
+            }
+            let cross = 1 - AXIS;
+            for (value, line) in samples[start..].iter().zip(&mut out[start..]).take_while(|(v, _)| **v < hi) {
+                line.push(a[cross] + (b[cross] - a[cross]) * (*value - a[AXIS]) / (b[AXIS] - a[AXIS]));
+            }
+        }
+    }
+    out
 }
 
 /// Sutherland–Hodgman against x >= c (keep_greater) or x <= c.

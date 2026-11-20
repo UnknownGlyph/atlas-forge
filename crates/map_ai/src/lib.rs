@@ -5,7 +5,7 @@
 //! draft before and after and applies it as one undo step, or drops it.
 //!
 //! Providers: Gemini (`generateContent` with function declarations) and
-//! any OpenAI-compatible chat API (DeepSeek, …). HTTPS goes through the
+//! OpenAI Responses, Anthropic Messages and OpenAI-compatible chat APIs. HTTPS goes through the
 //! system's `curl` (in Windows 10 and later, macOS and Linux), so no
 //! network library is built in; the key is handed to curl on its standard
 //! input, never on its command line.
@@ -18,43 +18,10 @@ use map_api::Session;
 use serde_json::{json, Map, Value};
 use std::io::Write;
 
-/// Which kind of API a provider speaks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Api {
-    Gemini,
-    OpenAi,
-}
+mod conversation;
+mod providers;
 
-/// A model to talk to.
-#[derive(Clone, Debug)]
-pub struct Config {
-    pub api: Api,
-    /// The API's base address (without the method's path).
-    pub base_url: String,
-    pub model: String,
-    pub key: String,
-    /// Thinking or reasoning effort ("high", …); None: the model's default.
-    pub effort: Option<String>,
-    /// Model turns at most before stopping.
-    pub max_turns: usize,
-    /// Seconds one request may take.
-    pub timeout_s: u64,
-}
-
-impl Config {
-    /// Gemini, the model named (thinking level as given).
-    pub fn gemini(model: &str, key: &str, effort: Option<&str>) -> Config {
-        Config { api: Api::Gemini, base_url: "https://generativelanguage.googleapis.com/v1beta".into(), model: model.into(), key: key.into(), effort: effort.map(str::to_string), max_turns: 24, timeout_s: 240 }
-    }
-    /// DeepSeek (OpenAI-compatible).
-    pub fn deepseek(model: &str, key: &str, effort: Option<&str>) -> Config {
-        Config { api: Api::OpenAi, base_url: "https://api.deepseek.com".into(), model: model.into(), key: key.into(), effort: effort.map(str::to_string), max_turns: 24, timeout_s: 240 }
-    }
-    /// A short description for logs and undo labels.
-    pub fn label(&self) -> String {
-        format!("{}{}", self.model, self.effort.as_deref().map(|e| format!("（{e}）")).unwrap_or_default())
-    }
-}
+pub use providers::{Api, Config, Provider};
 
 /// Sends a JSON request and reads the JSON answer.
 pub trait Transport {
@@ -82,7 +49,9 @@ impl Transport for Curl {
             // what curl is given, the key masked
             let mut shown = cfg.clone();
             for (_, v) in headers {
-                shown = shown.replace(v.as_str(), "***");
+                if !v.is_empty() {
+                    shown = shown.replace(v.as_str(), "***");
+                }
             }
             let _ = std::fs::write(std::env::temp_dir().join("atlas_ai_curl.txt"), shown);
             let _ = std::fs::copy(&file, std::env::temp_dir().join("atlas_ai_body.json"));
@@ -90,7 +59,7 @@ impl Transport for Curl {
         let mut cmd = std::process::Command::new(if cfg!(windows) { "curl.exe" } else { "curl" });
         // (curl's own \n in the status line: a raw line break in an argument
         // made Windows' curl refuse it with error 43)
-        cmd.args(["-sS", "--max-time", &timeout_s.to_string(), "-w", "\\n@@HTTP@@%{http_code}", "--config", "-"]).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+        cmd.args(["-q", "-sS", "--max-time", &timeout_s.to_string(), "-w", "\\n@@HTTP@@%{http_code}", "--config", "-"]).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -136,7 +105,7 @@ impl Transport for PowerShell {
         // PowerShell 5.1 took an answer without a charset (DeepSeek's) for
         // Latin-1, and the model got its own Chinese back garbled.
         let script = format!(
-            "$ErrorActionPreference = 'Stop'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $h = @{{ {} }}; try {{ $r = Invoke-WebRequest -Uri '{}' -Method Post -Headers $h -ContentType 'application/json; charset=utf-8' -InFile '{}' -UseBasicParsing -TimeoutSec {}; $s = [int]$r.StatusCode; $c = [Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray()) }} catch {{ if ($_.Exception.Response) {{ $s = [int]$_.Exception.Response.StatusCode; $c = (New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())).ReadToEnd() }} else {{ $s = 0; $c = $_.Exception.Message }} }}; [IO.File]::WriteAllText('{}', \"$s`n$c\", (New-Object Text.UTF8Encoding($false)))\n\n",
+            "$ErrorActionPreference = 'Stop'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $h = @{{ {} }}; try {{ $r = Invoke-WebRequest -Uri '{}' -Method Post -Headers $h -ContentType 'application/json; charset=utf-8' -InFile '{}' -UseBasicParsing -MaximumRedirection 0 -TimeoutSec {}; $s = [int]$r.StatusCode; $c = [Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray()) }} catch {{ if ($_.Exception.Response) {{ $s = [int]$_.Exception.Response.StatusCode; $c = (New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())).ReadToEnd() }} else {{ $s = 0; $c = $_.Exception.Message }} }}; [IO.File]::WriteAllText('{}', \"$s`n$c\", (New-Object Text.UTF8Encoding($false)))\n\n",
             hs.join("; "),
             q(url),
             q(&inp.display().to_string()),
@@ -252,102 +221,7 @@ fn shorten(s: &str, n: usize) -> String {
 /// Run `task` on the session with the model: the model calls tools until it
 /// answers without one (or `max_turns`). The draft is in the session after.
 pub fn run(session: &mut Session, task: &str, cfg: &Config, net: &dyn Transport, on_step: &mut dyn FnMut(Step)) -> Result<Outcome, String> {
-    if cfg.key.trim().is_empty() {
-        return Err("没有 API 密钥".into());
-    }
-    let tools: Vec<Value> = map_api::mcp::tool_specs();
-    let world = format!("当前世界：{}；年份范围与分区层请用 world_summary 查看。", session.doc().meta.name);
-    let mut out = Outcome { summary: String::new(), turns: 0, calls: 0 };
-    match cfg.api {
-        Api::Gemini => {
-            let decls: Vec<Value> = tools.iter().map(|t| json!({"name": t["name"], "description": t["description"], "parameters": gemini_schema(&t["parameters"])})).collect();
-            let mut contents = vec![json!({"role": "user", "parts": [{"text": format!("{world}\n\n任务：{task}")}]})];
-            let url = format!("{}/models/{}:generateContent", cfg.base_url, cfg.model);
-            let headers = vec![("x-goog-api-key".to_string(), cfg.key.clone())];
-            for _ in 0..cfg.max_turns {
-                out.turns += 1;
-                let mut body = json!({"systemInstruction": {"parts": [{"text": SYSTEM}]}, "contents": contents, "tools": [{"functionDeclarations": decls}]});
-                if let Some(e) = &cfg.effort {
-                    body["generationConfig"] = json!({"thinkingConfig": {"thinkingLevel": e}});
-                }
-                let (code, answer) = net.post(&url, &headers, &body, cfg.timeout_s)?;
-                if code != 200 {
-                    return Err(format!("Gemini 返回 HTTP {code}：{}", shorten(&answer["error"]["message"].as_str().map(str::to_string).unwrap_or_else(|| answer.to_string()), 400)));
-                }
-                let content = answer["candidates"][0]["content"].clone();
-                if content.is_null() {
-                    return Err(format!("Gemini 没有给出回答：{}", shorten(&answer.to_string(), 400)));
-                }
-                let parts = content["parts"].as_array().cloned().unwrap_or_default();
-                // the model's turn goes back as it came (thought signatures included)
-                contents.push(content);
-                let mut replies = Vec::new();
-                for p in &parts {
-                    if let Some(t) = p["text"].as_str().filter(|t| !t.trim().is_empty() && p["thought"] != true) {
-                        on_step(Step::Said(t.to_string()));
-                        out.summary = t.to_string();
-                    }
-                    if let Some(f) = p.get("functionCall") {
-                        let name = f["name"].as_str().unwrap_or("").to_string();
-                        let args = f.get("args").cloned().unwrap_or(json!({}));
-                        on_step(Step::Call(name.clone(), args.clone()));
-                        out.calls += 1;
-                        let (text, err) = map_api::mcp::call(session, &name, &args);
-                        let text = shorten(&text, 12000);
-                        on_step(Step::Answer(text.clone(), err));
-                        replies.push(json!({"functionResponse": {"name": name, "response": {"ok": !err, "content": text}}}));
-                    }
-                }
-                if replies.is_empty() {
-                    return Ok(out);
-                }
-                contents.push(json!({"role": "user", "parts": replies}));
-            }
-        }
-        Api::OpenAi => {
-            let fns: Vec<Value> = tools.iter().map(|t| json!({"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["parameters"]}})).collect();
-            let mut messages = vec![json!({"role": "system", "content": SYSTEM}), json!({"role": "user", "content": format!("{world}\n\n任务：{task}")})];
-            let url = format!("{}/chat/completions", cfg.base_url);
-            let headers = vec![("Authorization".to_string(), format!("Bearer {}", cfg.key))];
-            for _ in 0..cfg.max_turns {
-                out.turns += 1;
-                let mut body = json!({"model": cfg.model, "messages": messages, "tools": fns});
-                if let Some(e) = &cfg.effort {
-                    body["reasoning_effort"] = json!(e);
-                }
-                let (code, answer) = net.post(&url, &headers, &body, cfg.timeout_s)?;
-                if code != 200 {
-                    return Err(format!("接口返回 HTTP {code}：{}", shorten(&answer["error"]["message"].as_str().map(str::to_string).unwrap_or_else(|| answer.to_string()), 400)));
-                }
-                let msg = answer["choices"][0]["message"].clone();
-                if msg.is_null() {
-                    return Err(format!("没有回答：{}", shorten(&answer.to_string(), 400)));
-                }
-                if let Some(t) = msg["content"].as_str().filter(|t| !t.trim().is_empty()) {
-                    on_step(Step::Said(t.to_string()));
-                    out.summary = t.to_string();
-                }
-                let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
-                // the assistant's turn goes back as it came (its reasoning included)
-                messages.push(msg);
-                if calls.is_empty() {
-                    return Ok(out);
-                }
-                for c in calls {
-                    let name = c["function"]["name"].as_str().unwrap_or("").to_string();
-                    let args: Value = c["function"]["arguments"].as_str().and_then(|a| serde_json::from_str(a).ok()).unwrap_or(json!({}));
-                    on_step(Step::Call(name.clone(), args.clone()));
-                    out.calls += 1;
-                    let (text, err) = map_api::mcp::call(session, &name, &args);
-                    let text = shorten(&text, 12000);
-                    on_step(Step::Answer(text.clone(), err));
-                    messages.push(json!({"role": "tool", "tool_call_id": c["id"], "content": if err { format!("错误：{text}") } else { text }}));
-                }
-            }
-        }
-    }
-    out.summary = format!("{}\n（达到 {} 轮上限，任务可能未完成）", out.summary, cfg.max_turns);
-    Ok(out)
+    conversation::run(session, task, cfg, net, on_step)
 }
 
 #[cfg(test)]
@@ -424,6 +298,71 @@ mod tests {
         assert_eq!(m[3]["role"], "tool");
         assert_eq!(m[3]["tool_call_id"], "c1");
         assert!(seen[0].get("reasoning_effort").is_none(), "the model's own default when none is given");
+    }
+
+    #[test]
+    fn anthropic_replays_tool_use_and_tool_results() {
+        let mut s = Session::new(map_core::sample::demo_world(), "示例世界");
+        let (id, _) = country(&s);
+        let net = Script {
+            answers: RefCell::new(vec![
+                json!({"stop_reason":"tool_use","content":[
+                    {"type":"text","text":"开始。"},
+                    {"type":"tool_use","id":"toolu_city","name":"edit_rename","input":{"entity":id,"name":"新国名"}}
+                ]}),
+                json!({"stop_reason":"end_turn","content":[{"type":"text","text":"完成。"}]}),
+            ]),
+            seen: RefCell::new(vec![]),
+        };
+        let cfg = Provider::Anthropic.configure("claude", "", "k-123", None);
+        let out = run(&mut s, "改名", &cfg, &net, &mut |_| {}).unwrap();
+        assert_eq!(out.calls,1);
+        assert_eq!(s.doc().entities[&map_core::EntityId(id)].name,"新国名");
+        let requests = net.seen.borrow();
+        assert!(requests[0]["tools"][0]["input_schema"].is_object());
+        assert_eq!(requests[1]["messages"][2]["content"][0]["tool_use_id"],"toolu_city");
+        assert_eq!(requests[1]["messages"][2]["content"][0]["is_error"],false);
+        assert!(cfg.headers().iter().any(|h| h.0 == "anthropic-version" && h.1 == "2023-06-01"));
+    }
+
+    #[test]
+    fn responses_replays_calls_and_refuses_model_directed_saves() {
+        let mut s = Session::new(map_core::sample::demo_world(), "示例世界");
+        let (id, _) = country(&s);
+        let net = Script {
+            answers: RefCell::new(vec![
+                json!({"status":"completed","output":[
+                    {"type":"reasoning","id":"rs_1","encrypted_content":"opaque","summary":[]},
+                    {"type":"function_call","id":"fc_1","call_id":"call_1","name":"edit_rename",
+                        "arguments":json!({"entity":id,"name":"新国名"}).to_string()},
+                    {"type":"function_call","id":"fc_2","call_id":"call_2","name":"draft_save","arguments":"{}"}
+                ]}),
+                json!({"status":"completed","output":[{"type":"message","role":"assistant",
+                    "content":[{"type":"output_text","text":"已改名。"}]}]}),
+            ]),
+            seen: RefCell::new(vec![]),
+        };
+        let cfg = Provider::OpenAi.configure("gpt", "https://api.openai.com/v1/responses", "k-123", Some("high"));
+        let out = run(&mut s, "改名", &cfg, &net, &mut |_| {}).unwrap();
+        assert_eq!(out.summary,"已改名。");
+        assert_eq!(s.doc().entities[&map_core::EntityId(id)].name,"新国名");
+        let requests=net.seen.borrow();
+        assert!(requests[0]["tools"].as_array().unwrap().iter().all(|tool|tool["name"]!="draft_save"));
+        assert_eq!(requests[0]["store"],false);
+        assert_eq!(requests[0]["reasoning"]["effort"],"high");
+        let input=&requests[1]["input"];
+        assert_eq!(input[1]["encrypted_content"],"opaque");
+        assert_eq!(input[4]["call_id"],"call_1");
+        assert!(input[5]["output"].as_str().unwrap().contains("保存草稿由"));
+        assert_eq!(cfg.endpoint("/responses"),"https://api.openai.com/v1/responses");
+    }
+
+    #[test]
+    fn keyless_loopback_and_endpoint_validation() {
+        assert!(Provider::Ollama.configure("local", "", "", None).validate().is_ok());
+        assert!(Provider::Compatible.configure("model","http://localhost.example.org/v1","x",None).validate().is_err());
+        assert!(Provider::Compatible.configure("model","https://localhost@other.example.org/v1","x",None).validate().is_err());
+        assert!(Provider::OpenAi.configure("model","","bad\r\nkey",None).validate().is_err());
     }
 
     #[test]

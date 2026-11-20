@@ -252,17 +252,28 @@ impl App {
                 self.edit("删除分区层", |d| d.delete_layer(cur));
             }
         });
-        if cur != POLITICAL {
-            let mut name = self.doc.layer_name(cur);
-            ui.horizontal(|ui| {
+        if cur != POLITICAL && self.doc.layers.contains_key(&cur) {
+            let name = self.doc.layer_name(cur);
+            let entry = self.layer_name_edit.get_or_insert_with(|| (cur, name.clone()));
+            if entry.0 != cur {
+                *entry = (cur, name.clone());
+            }
+            let response = ui.horizontal(|ui| {
                 ui.label("层名称");
-                if ui.text_edit_singleline(&mut name).lost_focus() && name != self.doc.layer_name(cur) {
-                    self.edit("重命名分区层", |d| {
-                        d.rename_layer(cur, &name);
-                        Ok(())
-                    });
-                }
-            });
+                ui.add(egui::TextEdit::singleline(&mut entry.1)
+                    .id_salt(("partition-name", cur)).desired_width(185.0))
+            }).inner;
+            let cancel = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if cancel {
+                entry.1 = name;
+                response.surrender_focus();
+            } else if response.lost_focus() && entry.1.trim() != name {
+                let draft = entry.1.clone();
+                self.layer_name_edit = None;
+                self.edit("重命名分区层", |d| d.rename_layer(cur, &draft));
+            } else if !response.has_focus() {
+                entry.1 = name;
+            }
             if self.doc.active_is_shares() {
                 ui.horizontal(|ui| {
                     ui.label("画笔比例");
@@ -300,6 +311,7 @@ impl App {
             });
         }
         if let Some(l) = pick {
+            self.layer_name_edit = None;
             if let Err(e) = self.doc.set_active_layer(l) {
                 self.set_status(e, true);
             }
@@ -311,8 +323,66 @@ impl App {
             if !self.brush.is_some_and(|e| ok(&self.doc, &e)) {
                 self.brush = None;
             }
+            if matches!(self.draw_mode, crate::view::DrawMode::Province(_)) {
+                self.clear_draft();
+                self.draw_mode = crate::view::DrawMode::AddLand;
+            }
         }
         ui.separator();
+    }
+
+    fn subdivision_panel(&mut self, ui: &mut egui::Ui, parent: EntityId, areas: &std::collections::HashMap<EntityId, f64>) {
+        let children: Vec<_> = self.doc.entities.iter()
+            .filter(|(_, e)| e.parent == Some(parent) && e.kind == EntityKind::Country && e.exists_in(self.doc.year))
+            .map(|(id, e)| (*id, e.name.clone())).collect();
+        let parent_info = self.doc.entities[&parent].parent
+            .and_then(|id| self.doc.entities.get(&id).map(|e| (id, e.name.clone())));
+        if let Some((id, name)) = &parent_info {
+            if ui.link(format!("上级 · {name}")).clicked() {
+                self.selected = Some(*id);
+                self.selected_face = None;
+            }
+        }
+        let label = if parent_info.is_none() { "省份" } else { "下级地区" };
+        let name = format!("新{label}{}", children.len() + 1);
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(format!("绘制{label}")).on_hover_text("画一个多边形，仅划入上级直接管辖的陆地").clicked() {
+                self.clear_draft();
+                self.set_tool(Tool::DrawLand);
+                self.brush_paint = false;
+                self.draw_mode = crate::view::DrawMode::Province(parent);
+                self.set_status(format!("在地图上勾画{label}，按回车完成。只划入该单位直属陆地。"), false);
+            }
+            if ui.button(format!("自动划分{label}…")).clicked() {
+                self.open_partition(parent);
+                self.partition.spec.provinces = true;
+            }
+            if ui.small_button("批量设为下级…").clicked() {
+                self.partition.adopt = Some((parent, String::new(), Default::default()));
+            }
+            if let Some(face) = self.selected_face.filter(|f| self.doc.owner.get(f) == Some(&parent)) {
+                if ui.button(format!("用选中地块建{label}")).clicked() {
+                    if let Some(child) = self.edit("用地块创建下级地区", |d| d.subdivision_on_face(parent, &name, face)) {
+                        self.selected = Some(child);
+                    }
+                }
+            }
+        });
+        if !children.is_empty() {
+            egui::CollapsingHeader::new(format!("{label} · {}", children.len())).id_salt(("children", parent)).default_open(true).show(ui, |ui| {
+                for (id, name) in children {
+                    ui.horizontal(|ui| {
+                        if ui.link(name).clicked() {
+                            self.selected = Some(id);
+                            self.selected_face = None;
+                        }
+                        if let Some(area) = areas.get(&id) {
+                            ui.weak(format!("{} km²", format_num(area.round())));
+                        }
+                    });
+                }
+            });
+        }
     }
 
     fn countries_tab(&mut self, ui: &mut egui::Ui) {
@@ -349,20 +419,29 @@ impl App {
             }
         });
         ui.add_space(4.0);
-        let areas = self.doc.areas_by_entity();
+        let areas = self.detail_cache.areas.clone();
         let layer = self.doc.active_layer;
-        let ids: Vec<EntityId> = self.doc.entities.iter().filter(|(_, e)| e.kind != EntityKind::Region && e.layer == layer).map(|(id, _)| *id).collect();
+        if let Some(id) = self.selected.filter(|id| self.doc.entities.get(id).is_some_and(|ent|
+            ent.kind == EntityKind::Country && ent.layer == layer && ent.exists_in(self.doc.year)
+        )) {
+            if !self.doc.active_is_shares() {
+                ui.label(RichText::new(&self.doc.entities[&id].name).strong());
+                self.subdivision_panel(ui, id, &areas);
+                ui.separator();
+            }
+        }
+        let ids: Vec<EntityId> = self.doc.entities.iter()
+            .filter(|(_, e)| e.layer == layer && e.kind == EntityKind::Country && e.parent.is_none())
+            .map(|(id, _)| *id).collect();
         egui::Grid::new("countries").striped(true).num_columns(3).show(ui, |ui| {
             for id in ids {
                 let e = &self.doc.entities[&id];
-                let is_city = e.kind == EntityKind::City;
-                swatch(ui, if is_city { [60, 60, 60, 255] } else { e.color });
-                let label = if is_city { format!("· {}（城市）", e.name) } else { e.name.clone() };
-                if ui.selectable_label(self.selected == Some(id), label).clicked() {
+                swatch(ui, e.color);
+                if ui.selectable_label(self.selected == Some(id), &e.name).clicked() {
                     self.selected = Some(id);
                     self.selected_face = None;
                 }
-                match self.presence_note(id, areas.get(&id).copied()).filter(|_| !is_city || self.doc.year.is_some()) {
+                match self.presence_note(id, areas.get(&id).copied()) {
                     Some(note) if note != "无领土" => ui.weak(format!("（{note}）")),
                     Some(note) => ui.weak(note),
                     None => ui.label(areas.get(&id).map(|a| format!("{} km²", format_num(a.round()))).unwrap_or_default()),
@@ -370,6 +449,34 @@ impl App {
                 ui.end_row();
             }
         });
+        let cities: Vec<_> = self.doc.entities.iter()
+            .filter(|(_, e)| e.layer == layer && e.kind == EntityKind::City)
+            .map(|(&id, _)| id).collect();
+        if !cities.is_empty() {
+            egui::CollapsingHeader::new(format!("城市（{}）", cities.len()))
+                .id_salt("countries-city-list")
+                .default_open(cities.len() <= 20)
+                .show(ui, |ui| {
+                    let search_id = ui.scope_id().with("city-filter");
+                    let mut query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
+                    if ui.add(egui::TextEdit::singleline(&mut query).hint_text("按城市名称或编号筛选")).changed() {
+                        ui.data_mut(|d| d.insert_temp(search_id, query.clone()));
+                    }
+                    let query = query.trim().to_lowercase();
+                    egui::ScrollArea::vertical().id_salt("country-city-rows").max_height(220.0).show(ui, |ui| {
+                        for id in cities {
+                            let city = &self.doc.entities[&id];
+                            if !query.is_empty() && !city.name.to_lowercase().contains(&query) && !city.code.to_lowercase().contains(&query) {
+                                continue;
+                            }
+                            if ui.selectable_label(self.selected == Some(id), &city.name).clicked() {
+                                self.selected = Some(id);
+                                self.selected_face = None;
+                            }
+                        }
+                    });
+                });
+        }
         self.lifespan_conflicts_section(ui);
         self.river_panel(ui);
         self.area_panel(ui);
@@ -381,7 +488,8 @@ impl App {
         };
         ui.separator();
         let ent = self.doc.entities[&sel].clone();
-        ui.label(RichText::new(if ent.kind == EntityKind::City { "城市属性" } else { "国家属性" }).strong());
+        ui.label(RichText::new(if ent.kind == EntityKind::City { "城市属性" }
+            else if ent.parent.is_some() { "下级地区属性" } else { "国家属性" }).strong());
         egui::Grid::new("entity").num_columns(2).show(ui, |ui| {
             for (k, label) in [(0u8, "名称"), (1, "简称"), (2, "编号 code")] {
                 ui.label(label);
@@ -452,8 +560,10 @@ impl App {
             ui.end_row();
             if ent.kind != EntityKind::City {
                 ui.label("划分");
-                if ui.small_button("自动划分…").on_hover_text("把这个国家的领土划成几块：新的国家，或它的下级地区（省）；可预览，可撤销").clicked() {
+                if ui.add_enabled(!self.doc.active_is_shares(), egui::Button::new("自动划分…").small())
+                    .on_hover_text("把这个国家的领土划成几块：新的国家，或它的下级地区（省）；可预览，可撤销").clicked() {
                     self.open_partition(sel);
+                    self.partition.spec.provinces = false;
                 }
                 ui.end_row();
                 ui.label("颜色");
@@ -467,7 +577,7 @@ impl App {
                 ui.label(format!("{} km²", format_num(areas.get(&sel).copied().unwrap_or(0.0).round())));
                 ui.end_row();
                 ui.label("领土块数");
-                ui.label(format!("{}", self.doc.faces_of(sel).len()));
+                ui.label(format!("{}", self.doc.faces_of_tree(sel).len()));
                 ui.end_row();
                 ui.label("首都");
                 let cities: Vec<(EntityId, String)> =
@@ -496,7 +606,7 @@ impl App {
                     .doc
                     .entities
                     .iter()
-                    .filter(|(id, e)| **id != sel && e.kind != EntityKind::City)
+                    .filter(|(id, e)| **id != sel && e.kind != EntityKind::City && e.layer == ent.layer)
                     .map(|(id, e)| (*id, e.name.clone()))
                     .collect();
                 let cur = ent.parent.and_then(|c| self.doc.entities.get(&c)).map(|e| e.name.clone()).unwrap_or("（无，顶层）".into());
@@ -634,9 +744,19 @@ impl App {
 
     /// Wide, scrollable attribute table (bottom panel).
     pub fn data_table(&mut self, ui: &mut egui::Ui) {
+        let table_kind = ui.scope_id().with("data-table-kind");
+        let mut cities = ui.data(|data| data.get_temp::<bool>(table_kind)).unwrap_or(false);
+        let filter_id = ui.scope_id().with("data-table-search");
+        let mut filter = ui.data(|data| data.get_temp::<String>(filter_id)).unwrap_or_default();
         ui.horizontal(|ui| {
             ui.strong("数据表");
-            ui.weak("回车、Tab 或点击别处提交单元格；斜体为派生字段（只读）。");
+            ui.selectable_value(&mut cities, false, "辖区");
+            ui.selectable_value(&mut cities, true, "城市");
+            ui.data_mut(|data| data.insert_temp(table_kind, cities));
+            if ui.add(egui::TextEdit::singleline(&mut filter).hint_text("按名称或编号筛选").desired_width(150.0)).changed() {
+                ui.data_mut(|data| data.insert_temp(filter_id, filter.clone()));
+            }
+            ui.weak("回车、Tab 或点击别处提交；斜体为派生字段。");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("关闭").clicked() {
                     self.table_panel = false;
@@ -661,12 +781,25 @@ impl App {
         };
         let stats = map_core::stats::Stats::with_cache(&doc_now, cur.clone(), other);
         let areas = stats.areas().clone();
+        let mut total_areas = areas.clone();
+        for (&id, &area) in &areas {
+            for parent in doc_now.ancestors(id).skip(1) {
+                *total_areas.entry(parent).or_default() += area;
+            }
+        }
         let fields: Vec<_> = self.doc.fields.iter().map(|(id, f)| (*id, f.clone())).collect();
-        let ents: Vec<EntityId> = self.doc.countries();
+        let filter = filter.trim().to_lowercase();
+        let ents: Vec<_> = self.doc.entities.iter()
+            .filter(|(_, e)| e.layer == doc_now.active_layer && (e.kind == EntityKind::City) == cities)
+            .filter(|(_, e)| filter.is_empty() || e.name.to_lowercase().contains(&filter) || e.code.to_lowercase().contains(&filter))
+            .map(|(&id, _)| id).collect();
         egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
             egui::Grid::new("data").striped(true).min_col_width(96.0).show(ui, |ui| {
-                ui.label(RichText::new("国家").strong());
-                ui.label(RichText::new("面积 km²").strong());
+                ui.label(RichText::new("名称").strong());
+                if !cities {
+                    ui.label(RichText::new("直属面积 km²").strong());
+                    ui.label(RichText::new("辖区总面积 km²").strong()).on_hover_text("直属几何面积加上各级下属辖区。");
+                }
                 for (_, f) in &fields {
                     ui.label(RichText::new(&f.name).strong()).on_hover_text(format!("键：{}{}", f.key, f.expr.as_ref().map(|e| format!("\n= {e}")).unwrap_or_default()));
                 }
@@ -676,7 +809,10 @@ impl App {
                     if ui.selectable_label(self.selected == Some(e), name).clicked() {
                         self.selected = Some(e);
                     }
-                    ui.label(format_num(areas.get(&e).copied().unwrap_or(0.0).round()));
+                    if !cities {
+                        ui.label(format_num(areas.get(&e).copied().unwrap_or(0.0).round()));
+                        ui.label(format_num(total_areas.get(&e).copied().unwrap_or(0.0).round()));
+                    }
                     for (fid, f) in &fields {
                         if f.expr.is_some() {
                             let st = stats.stat(e, &f.key);
@@ -701,14 +837,14 @@ impl App {
                             let v = Value::parse(f.kind, buf);
                             let ok = buf.trim().is_empty() || v.is_some();
                             let year = self.doc.year;
-                            self.cell_edit.remove(&(e, *fid));
+                            let attempted = self.cell_edit.remove(&(e, *fid)).unwrap_or_default();
                             if ok {
                                 self.edit("编辑数据", |d| {
                                     d.set_value(e, *fid, year, v);
                                     Ok(())
                                 });
                             } else {
-                                self.set_status(format!("“{}” 不是有效的{}", cur, f.name), true);
+                                self.set_status(format!("“{}” 不是有效的{}", attempted, f.name), true);
                             }
                         } else if !r.has_focus() && *buf != cur {
                             *buf = cur;
@@ -965,9 +1101,15 @@ impl App {
             ui.label("名称");
             ui.text_edit_singleline(&mut self.doc.meta.name);
             ui.end_row();
-            ui.label("星球半径");
-            ui.add(egui::DragValue::new(&mut self.doc.meta.planet_radius_km).range(100.0..=1.0e6).speed(10.0).suffix(" km"));
-            ui.end_row();
+            if let Some(paper) = self.doc.paper {
+                ui.label("画布尺寸");
+                ui.label(format!("{} × {} px", paper.width, paper.height));
+                ui.end_row();
+            } else {
+                ui.label("星球半径");
+                ui.add(egui::DragValue::new(&mut self.doc.meta.planet_radius_km).range(100.0..=1.0e6).speed(10.0).suffix(" km"));
+                ui.end_row();
+            }
             // the world's own calendar: only how years are shown
             let c = &mut self.doc.calendar;
             ui.label("纪年");
@@ -1083,6 +1225,8 @@ impl App {
             crate::fonts_ui::font_picker(ui, "labels", &mut s.label_font, &mut s.label_bold);
         });
         ui.checkbox(&mut s.show_labels, "显示国家名称");
+        ui.checkbox(&mut s.admin_typography, "行政区分级字体")
+            .on_hover_text("国名用黑体，省级用宋体，市县级用楷体，基层使用较小的无衬线字。二维、三维与导出共享此设置。");
         ui.checkbox(&mut s.show_cities, "显示城市");
         if remove_terrain {
             self.edit("删除地形", |d| {
@@ -1107,50 +1251,55 @@ impl App {
                 ui.radio_value(&mut x.format, ExportFormat::Png, "PNG 图片");
                 ui.radio_value(&mut x.format, ExportFormat::Svg, "SVG 矢量图");
                 ui.radio_value(&mut x.format, ExportFormat::Pdf, "PDF").on_hover_text("矢量 PDF：文字转为字形轮廓，不需要字体，任何阅读器与打印机看到的都一样");
-                ui.radio_value(&mut x.format, ExportFormat::GeoJsonCountries, "GeoJSON（国家）");
-                ui.radio_value(&mut x.format, ExportFormat::GeoJsonFaces, "GeoJSON（地块）");
-                ui.radio_value(&mut x.format, ExportFormat::GeoJsonRivers, "GeoJSON（河流与线路）");
+                if self.doc.paper.is_none() {
+                    ui.radio_value(&mut x.format, ExportFormat::GeoJsonCountries, "GeoJSON（国家）");
+                    ui.radio_value(&mut x.format, ExportFormat::GeoJsonFaces, "GeoJSON（地块）");
+                    ui.radio_value(&mut x.format, ExportFormat::GeoJsonRivers, "GeoJSON（河流与线路）");
+                }
                 ui.radio_value(&mut x.format, ExportFormat::Csv, "CSV 数据");
             });
-            ui.horizontal_wrapped(|ui| {
+            if self.doc.paper.is_none() { ui.horizontal_wrapped(|ui| {
                 ui.radio_value(&mut x.format, ExportFormat::ShpCountries, "Shapefile（国家）");
                 ui.radio_value(&mut x.format, ExportFormat::ShpFaces, "Shapefile（地块）");
                 ui.radio_value(&mut x.format, ExportFormat::ShpRivers, "Shapefile（河流与线路）");
-            });
+            }); }
             if matches!(x.format, ExportFormat::ShpCountries | ExportFormat::ShpFaces | ExportFormat::ShpRivers) {
                 ui.weak("经纬度（WGS 84），属性为 UTF-8；同名的 .shx、.dbf、.prj、.cpg 一并写出。字段名超过 10 字节会被截短。");
             }
             if matches!(x.format, ExportFormat::Png | ExportFormat::Svg | ExportFormat::Pdf) || (x.per_year && x.anim.is_some()) {
                 let proj = x.projection;
+                let min_side = if self.doc.paper.is_some() { 64 } else { 200 };
                 egui::Grid::new("exp").num_columns(2).show(ui, |ui| {
                     ui.label("宽 × 高 (px)");
                     ui.horizontal(|ui| {
-                        ui.add(egui::DragValue::new(&mut x.width).range(200..=20000));
+                        ui.add(egui::DragValue::new(&mut x.width).range(min_side..=20000));
                         ui.label("×");
-                        ui.add_enabled(!x.current_view, egui::DragValue::new(&mut x.height).range(200..=20000));
+                        ui.add_enabled(!x.current_view, egui::DragValue::new(&mut x.height).range(min_side..=20000));
                     });
                     ui.end_row();
-                    ui.label("投影");
-                    egui::ComboBox::from_id_salt("eproj").selected_text(x.projection.name()).show_ui(ui, |ui| {
-                        for p in Projection::ALL {
-                            ui.selectable_value(&mut x.projection, p, p.name());
-                        }
-                    });
-                    ui.end_row();
-                    ui.label("范围");
-                    ui.horizontal(|ui| {
-                        if ui.checkbox(&mut x.current_view, "仅当前二维视图范围").changed() && x.current_view {
-                            x.bounds = None;
-                            x.lon0 = None;
-                        }
-                        if x.bounds.is_some() && !x.current_view {
-                            ui.weak("版式的局部范围");
-                            if ui.small_button("改为全图").clicked() {
-                                x.bounds = None;
+                    if self.doc.paper.is_none() {
+                        ui.label("投影");
+                        egui::ComboBox::from_id_salt("eproj").selected_text(x.projection.name()).show_ui(ui, |ui| {
+                            for p in Projection::ALL {
+                                ui.selectable_value(&mut x.projection, p, p.name());
                             }
-                        }
-                    });
-                    ui.end_row();
+                        });
+                        ui.end_row();
+                        ui.label("范围");
+                        ui.horizontal(|ui| {
+                            if ui.checkbox(&mut x.current_view, "仅当前二维视图范围").changed() && x.current_view {
+                                x.bounds = None;
+                                x.lon0 = None;
+                            }
+                            if x.bounds.is_some() && !x.current_view {
+                                ui.weak("版式的局部范围");
+                                if ui.small_button("改为全图").clicked() {
+                                    x.bounds = None;
+                                }
+                            }
+                        });
+                        ui.end_row();
+                    }
                     ui.label("标题");
                     ui.horizontal(|ui| {
                         ui.text_edit_singleline(&mut x.title);
@@ -1163,10 +1312,18 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut x.labels, "标注");
                     ui.checkbox(&mut x.legend, "图例");
-                    ui.checkbox(&mut x.graticule, "经纬网");
-                    ui.checkbox(&mut x.scale_bar, "比例尺").on_hover_text("按图中心的比例；全球图上各处比例不同，会注明“仅适用于图中心附近”");
-                    ui.checkbox(&mut x.north_arrow, "指北针").on_hover_text("指向图中心处的北方");
+                    if self.doc.paper.is_none() {
+                        ui.checkbox(&mut x.graticule, "经纬网");
+                        ui.checkbox(&mut x.scale_bar, "比例尺").on_hover_text("按图中心的比例；全球图上各处比例不同，会注明“仅适用于图中心附近”");
+                        ui.checkbox(&mut x.north_arrow, "指北针").on_hover_text("指向图中心处的北方");
+                    }
                 });
+                if self.doc.paper.is_none() {
+                    let mut skip = self.doc.style.hide_face_seams_in_export;
+                    if ui.checkbox(&mut skip, "导出时隐藏同属地块接缝").changed() {
+                        self.doc.style.hide_face_seams_in_export = skip;
+                    }
+                }
                 // a layout's region is in its own projection's units
                 if x.projection != proj {
                     x.bounds = None;

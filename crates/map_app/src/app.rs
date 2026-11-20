@@ -1,5 +1,6 @@
 //! Application state, menus, file operations and frame orchestration.
 
+use crate::actions::Act;
 use crate::panels::{ExportState, Tab};
 use crate::view::{Tool, ViewKind};
 use eframe::egui;
@@ -85,6 +86,7 @@ pub struct App {
     layer_src: Option<(Document, f64)>,
     pub labels: Vec<(EntityId, map_core::labels::LabelPath)>,
     label_cache: map_core::labels::LabelCache,
+    pub(crate) detail_cache: crate::map_detail::DetailCache,
 
     pub tool: Tool,
     pub draft: Vec<LonLat>,
@@ -141,6 +143,8 @@ pub struct App {
     pub roads: crate::roads_ui::Roads,
     /// The AI assistant (its window, task and draft).
     pub ai: crate::ai_ui::Assistant,
+    pub plugins: crate::plugin_ui::PluginUi,
+    pub book_ui: crate::book_ui::BookUi,
     pub climate_ui: crate::climate_ui::ClimateUi,
     /// The layout view (the export page with its furniture to drag).
     pub page: crate::pageview_ui::PageView,
@@ -234,6 +238,11 @@ pub struct App {
     pub layout: Layout,
     pub cam2d: Camera2D,
     pub globe: GlobeCamera,
+    pub globe_inertia: crate::view::GlobeInertia,
+    pub star_map: crate::star_map::StarMap,
+    pub about_open: bool,
+    pub(crate) tutorial: crate::tutorial_ui::Tutorial,
+    pub(crate) diplomacy_ui: crate::diplomacy_ui::DiplomacyUi,
     pub fit_pending: bool,
     /// The user has panned/zoomed the 2D view since the last fit.
     pub nav_touched: bool,
@@ -246,6 +255,7 @@ pub struct App {
     pub export: ExportState,
     pub cell_edit: HashMap<(EntityId, FieldId), String>,
     pub text_edit: HashMap<(EntityId, u8), String>,
+    pub layer_name_edit: Option<(map_core::doc::LayerId, String)>,
     pub new_field: (String, String, map_core::FieldKind, String),
     pub status: String,
     pub status_err: bool,
@@ -274,6 +284,7 @@ pub struct App {
     import_report: Option<Vec<String>>,
     parent: Option<ParentWindow>,
     pub autosave: crate::autosave::Autosave,
+    pub checkpoints: crate::checkpoint_ui::Panel,
     /// The large test world being made in the background.
     test_world: Option<std::thread::JoinHandle<(Document, map_core::testworld::TestWorldReport)>>,
     pub last_flat_rect: egui::Rect,
@@ -360,6 +371,7 @@ impl App {
             layer_src: None,
             labels: vec![],
             label_cache: Default::default(),
+            detail_cache: Default::default(),
             tool: Tool::Select,
             draft: vec![],
             draft_snap: vec![],
@@ -391,6 +403,8 @@ impl App {
             names_open: false,
             roads: Default::default(),
             ai: Default::default(),
+            plugins: Default::default(),
+            book_ui: Default::default(),
             climate_ui: Default::default(),
             page: Default::default(),
             events_open: false,
@@ -450,6 +464,11 @@ impl App {
             layout: crate::shell_ui::layout_named(&prefs.layout),
             cam2d: Camera2D::new(Projection::EqualEarth),
             globe: GlobeCamera::default(),
+            globe_inertia: Default::default(),
+            star_map: Default::default(),
+            about_open: false,
+            tutorial: Default::default(),
+            diplomacy_ui: Default::default(),
             fit_pending: true,
             nav_touched: false,
             last_draft_view: None,
@@ -459,6 +478,7 @@ impl App {
             export: ExportState::default(),
             cell_edit: HashMap::new(),
             text_edit: HashMap::new(),
+            layer_name_edit: None,
             new_field: (String::new(), String::new(), map_core::FieldKind::Number, String::new()),
             status: "欢迎使用 Atlas Forge。已载入示例世界，可在“文件”菜单新建空白世界。".into(),
             status_err: false,
@@ -479,6 +499,7 @@ impl App {
             import_report: None,
             parent: None,
             autosave: crate::autosave::Autosave::start(),
+            checkpoints: Default::default(),
             test_world: None,
             last_flat_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 700.0)),
             frame_ms: 0.0,
@@ -510,7 +531,7 @@ impl App {
             fonts_missing: Default::default(),
         };
         app.history.limit = app.prefs.undo_limit;
-        app.autosave.set_interval(app.prefs.autosave_secs);
+        let _ = app.autosave.configure(&app.prefs);
         // a file given on the command line, else the last one if asked for,
         // else the sample world behind the start window
         let last = app.prefs.recent.first().filter(|p| app.prefs.reopen_last && p.exists()).cloned();
@@ -574,8 +595,53 @@ impl App {
         }
     }
 
+    pub(crate) fn finish_pending_settings(&mut self) {
+        if let Some(before) = self.settings_pending.take() {
+            self.history.push("修改样式/设置", before, &self.doc);
+        }
+    }
+
     fn reset_view_state(&mut self) {
+        self.history.clear();
+        self.book_ui=Default::default();
+        self.reset_board_view();
+    }
+
+    pub(crate) fn apply_home_view(&mut self) {
+        let home = self.doc.home_view.filter(|view| view.valid() && self.doc.paper.is_none());
+        let projection = if self.doc.paper.is_some() {
+            Projection::Equirectangular
+        } else {
+            home.map_or(Projection::EqualEarth, |view| view.projection)
+        };
+        self.cam2d = Camera2D::new(projection);
+        self.globe = GlobeCamera::default();
+        if let Some(view) = home {
+            self.cam2d.lon0 = view.central_meridian;
+            self.globe.center_lon = view.central_meridian;
+            self.globe.center_lat = view.globe_latitude;
+        }
+        self.globe_inertia.stop();
+        self.fit_pending = true;
+        self.nav_touched = false;
+    }
+
+    pub(crate) fn reset_board_view(&mut self) {
+        self.diplomacy_ui = Default::default();
+        self.tab = if self.doc.paper.is_some() { crate::panels::Tab::Features } else { crate::panels::Tab::Countries };
+        self.globe_inertia.stop();
+        self.star_map = Default::default();
         self.climate_ui = Default::default();
+        self.ai = Default::default();
+        self.plugins = Default::default();
+        self.bg_edit = None;
+        self.event_sel = None;
+        self.event_text = None;
+        self.selected_river = None;
+        self.selected_area = None;
+        self.selected_sym = None;
+        self.selected_ann = None;
+        self.hover_face = None;
         self.draw_style.clear();
         self.style_open = None;
         self.style_rename = None;
@@ -585,7 +651,6 @@ impl App {
         self.group_rename = None;
         self.picked.clear();
         self.marquee = None;
-        self.history.clear();
         self.clear_draft();
         self.selected = None;
         self.selected_face = None;
@@ -596,8 +661,11 @@ impl App {
         self.ul = crate::underlay_ui::UnderlayState::new(self.ul.max_dim);
         self.cell_edit.clear();
         self.text_edit.clear();
+        self.layer_name_edit = None;
+        self.partition = Default::default();
+        self.draw_mode = crate::view::DrawMode::AddLand;
         self.exit_focus();
-        self.fit_pending = true;
+        self.apply_home_view();
     }
 
     /// Open the test world once it is made.
@@ -635,7 +703,7 @@ impl App {
         self.path = None;
         self.dirty = false;
         self.reset_view_state();
-        self.autosave.mark_clean(self.history.generation());
+        self.autosave.open_project(None,self.history.generation());
     }
 
     pub fn open_path(&mut self, p: PathBuf) {
@@ -645,7 +713,7 @@ impl App {
                 self.doc = doc;
                 self.dirty = false;
                 self.reset_view_state();
-                self.autosave.mark_clean(self.history.generation());
+                self.autosave.open_project(Some(&p),self.history.generation());
                 self.set_status(format!("已打开 {}（{:.0} ms）", p.display(), t.elapsed().as_secs_f64() * 1e3), false);
                 self.note_recent(&p);
                 self.path = Some(p);
@@ -666,6 +734,8 @@ impl App {
     }
 
     pub fn save(&mut self, save_as: bool) -> bool {
+        self.end_pending();
+        self.finish_pending_settings();
         let path = match (&self.path, save_as) {
             (Some(p), false) => p.clone(),
             _ => {
@@ -683,9 +753,11 @@ impl App {
                 let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                 self.set_status(format!("已保存 {}（{:.1} KB，{:.0} ms）", path.display(), size as f64 / 1024.0, t.elapsed().as_secs_f64() * 1e3), false);
                 self.note_recent(&path);
+                if let Err(e) = self.autosave.saved_project(&path,self.history.generation()) {
+                    self.set_status(format!("已保存工程，保存点迁移仍待重试：{e}"),true);
+                }
                 self.path = Some(path);
                 self.dirty = false;
-                self.autosave.mark_clean(self.history.generation());
                 true
             }
             Err(e) => {
@@ -698,21 +770,31 @@ impl App {
     pub fn undo(&mut self) {
         self.end_pending();
         let viewing = self.doc.year;
+        let board=map_core::world_book::WorldBook::current(&self.doc);
         if let Some(l) = self.history.undo(&mut self.doc) {
             self.dirty = true;
-            let note = self.keep_viewed_year(viewing);
+            let note = self.keep_book_history_view(board,viewing);
             self.after_history_jump();
             self.set_status(format!("撤销：{l}{note}"), false);
         }
     }
     pub fn redo(&mut self) {
         let viewing = self.doc.year;
+        let board=map_core::world_book::WorldBook::current(&self.doc);
         if let Some(l) = self.history.redo(&mut self.doc) {
             self.dirty = true;
-            let note = self.keep_viewed_year(viewing);
+            let note = self.keep_book_history_view(board,viewing);
             self.after_history_jump();
             self.set_status(format!("重做：{l}{note}"), false);
         }
+    }
+
+    pub(crate) fn keep_book_history_view(&mut self,board:u64,viewing:Option<i32>)->String{
+        use map_core::world_book::WorldBook;
+        if WorldBook::current(&self.doc)==board {return self.keep_viewed_year(viewing);}
+        let _=WorldBook::switch(&mut self.doc,board,Some(viewing));
+        self.restore_book_view(WorldBook::current(&self.doc));
+        String::new()
     }
 
     /// Undo/redo restore a snapshot taken in the year the edit was made;
@@ -731,6 +813,7 @@ impl App {
     pub(crate) fn after_history_jump(&mut self) {
         self.cell_edit.clear();
         self.text_edit.clear();
+        self.layer_name_edit = None;
         if self.selected.is_some_and(|e| !self.doc.entities.contains_key(&e)) {
             self.selected = None;
         }
@@ -786,7 +869,7 @@ impl App {
         self.last_stats = self.scene.update_geometry(&self.doc, self.cam2d.lon0);
         let mut highlight: HashSet<FaceId> = HashSet::new();
         if let Some(e) = self.selected {
-            highlight.extend(self.doc.faces_of(e));
+            highlight.extend(self.doc.faces_of_tree(e));
         } else if let Some(f) = self.selected_face {
             highlight.insert(f);
         }
@@ -860,12 +943,19 @@ impl App {
         if self.label_cache.update(&self.doc) > 0 {
             self.labels = self.label_cache.sorted();
         }
+        self.detail_cache.update(&self.doc);
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         use egui::Key;
         // everything that is an action (see `actions`)
         self.action_shortcuts(ctx);
+        if self.star_map.open {
+            if !ctx.egui_wants_keyboard_input() && self.palette.is_none() && ctx.input(|i| i.key_pressed(Key::Escape)) {
+                self.star_map.open = false;
+            }
+            return;
+        }
         self.clipboard_events(ctx);
         if let Some(cut) = self.pending_copy.take() {
             self.copy_selection(ctx, cut);
@@ -907,6 +997,9 @@ impl App {
             self.clear_draft();
             self.merge_first = None;
             self.tool = t;
+            if t != Tool::DrawLand && matches!(self.draw_mode, crate::view::DrawMode::Province(_)) {
+                self.draw_mode = crate::view::DrawMode::AddLand;
+            }
             self.set_status(t.help(), false);
         }
     }
@@ -947,6 +1040,15 @@ impl App {
     fn menu(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
             self.action_menus(ui);
+            ui.separator();
+            if let Some(paper) = self.doc.paper {
+                ui.label(format!("平面画布 · {} × {} px", paper.width, paper.height));
+                return;
+            }
+            if ui.selectable_label(self.star_map.open, crate::i18n::tr("星图")).clicked() {
+                self.run(Act::StarChart);
+            }
+            if self.star_map.open { return; }
             ui.separator();
             ui.label("投影：");
             egui::ComboBox::from_id_salt("proj").selected_text(self.cam2d.proj.name()).show_ui(ui, |ui| {
@@ -1159,7 +1261,10 @@ impl App {
     /// mutate the document directly. Record such changes as a single undo
     /// step once the interaction is over (pointer released, no text focus).
     fn coalesce_settings(&mut self, ctx: &egui::Context, frame_start: &Document, gen_start: u64) {
-        if self.history.generation() != gen_start {
+        use map_core::world_book::WorldBook;
+        if self.history.generation() != gen_start
+            || WorldBook::current(&self.doc) != WorldBook::current(frame_start)
+        {
             // this frame already went through `edit()` / undo / redo
             self.settings_pending = None;
             return;
@@ -1179,9 +1284,7 @@ impl App {
         }
         let idle = !ctx.input(|i| i.pointer.any_down()) && ctx.memory(|m| m.focused().is_none());
         if idle {
-            if let Some(before) = self.settings_pending.take() {
-                self.history.push("修改样式/设置", before, &self.doc);
-            }
+            self.finish_pending_settings();
         }
     }
 }
@@ -1197,6 +1300,10 @@ impl eframe::App for App {
             self.parent = ParentWindow::of(frame);
         }
         let ctx = ui.ctx().clone();
+        if self.doc.paper.is_some() {
+            self.cam2d.proj = Projection::Equirectangular;
+            self.cam2d.lon0 = 0.0;
+        }
         // `stable_dt` leaves out the time the window rested between repaints
         self.frame_ms = self.frame_ms * 0.9 + ctx.input(|i| i.stable_dt).min(1.0) * 1000.0 * 0.1;
         self.shortcuts(&ctx);
@@ -1206,7 +1313,9 @@ impl eframe::App for App {
             laps[i] += lap.elapsed().as_secs_f32() * 1000.0;
             *lap = Instant::now();
         };
-        self.refresh_derived();
+        if !self.star_map.open {
+            self.refresh_derived();
+        }
         mark(0, &mut lap);
         self.poll_underlays(&ctx);
         self.climate_tick(&ctx);
@@ -1243,45 +1352,56 @@ impl eframe::App for App {
         }
 
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
-        egui::Panel::top("options").show(ui, |ui| self.options_bar(ui));
-        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
-        egui::Panel::bottom("timeline").show(ui, |ui| self.timeline_bar(ui));
-        if self.table_panel {
-            egui::Panel::bottom("datatable").resizable(true).default_size(260.0).show(ui, |ui| self.data_table(ui));
-        }
-        egui::Panel::left("tools").resizable(false).exact_size(crate::toolbar_ui::BUTTON + 16.0).show(ui, |ui| self.tool_strip(ui));
-        if crate::toolbar_ui::has_side_panel(self.tool) {
-            egui::Panel::left("tool-panel").resizable(false).show(ui, |ui| self.tool_side_panel(ui));
-        }
-        egui::Panel::right("inspector").default_size(360.0).show(ui, |ui| self.inspector(ui));
-        mark(1, &mut lap);
-        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-            // The panel's clip rect is the visible area; the layout rect can be
-            // larger, and input must not leak over the side panels.
-            let rect = ui.available_rect_before_wrap().intersect(ui.clip_rect());
-            match self.layout {
-                Layout::Flat => self.map_view(ui, ViewKind::Flat, rect),
-                Layout::Globe => self.map_view(ui, ViewKind::Globe, rect),
-                Layout::Split => {
-                    let mid = rect.left() + rect.width() * 0.55;
-                    let (a, b) = (egui::Rect::from_min_max(rect.min, egui::pos2(mid - 1.0, rect.max.y)), egui::Rect::from_min_max(egui::pos2(mid + 1.0, rect.min.y), rect.max));
-                    self.map_view(ui, ViewKind::Flat, a);
-                    self.map_view(ui, ViewKind::Globe, b);
-                }
+        egui::Panel::top("world-book-navigation").show(ui, |ui| self.book_bar(ui));
+        if self.star_map.open {
+            self.star_chart(ui);
+        } else {
+            egui::Panel::top("options").show(ui, |ui| self.options_bar(ui));
+            egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+            egui::Panel::bottom("timeline").show(ui, |ui| self.timeline_bar(ui));
+            if self.table_panel {
+                egui::Panel::bottom("datatable").resizable(true).default_size(260.0).show(ui, |ui| self.data_table(ui));
             }
-        });
+            egui::Panel::left("tools").resizable(false).exact_size(crate::toolbar_ui::BUTTON + 16.0).show(ui, |ui| self.tool_strip(ui));
+            if crate::toolbar_ui::has_side_panel(self.tool) {
+                egui::Panel::left("tool-panel").resizable(false).show(ui, |ui| self.tool_side_panel(ui));
+            }
+            egui::Panel::right("inspector").default_size(360.0).show(ui, |ui| self.inspector(ui));
+            mark(1, &mut lap);
+            egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+                // The panel's clip rect is the visible area; the layout rect can be
+                // larger, and input must not leak over the side panels.
+                let rect = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+                match if self.doc.paper.is_some() { Layout::Flat } else { self.layout } {
+                    Layout::Flat => self.map_view(ui, ViewKind::Flat, rect),
+                    Layout::Globe => self.map_view(ui, ViewKind::Globe, rect),
+                    Layout::Split => {
+                        let mid = rect.left() + rect.width() * 0.55;
+                        let (a, b) = (egui::Rect::from_min_max(rect.min, egui::pos2(mid - 1.0, rect.max.y)), egui::Rect::from_min_max(egui::pos2(mid + 1.0, rect.min.y), rect.max));
+                        self.map_view(ui, ViewKind::Flat, a);
+                        self.map_view(ui, ViewKind::Globe, b);
+                    }
+                }
+            });
+        }
         mark(2, &mut lap);
         self.export_window(&ctx);
         self.palette_window(&ctx);
         self.shortcuts_window(&ctx);
+        self.about_window(&ctx);
+        self.tutorial_window(&ctx);
         self.prefs_window(&ctx);
         self.welcome_window(&ctx);
         self.history_window(&ctx);
+        self.checkpoints_window(&ctx);
         self.focus_window(&ctx);
         self.query_window(&ctx);
         self.names_window(&ctx);
         self.roads_window(&ctx);
         self.assistant_window(&ctx);
+        self.plugin_window(&ctx);
+        self.book_window(&ctx);
+        self.diplomacy_window(&ctx);
         self.climate_window(&ctx);
         self.page_window(&ctx);
         self.events_window(&ctx);

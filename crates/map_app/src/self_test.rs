@@ -50,6 +50,22 @@ pub fn run(dir: &Path) -> Result<String, String> {
         return Err("保存后读回的世界不同".into());
     }
     out.push(format!("保存与读取：{} KB", std::fs::metadata(&file).map(|m| m.len() / 1024).unwrap_or(0)));
+    use map_io::checkpoints::{Kind, Store};
+    let history = Store::for_project(&file);
+    let pinned = history.capture(&back, Kind::Manual, "制作前", 2)?;
+    let mut changed = back.clone();
+    for i in 1..=3 {
+        changed.meta.name = format!("自动版本 {i}");
+        history.capture(&changed, Kind::Automatic, "", 2)?;
+    }
+    let versions = Store::for_project(&file).list()?;
+    if versions.iter().filter(|v| v.kind == Kind::Automatic).count() != 2
+        || history.load(&pinned.id)?.meta.name != back.meta.name
+        || map_io::project::load(&file)?.meta.name != back.meta.name
+    {
+        return Err("保存点、自动轮转或主工程校验失败".into());
+    }
+    out.push("保存点：保留 1 个命名保存点与最新 2 个自动版本，原工程可重读".into());
     // the three pictures
     let font = map_io::png::find_system_font();
     match (&font, map_io::fonts::bundled()) {

@@ -25,6 +25,14 @@ impl App {
         if let Some(f) = &self.doc.style.label_font {
             v.insert((f.clone(), self.doc.style.label_bold));
         }
+        if self.doc.style.admin_typography {
+            for tier in map_core::label_type::Tier::ALL {
+                let style = self.doc.style.label_type(tier);
+                if let Some(family) = style.font {
+                    v.insert((family.to_owned(), style.bold));
+                }
+            }
+        }
         for a in self.doc.annotations.values() {
             if let Some(f) = &a.font {
                 v.insert((f.clone(), a.bold));
@@ -90,7 +98,7 @@ impl App {
     }
 
     /// The egui family to draw with a font (the default one until it is loaded).
-    pub fn font_family(&self, font: &Option<String>, bold: bool) -> FontFamily {
+    pub fn font_family(&self, font: Option<&str>, bold: bool) -> FontFamily {
         match font {
             Some(f) if self.fonts_loaded.contains(&font_key(f, bold)) => FontFamily::Name(font_key(f, bold).as_str().into()),
             _ => FontFamily::Proportional,

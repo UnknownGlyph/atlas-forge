@@ -8,16 +8,30 @@
 
 use map_core::doc::{Document, FORMAT_VERSION};
 use map_core::topo::ensure_rev_above;
+use map_core::world_book::{WorldBook, ROOT};
 use std::path::Path;
+use std::sync::Arc;
 
 const MAGIC: &[u8; 8] = b"ATLASMAP";
 pub const EXTENSION: &str = "atlas";
 
 pub fn to_bytes(doc: &Document) -> Result<Vec<u8>, String> {
-    // Older readers must reject climate projects instead of silently
-    // stripping the reference layers on their next save.
-    let version = if doc.climate.is_some() { FORMAT_VERSION } else { 1 };
+    // Older readers must reject features absent from their format, rather
+    // than silently stripping the star chart or climate on their next save.
     let mut stored = doc.clone();
+    if let Some(book) = &stored.book {
+        book.validate()?;
+        WorldBook::switch(&mut stored, ROOT, None)?;
+    }
+    let requires_six = |d: &Document| d.paper.is_some() || d.diplomacy.is_some();
+    let version = if requires_six(&stored) || stored.book.as_ref().is_some_and(|b| {
+        b.boards.values().filter_map(|x| x.doc.as_deref()).any(requires_six)
+    }) { 6 } else if stored.book.is_some() { 5 } else { match &stored.star_chart {
+        Some(chart) if !chart.moon.is_default() => 4,
+        Some(_) => 3,
+        None if doc.climate.is_some() => 2,
+        None => 1,
+    }};
     stored.format_version = version;
     let body = rmp_serde::to_vec_named(&stored).map_err(|e| format!("序列化失败: {e}"))?;
     let packed = lz4_flex::compress_prepend_size(&body);
@@ -38,8 +52,28 @@ pub fn from_bytes(bytes: &[u8]) -> Result<Document, String> {
     }
     let body = lz4_flex::decompress_size_prepended(&bytes[12..]).map_err(|e| format!("解压失败: {e}"))?;
     let mut doc: Document = rmp_serde::from_slice(&body).map_err(|e| format!("文件损坏: {e}"))?;
+    if let Some(book) = doc.book.as_mut() {
+        book.validate()?;
+        let boards = &mut Arc::make_mut(book).boards;
+        let ids: Vec<_> = boards.keys().copied().collect();
+        for id in ids {
+            if let Some(board) = boards.get_mut(&id).and_then(|board|board.doc.as_mut()) { restore(Arc::make_mut(board), version)?; }
+        }
+        WorldBook::switch(&mut doc, ROOT, None)?;
+    }
+    restore(&mut doc, version)?;
+    Ok(doc)
+}
+
+fn restore(doc: &mut Document, version: u32) -> Result<(), String> {
+    if doc.home_view.is_some_and(|view| !view.valid()) {
+        return Err("工程默认视角的经纬度无效".into());
+    }
+    if let Some(paper) = doc.paper { paper.validate()?; }
+    if let Some(diplomacy) = &doc.diplomacy { diplomacy.validate()?; }
     if let Some(p) = &doc.climate { p.validate_storage()?; }
-    migrate(&mut doc, version);
+    if let Some(chart) = &doc.star_chart { chart.validate()?; }
+    migrate(doc, version);
     // merges before the fix could leave a unit its own parent
     doc.drop_self_parents();
     doc.topo.rebuild_index();
@@ -56,7 +90,7 @@ pub fn from_bytes(bytes: &[u8]) -> Result<Document, String> {
         face.rev = map_core::topo::next_rev();
         doc.topo.faces.insert(f, face);
     }
-    Ok(doc)
+    Ok(())
 }
 
 /// The document with every face revision set to 0: revisions are cache
@@ -186,5 +220,22 @@ mod tests {
         std::fs::write(&path, &full[..full.len() / 2]).unwrap();
         assert!(load(&path).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_geographic_view_survives_saving_and_reopening() {
+        use map_core::{doc::HomeView, projection::Projection};
+        let view = HomeView {
+            projection: Projection::EqualEarth,
+            central_meridian: 128.0,
+            globe_latitude: 41.0,
+            flat_extent: None,
+        };
+        let mut doc = Document::new("远洋洲", 9650.0);
+        doc.home_view = Some(view);
+        let reopened = from_bytes(&to_bytes(&doc).unwrap()).unwrap();
+        assert_eq!(reopened.home_view, Some(view));
+        doc.home_view = Some(HomeView { central_meridian: f64::NAN, ..view });
+        assert!(from_bytes(&to_bytes(&doc).unwrap()).is_err());
     }
 }

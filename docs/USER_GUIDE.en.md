@@ -4,6 +4,8 @@ Atlas Forge is a desktop program for drawing fictional worlds and historical map
 
 The interface language is set in Preferences (中文 / English); parts of the interface not yet translated stay in Chinese.
 
+The [illustrated creation course](tutorial/README.md) includes the editable five-country example, project data, and 22 lessons.
+
 ## 1. Installing and starting
 
 - Unzip `AtlasForge-<version>-windows-x64.zip` and run `atlas.exe`; nothing is installed.

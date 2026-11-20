@@ -57,7 +57,7 @@ impl App {
             let colour = Color32::from_rgba_unmultiplied(a.color[0], a.color[1], a.color[2], a.color[3]).gamma_multiply(if a.hidden { 0.35 } else { 1.0 });
             let job = |text: &str, c: Color32| {
                 let mut j = egui::text::LayoutJob::default();
-                j.append(text, 0.0, egui::TextFormat { font_id: egui::FontId::new(size, self.font_family(&a.font, a.bold)), color: c, italics: a.italic, ..Default::default() });
+                j.append(text, 0.0, egui::TextFormat { font_id: egui::FontId::new(size, self.font_family(a.font.as_deref(), a.bold)), color: c, italics: a.italic, ..Default::default() });
                 j
             };
             // a curved line goes glyph by glyph along its arc or its drawn curve

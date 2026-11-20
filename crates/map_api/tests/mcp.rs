@@ -60,7 +60,10 @@ fn a_whole_client_session() {
 
     let tools = by_id(&a, 2)["result"]["tools"].as_array().unwrap().clone();
     // ten that read; the edits (on a draft) and the draft's own tools
-    assert_eq!(tools.len(), 26);
+    assert_eq!(tools.len(), 30);
+    for name in ["edit_set_visibility", "edit_add_field", "edit_set_value", "edit_import_table"] {
+        assert!(tools.iter().any(|tool| tool["name"] == name), "{name}");
+    }
     for t in &tools {
         let name = t["name"].as_str().unwrap();
         assert!(name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "{name}");

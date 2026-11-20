@@ -50,6 +50,12 @@ impl App {
         }
         let live = (!self.measure_closed).then_some(hover).flatten();
         let line = |a: LonLat, b: LonLat, w: f32, col: Color32| {
+            if self.doc.paper.is_some() {
+                if let (Some(a),Some(b)) = (vg.to_screen(a),vg.to_screen(b)) {
+                    painter.line_segment([a,b], Stroke::new(w,col));
+                }
+                return;
+            }
             let s: Vec<Option<Pos2>> = great_circle_path(a, b, 1.0).into_iter().map(|q| vg.to_screen(q)).collect();
             for seg in s.windows(2) {
                 if let (Some(x), Some(y)) = (seg[0], seg[1]) {
@@ -75,9 +81,13 @@ impl App {
             Some(h) => {
                 let mut all = pts.clone();
                 all.push(h);
-                let total = self.doc.path_length_km(&all);
-                let step = self.doc.path_length_km(&[*pts.last().unwrap(), h]);
-                (format!("{} km（本段 {} km）", format_num(total.round()), format_num(step.round())), vg.to_screen(h))
+                let segment = [*pts.last().unwrap(), h];
+                let (total,step,unit) = if let Some(paper) = self.doc.paper {
+                    (paper.length(&all),paper.length(&segment),"px")
+                } else {
+                    (self.doc.path_length_km(&all),self.doc.path_length_km(&segment),"km")
+                };
+                (format!("{} {unit}（本段 {} {unit}）", format_num(total.round()), format_num(step.round())), vg.to_screen(h))
             }
             None => (self.measure_text(), self.measure_pts.last().and_then(|p| vg.to_screen(*p))),
         };
@@ -95,6 +105,13 @@ impl App {
         if self.measure_closed {
             pts.push(pts[0]);
         }
+        if let Some(paper) = self.doc.paper {
+            let mut text = format!("{} px",format_num(paper.length(&pts).round()));
+            if self.measure_closed {
+                text += &format!("　面积 {} px²",format_num(paper.area(&self.measure_pts).round()));
+            }
+            return text;
+        }
         let mut t = format!("{} km", format_num(self.doc.path_length_km(&pts).round()));
         if self.measure_closed {
             t += &format!("　面积 {} km²", format_num(self.doc.ring_area_km2(&self.measure_pts).round()));
@@ -106,14 +123,18 @@ impl App {
         ui.separator();
         ui.label(RichText::new("测量").strong());
         if self.measure_pts.len() < 2 {
-            ui.weak("在地图上单击各点：沿大圆测量距离；单击第一个点闭合后同时给出面积。右键撤回一个点，Esc 清除。按本星球半径计算，测量不会保存。");
+            ui.weak(if self.doc.paper.is_some() {
+                "在画布上依次点击各点测量像素距离。点击起点闭合后计算像素面积。"
+            } else { "在地图上单击各点：沿大圆测量距离；单击第一个点闭合后同时给出面积。右键撤回一个点，Esc 清除。按本星球半径计算，测量不会保存。" });
             return;
         }
         let label = if self.measure_closed { "周长" } else { "长度" };
         ui.label(format!("{label}：{}", self.measure_text().replace("　面积", "\n面积：")));
-        ui.weak(format!("{} 个点 · 星球半径 {} km", self.measure_pts.len(), format_num(self.doc.radius().round())));
-        if !self.measure_closed {
-            ui.label(crate::roads_ui::travel_lines(self.doc.path_length_km(&self.measure_pts))).on_hover_text("按每日行程估算：步行 30 km、车队 25 km、骑马 60 km、驿马换马 200 km；一天按十小时计");
+        if self.doc.paper.is_none() {
+            ui.weak(format!("{} 个点 · 星球半径 {} km", self.measure_pts.len(), format_num(self.doc.radius().round())));
+            if !self.measure_closed {
+                ui.label(crate::roads_ui::travel_lines(self.doc.path_length_km(&self.measure_pts))).on_hover_text("按每日行程估算：步行 30 km、车队 25 km、骑马 60 km、驿马换马 200 km；一天按十小时计");
+            }
         }
         if ui.button("清除").clicked() {
             self.measure_pts.clear();

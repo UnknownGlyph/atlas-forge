@@ -133,6 +133,9 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
     if (!ok || uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) {
         return vec4<f32>(0.0);
     }
+    if (u.src.w > 0.5) {
+        return vec4<f32>(c.rgb * select(shade, 1.0, u.src.w > 1.5), c.a);
+    }
     let a = c.a * u.src.z;
     return vec4<f32>(c.rgb * shade * a, a);
 }

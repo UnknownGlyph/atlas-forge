@@ -47,6 +47,9 @@ pub mod class {
     pub const FOCUS: u32 = 8;
     /// Bands in the sea along the coasts (a map theme's look), outermost first.
     pub const GLOW: [u32; 3] = [9, 10, 11];
+    pub const DISTRICT: u32 = 12;
+    pub const LOCAL: u32 = 13;
+    pub const FACE: u32 = 14;
 }
 
 /// Triangulate one face into a triangle soup of relative lon/lat positions.
@@ -100,6 +103,10 @@ fn subdivide(t: [P2; 3], emit: &mut dyn FnMut([P2; 3])) {
 fn clip_to_strip(t: [P2; 3], out: &mut Vec<[f32; 2]>) {
     let xmin = t.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
     let xmax = t.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
+    if xmin > -180.0 && xmax < 180.0 {
+        out.extend(t.map(|p| [p[0] as f32, p[1] as f32]));
+        return;
+    }
     for k in [-720.0, -360.0, 0.0, 360.0, 720.0] {
         if xmax + k <= -180.0 || xmin + k >= 180.0 {
             continue;
@@ -130,7 +137,12 @@ pub use map_core::geom::clip_half;
 pub fn push_polyline(pts: &[P2], cls: u32, out: &mut Vec<LineInstance>) {
     for w in pts.windows(2) {
         let (a, b) = (w[0], w[1]);
-        let n = ((dist2(a, b).sqrt() / MAX_EDGE_DEG).ceil() as usize).max(1);
+        let length2 = dist2(a, b);
+        if length2 <= MAX_EDGE_DEG * MAX_EDGE_DEG && (-180.0..180.0).contains(&a[0]) && (-180.0..=180.0).contains(&b[0]) {
+            out.push(LineInstance { p0: a.map(|x| x as f32), p1: b.map(|x| x as f32), class: cls, _pad: 0 });
+            continue;
+        }
+        let n = ((length2.sqrt() / MAX_EDGE_DEG).ceil() as usize).max(1);
         for i in 0..n {
             let t0 = i as f64 / n as f64;
             let t1 = (i + 1) as f64 / n as f64;
@@ -194,9 +206,23 @@ fn edge_class(doc: &Document, left: FaceId, right: FaceId) -> Option<u32> {
     match (kind(left), kind(right)) {
         (FaceKind::Land, FaceKind::Land) => {
             let (a, b) = (doc.owner.get(&left), doc.owner.get(&right));
-            let ta = a.map(|e| doc.top_ancestor(*e));
-            let tb = b.map(|e| doc.top_ancestor(*e));
-            Some(if ta != tb { class::BORDER } else { class::INTERNAL })
+            let (Some(a), Some(b)) = (a, b) else {
+                return Some(if a == b { class::FACE } else { class::BORDER });
+            };
+            if a == b {
+                return Some(class::FACE);
+            }
+            if doc.top_ancestor(*a) != doc.top_ancestor(*b) {
+                return Some(class::BORDER);
+            }
+            let a: Vec<_> = doc.ancestors(*a).collect();
+            let b: Vec<_> = doc.ancestors(*b).collect();
+            let shared = a.iter().rev().zip(b.iter().rev()).take_while(|(a, b)| a == b).count();
+            Some(match shared {
+                1 => class::INTERNAL,
+                2 => class::DISTRICT,
+                _ => class::LOCAL,
+            })
         }
         (FaceKind::Water, FaceKind::Water) => None,
         _ => Some(class::COAST),
@@ -255,12 +281,13 @@ pub struct SceneCache {
     next_slot: u32,
     fill_members: BTreeMap<ChunkId, BTreeSet<FaceId>>,
     fill: BTreeMap<ChunkId, Chunk<FillVertex>>,
-    edge_chunk: HashMap<EdgeId, ChunkId>,
+    edge_display: HashMap<EdgeId, (ChunkId, u32)>,
     line_members: BTreeMap<ChunkId, BTreeSet<EdgeId>>,
     lines: BTreeMap<ChunkId, Chunk<LineInstance>>,
     last: Option<Document>,
     /// Changes whenever any line chunk changes.
     pub line_gen: u64,
+    pub geometry_gen: u64,
     pub colors: Arc<Vec<[f32; 4]>>,
     pub color_gen: u64,
 }
@@ -331,7 +358,7 @@ impl SceneCache {
         let mut st = UpdateStats::default();
         if !self.valid || lon0 != self.lon0 {
             // the seam moved: every mesh is cut differently
-            *self = SceneCache { gen: self.gen, line_gen: self.line_gen + 1, color_gen: self.color_gen, ..Default::default() };
+            *self = SceneCache { gen: self.gen, line_gen: self.line_gen + 1, geometry_gen: self.geometry_gen + 1, color_gen: self.color_gen, ..Default::default() };
             self.lon0 = lon0;
             self.valid = true;
         }
@@ -394,6 +421,7 @@ impl SceneCache {
         // ---- lines: reclassify only edges touched by the change set
         let mut full = prev.is_none();
         let mut dirty_edges: BTreeSet<EdgeId> = BTreeSet::new();
+        let mut changed_edges = BTreeSet::new();
         let mut rivers_dirty = full;
         if let Some(p) = &prev {
             let same = p.topo.edges.ptr_eq(&doc.topo.edges)
@@ -411,6 +439,7 @@ impl SceneCache {
                 // a river moved into or out of a layer changes hands between this mesh and the overlay
                 rivers_dirty = cs.rivers || p.group_of != doc.group_of || p.groups.len() != doc.groups.len();
                 dirty_edges.extend(cs.edges.iter().copied());
+                changed_edges = cs.edges;
                 let faces: BTreeSet<FaceId> = cs.faces.union(&cs.owners).copied().collect();
                 edges_of_faces(p, &faces, &mut dirty_edges);
                 edges_of_faces(doc, &faces, &mut dirty_edges);
@@ -421,25 +450,32 @@ impl SceneCache {
             for c in self.lines.keys() {
                 dirty_lines.insert(*c);
             }
-            self.edge_chunk.clear();
+            self.edge_display.clear();
             self.line_members.clear();
             dirty_edges = doc.topo.edges.keys().copied().collect();
             rivers_dirty = true;
         }
         for eid in &dirty_edges {
-            if let Some(c) = self.edge_chunk.remove(eid) {
+            let next = doc.topo.edges.get(eid).and_then(|e| {
+                let cls = edge_class(doc, e.left, e.right)?;
+                (!doc.topo.on_pole(e)).then(|| (chunk_of(&e.bbox, lon0), cls))
+            });
+            if !changed_edges.contains(eid) && next == self.edge_display.get(eid).copied()
+                && !prev.as_ref().is_some_and(|p| doc.topo.edges.get(eid).is_some_and(|e|
+                    p.topo.nodes.get(&e.a) != doc.topo.nodes.get(&e.a) || p.topo.nodes.get(&e.b) != doc.topo.nodes.get(&e.b)))
+            {
+                continue;
+            }
+            if let Some((c, _)) = self.edge_display.remove(eid) {
                 if let Some(m) = self.line_members.get_mut(&c) {
                     m.remove(eid);
                 }
                 dirty_lines.insert(c);
             }
-            if let Some(e) = doc.topo.edges.get(eid) {
-                if edge_class(doc, e.left, e.right).is_some() && !doc.topo.on_pole(e) {
-                    let c = chunk_of(&e.bbox, lon0);
-                    self.edge_chunk.insert(*eid, c);
-                    self.line_members.entry(c).or_default().insert(*eid);
-                    dirty_lines.insert(c);
-                }
+            if let Some((c, cls)) = next {
+                self.edge_display.insert(*eid, (c, cls));
+                self.line_members.entry(c).or_default().insert(*eid);
+                dirty_lines.insert(c);
             }
         }
         for c in &dirty_lines {
@@ -449,12 +485,10 @@ impl SceneCache {
                 self.lines.remove(c);
                 continue;
             }
-            let mut v = Vec::new();
+            let mut v = Vec::with_capacity(members.iter().map(|id| doc.topo.edges[id].pts.len() + 1).sum());
             for eid in &members {
                 let e = &doc.topo.edges[eid];
-                if let Some(cls) = edge_class(doc, e.left, e.right) {
-                    edge_instances(doc, e, cls, lon0, &mut v);
-                }
+                edge_instances(doc, e, self.edge_display[eid].1, lon0, &mut v);
             }
             let gen = self.next_gen();
             self.lines.insert(*c, Chunk { id: *c, gen, data: Arc::new(v) });
@@ -473,6 +507,9 @@ impl SceneCache {
         st.lines_rebuilt = !dirty_lines.is_empty();
         if st.lines_rebuilt {
             self.line_gen += 1;
+        }
+        if st.fill_rebuilt || st.lines_rebuilt {
+            self.geometry_gen += 1;
         }
         self.last = Some(doc.clone());
         st.ms = t0.elapsed().as_secs_f64() * 1e3;
@@ -493,8 +530,10 @@ impl SceneCache {
             }
             c[*slot as usize] = col;
         }
-        self.colors = Arc::new(c);
-        self.color_gen += 1;
+        if c != *self.colors {
+            self.colors = Arc::new(c);
+            self.color_gen += 1;
+        }
     }
 
     pub fn fill_chunks(&self) -> Vec<Chunk<FillVertex>> {
@@ -508,6 +547,10 @@ impl SceneCache {
     }
     pub fn vertex_count(&self) -> usize {
         self.fill.values().map(|c| c.data.len()).sum()
+    }
+
+    pub fn line_count(&self) -> usize {
+        self.lines.values().map(|c| c.data.len()).sum()
     }
 }
 
@@ -629,7 +672,7 @@ mod tests {
         d.set_background_kind(FaceKind::Land);
         assert_eq!(edge_class(&d, l, r), Some(class::BORDER), "unclaimed land background next to Y");
         d.assign(map_core::BACKGROUND, Some(y)).unwrap();
-        assert_eq!(edge_class(&d, l, r), Some(class::INTERNAL), "Y's own background and island");
+        assert_eq!(edge_class(&d, l, r), Some(class::FACE), "Y's own background and island");
         d.assign(map_core::BACKGROUND, Some(x)).unwrap();
         assert_eq!(edge_class(&d, l, r), Some(class::BORDER));
         // slot 0 (the background mesh) takes the background's theme colour
@@ -638,6 +681,30 @@ mod tests {
         sc.update_geometry(&d, 0.0);
         sc.update_colors(d.style.ocean, &theme.face_colors, &HashSet::new());
         assert_eq!(sc.colors[0], rgba(theme.entity_colors[&x]));
+    }
+
+    #[test]
+    fn boundaries_use_the_first_diverging_administrative_level() {
+        let mut doc = Document::default();
+        doc.set_background_kind(FaceKind::Land);
+        let face = doc.add_ring_face(&[
+            LonLat::new(0.0, 0.0), LonLat::new(10.0, 0.0),
+            LonLat::new(10.0, 10.0), LonLat::new(0.0, 10.0),
+        ], FaceKind::Land).unwrap();
+        let country = doc.add_entity(map_core::EntityKind::Country, "Country");
+        let province = doc.add_subdivision(country, "Province").unwrap();
+        let district = doc.add_subdivision(province, "District").unwrap();
+        let local = doc.add_subdivision(district, "Local").unwrap();
+        doc.assign(face, Some(local)).unwrap();
+        for (owner, want) in [(country, class::INTERNAL), (province, class::DISTRICT),
+            (district, class::LOCAL), (local, class::FACE)] {
+            doc.assign(BACKGROUND, Some(owner)).unwrap();
+            assert_eq!(edge_class(&doc, BACKGROUND, face), Some(want));
+        }
+        doc.set_year(Some(1550));
+        doc.record_parent(province, None).unwrap();
+        doc.assign(BACKGROUND, Some(country)).unwrap();
+        assert_eq!(edge_class(&doc, BACKGROUND, face), Some(class::BORDER));
     }
 
     fn tri_area(soup: &[[f32; 2]]) -> f64 {
@@ -793,5 +860,21 @@ mod tests {
         let s = c.update_geometry(&d, 0.0);
         assert_eq!(s.faces_retessellated, 2);
         assert!(s.fill_chunks_rebuilt <= 2 && s.line_chunks_rebuilt <= 2, "{s:?}");
+    }
+
+    #[test]
+    fn changing_ownership_keeps_coast_only_chunks() {
+        let mut d = Document::default();
+        let ring = [LonLat::new(-5.0, -5.0), LonLat::new(5.0, -5.0), LonLat::new(5.0, 5.0), LonLat::new(-5.0, 5.0)];
+        let face = d.add_ring_face(&ring, FaceKind::Land).unwrap();
+        let country = d.add_entity(map_core::EntityKind::Country, "A");
+        let mut scene = SceneCache::default();
+        scene.update_geometry(&d, 0.0);
+        d.assign(face, Some(country)).unwrap();
+        let changed = scene.update_geometry(&d, 0.0);
+        assert!(!changed.lines_rebuilt);
+        let mut fresh = SceneCache::default();
+        fresh.update_geometry(&d, 0.0);
+        assert_eq!(line_signature(&scene), line_signature(&fresh));
     }
 }

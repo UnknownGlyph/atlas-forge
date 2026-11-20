@@ -53,12 +53,14 @@ pub enum Act {
     Prefs,
     Layout(Layout),
     Graticule,
+    ProgressiveDetail,
     Furniture,
     FitAll,
     ZoomIn,
     ZoomOut,
     ZoomSelection,
     History,
+    Checkpoints,
     NewFocus,
     ExitFocus,
     Tool(Tool),
@@ -69,11 +71,18 @@ pub enum Act {
     NextYear,
     Palette,
     Shortcuts,
+    Tutorial,
+    TutorialExample,
     Names,
     Roads,
     Assistant,
+    Plugins,
+    WorldBook,
     Climate,
+    StarChart,
+    About,
     Events,
+    Diplomacy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,6 +163,7 @@ fn table_with(translate: bool) -> Vec<Action> {
         g(Act::Open, Menu::File, "打开…", key(CMD, Key::O), ""),
         a(Act::Save, Menu::File, "保存", key(CMD, Key::S), ""),
         a(Act::SaveAs, Menu::File, "另存为…", key(cmd_shift, Key::S), ""),
+        a(Act::Checkpoints, Menu::File, "保存点与自动保存…", None, "保存、浏览或恢复工程的磁盘版本。"),
         g(Act::ImportWorld, Menu::File, "导入 GeoJSON / Shapefile 为新世界（共享边界）…", None, "相邻国家共享边界；替换当前世界，可撤销。"),
         a(Act::ImportIslands, Menu::File, "导入 GeoJSON / Shapefile 为独立岛屿…", None, "每个多边形作为独立的陆地加入当前世界。"),
         a(Act::ImportCsv, Menu::File, "导入 CSV 数据…", None, "按编号或名称把数据列并入字段。"),
@@ -192,6 +202,7 @@ fn table_with(translate: bool) -> Vec<Action> {
         a(Act::Layout(Layout::Globe), Menu::View, "三维球体", None, ""),
         a(Act::Layout(Layout::Split), Menu::View, "二维 + 三维", None, ""),
         g(Act::Graticule, Menu::View, "经纬网", None, ""),
+        a(Act::ProgressiveDetail, Menu::View, "按缩放显示细节", None, "放大时逐级显示行政边界、地名、城镇和道路。"),
         a(Act::Furniture, Menu::View, "比例尺与指北针", None, "在两个视图的左下角显示按视图中心量出的比例尺和指向北方的指北针。"),
         Action { also: key(CMD, Key::Num0), ..g(Act::FitAll, Menu::View, "缩放到全图", key(NONE, Key::Home), "") },
         Action { also: key(CMD, Key::Plus), ..a(Act::ZoomIn, Menu::View, "放大", key(CMD, Key::Equals), "") },
@@ -213,12 +224,18 @@ fn table_with(translate: bool) -> Vec<Action> {
         a(Act::PrevYear, Menu::Time, "上一年", key(Modifiers::SHIFT, Key::PageUp), ""),
         a(Act::NextYear, Menu::Time, "下一年", key(Modifiers::SHIFT, Key::PageDown), ""),
         g(Act::Events, Menu::Time, "事件时间线…", None, "给一年或一段年份起名（战争、条约、继承），附说明并关联局部视图；在时间轴上显示为标记；导出编年表。"),
+        g(Act::Diplomacy, Menu::Time, "外交关系…", None, "记录双边关系、多边协约、时间区间和关联事件。"),
+        g(Act::StarChart, Menu::View, "星图", None, ""),
         g(Act::Names, Menu::Tools, "名称生成器…", None, "按风格生成国名、城市名、地区、海洋、河流、山脉与人名；单击即给所选国家或城市改名，或复制。"),
         a(Act::Assistant, Menu::Tools, "AI 助手…", None, "把任务交给语言模型（Gemini 或 DeepSeek）：它查看地图并修改一份草稿，看过前后对比再决定是否采用。"),
         a(Act::Climate, Menu::Tools, "行星环境与气候…", None, "根据恒星、行星与地图地理计算逐月气候参考图。"),
+        a(Act::Plugins, Menu::Tools, "本地插件…", None, "打开插件清单，预览命令对地图草稿的修改。"),
+        a(Act::WorldBook, Menu::View, "世界资料库…", None, "浏览文档、事件、画板及其关联。"),
         a(Act::Roads, Menu::Tools, "道路与旅行…", None, "在城市之间生成道路网（绕开海与湖，陡坡代价更高），预览后应用为线路；查两城之间沿线路的路程与步行、骑马等所需天数。"),
         a(Act::Palette, Menu::Help, "命令面板…", key(CMD, Key::K), "按名称查找并执行任何命令。"),
         a(Act::Shortcuts, Menu::Help, "快捷键一览", key(NONE, Key::F1), ""),
+        a(Act::Tutorial, Menu::Help, "创作教程…", None, "在软件内跟做地图、历史、气候、世界资料与导出。"),
+        g(Act::About, Menu::Help, "关于 Atlas Forge", None, ""),
     ]);
     t
 }
@@ -281,7 +298,8 @@ impl App {
             if let Some(p) = x.pos {
                 return vec![p];
             }
-            return self.doc.dissolve(e).iter().flat_map(|p| p.outer.iter().map(ll)).collect();
+            let faces = self.doc.faces_of_tree(e).into_iter().collect();
+            return self.doc.dissolve_faces(&faces).iter().flat_map(|p| p.outer.iter().map(ll)).collect();
         }
         if let Some(f) = self.selected_face.filter(|f| *f != map_core::BACKGROUND) {
             return self.doc.topo.face_planar(f).0.iter().map(ll).collect();
@@ -333,7 +351,13 @@ impl App {
 
     /// Whether the action can run now.
     pub fn can(&self, act: Act) -> bool {
+        if self.star_map.open && !matches!(act, Act::StarChart | Act::About | Act::Shortcuts | Act::Tutorial | Act::Palette | Act::Prefs |
+            Act::Save | Act::SaveAs | Act::Open | Act::OpenRecent(_) | Act::NewBlank | Act::NewDemo | Act::Undo | Act::Redo) {
+            return false;
+        }
         match act {
+            Act::StarChart | Act::Climate | Act::NewFocus | Act::ImportWorld | Act::ImportIslands | Act::Layout(Layout::Globe | Layout::Split)
+                if self.doc.paper.is_some() => false,
             Act::NewTestWorld | Act::NewDetailedWorld => !self.making_test_world(),
             Act::Undo => self.history.can_undo(),
             Act::Redo => self.history.can_redo(),
@@ -359,7 +383,9 @@ impl App {
     pub fn checked(&self, act: Act) -> Option<bool> {
         match act {
             Act::Layout(l) => Some(self.layout == l),
+            Act::StarChart => Some(self.star_map.open),
             Act::Graticule => Some(self.graticule),
+            Act::ProgressiveDetail => Some(self.prefs.progressive_detail),
             Act::Furniture => Some(self.furniture),
             Act::Tool(t) => Some(self.tool == t),
             Act::Timeline => Some(self.doc.year.is_some()),
@@ -381,7 +407,7 @@ impl App {
         if !self.can(act) {
             return;
         }
-        if matches!(act, Act::NewBlank | Act::NewDemo | Act::NewTestWorld | Act::NewDetailedWorld | Act::Open | Act::OpenRecent(_)) && self.dirty {
+        if matches!(act, Act::NewBlank | Act::NewDemo | Act::NewTestWorld | Act::NewDetailedWorld | Act::Open | Act::OpenRecent(_) | Act::TutorialExample) && self.dirty {
             self.confirm_replace = Some(act);
             return;
         }
@@ -396,6 +422,23 @@ impl App {
                 self.set_status("已新建空白世界。使用“绘制陆地”工具 (L) 开始。", false);
             }
             Act::NewDemo => self.new_doc(map_core::sample::demo_world()),
+            Act::TutorialExample => {
+                let data = include_bytes!("../../../docs/tutorial/yuanyang.atlas");
+                match map_io::project::from_bytes(data) {
+                    Ok(doc) => {
+                        self.new_doc(doc);
+                        self.selected = self.doc.entity_by_code("YY");
+                        self.cam2d.proj = map_core::projection::Projection::Equirectangular;
+                        self.cam2d.lon0 = 129.0;
+                        self.zoom_to_selection();
+                        self.fit_pending = false;
+                        self.globe.dist = 1.8;
+                        self.tutorial.open = false;
+                        self.set_status("已打开远洋人民共和国教程成品",false);
+                    }
+                    Err(err) => self.set_status(err,true),
+                }
+            }
             Act::NewWorldWizard => self.wizard.open = true,
             Act::NewTestWorld => self.new_test_world(false),
             Act::NewDetailedWorld => self.new_test_world(true),
@@ -419,6 +462,14 @@ impl App {
             Act::Export => {
                 self.export.open = true;
                 self.export.projection = self.cam2d.proj;
+                if let Some(paper) = self.doc.paper {
+                    self.export.width = paper.width;
+                    self.export.height = paper.height;
+                    self.export.current_view = false;
+                    if self.export.format.geographic() {
+                        self.export.format = map_io::batch::Format::Png;
+                    }
+                }
             }
             Act::Undo => self.undo(),
             Act::Redo => self.redo(),
@@ -452,13 +503,22 @@ impl App {
                 Ok(()) => self.set_status("拓扑校验通过", false),
                 Err(e) => self.set_status(format!("拓扑错误：{e}"), true),
             },
-            Act::Layout(l) => self.layout = l,
+            Act::Layout(l) => { self.globe_inertia.stop(); self.layout = l; },
             Act::Graticule => self.graticule = !self.graticule,
+            Act::ProgressiveDetail => self.prefs.progressive_detail = !self.prefs.progressive_detail,
             Act::Furniture => self.furniture = !self.furniture,
-            Act::FitAll => self.fit_pending = true,
+            Act::FitAll => {
+                if self.doc.home_view.is_some() {
+                    self.apply_home_view();
+                } else {
+                    self.globe_inertia.stop();
+                    self.fit_pending = true;
+                }
+            },
             Act::ZoomIn => self.zoom_views(1.25),
             Act::ZoomOut => self.zoom_views(0.8),
             Act::History => self.history_open = !self.history_open,
+            Act::Checkpoints => self.checkpoints.open = true,
             Act::NewFocus => self.new_focus(),
             Act::ExitFocus => self.exit_focus(),
             Act::Prefs => self.prefs_open = true,
@@ -474,9 +534,19 @@ impl App {
             Act::NextYear => self.set_year(self.doc.year.map(|y| y + 1)),
             Act::Palette => self.palette = Some(Palette { focus: true, ..Default::default() }),
             Act::Shortcuts => self.shortcuts_open = true,
+            Act::About => self.about_open = true,
+            Act::Tutorial => self.tutorial.open = true,
+            Act::Diplomacy => self.diplomacy_ui.open = true,
+            Act::StarChart => {
+                self.end_pending();
+                self.globe_inertia.stop();
+                self.star_map.open = !self.star_map.open;
+            }
             Act::Names => self.names_open = true,
             Act::Roads => self.roads.open = true,
             Act::Assistant => self.ai.open = true,
+            Act::Plugins => self.plugins.open = true,
+            Act::WorldBook => self.book_current_context(),
             Act::Climate => self.climate_open(),
             Act::Events => self.events_open = true,
         }

@@ -107,7 +107,8 @@ impl App {
         }
         let p = vg.to_lonlat(o)?;
         let tol = vg.deg_per_px(o, 8.0);
-        if let Some(f) = self.doc.river_at(p, tol).map(|h| self.line_ref(h.0)).filter(free) {
+        let detail = self.map_detail(vg);
+        if let Some(f) = self.doc.river_at_where(p, tol, |id, line| self.line_shown(id, line, detail) && free(&self.line_ref(id))).map(|h| self.line_ref(h.0)) {
             return Some(f);
         }
         self.doc.area_edge_at(p, tol).map(FeatureRef::Area).filter(free)
@@ -168,7 +169,7 @@ impl App {
             let shift = self.press_mods.shift;
             if let Some(o) = origin {
                 let sel = self.selection();
-                let on_selected = self.feature_at(o, vg).filter(|h| sel.contains(h)).is_some();
+                let on_selected = !sel.is_empty() && self.feature_at(o, vg).is_some_and(|h| sel.contains(&h));
                 if shift {
                     self.marquee = Some((view_index(vg), o, o));
                 } else if let (true, Some(q)) = (on_selected, vg.to_lonlat(o)) {

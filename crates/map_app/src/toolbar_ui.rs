@@ -255,13 +255,20 @@ impl App {
                     DrawMode::Expand => "扩张画笔国家",
                     DrawMode::Take => "夺取领土",
                     DrawMode::NewCountry => "画出新国家",
+                    DrawMode::Province(_) => "绘制下级地区",
                 };
                 let hint = |m: DrawMode| match m {
                     DrawMode::AddLand => "不动已有陆地，只在水域里添加",
                     DrawMode::Expand => "只占海和无主地，别国的土地不变",
                     DrawMode::Take => "区域全归画笔国家，包括别国的土地",
                     DrawMode::NewCountry => "新建一个国家，区域全归它",
+                    DrawMode::Province(_) => "只划入上级直属陆地",
                 };
+                if let DrawMode::Province(parent) = self.draw_mode {
+                    if let Some(unit) = self.doc.entities.get(&parent) {
+                        ui.strong(format!("上级 · {}", unit.name));
+                    }
+                }
                 egui::ComboBox::from_id_salt("draw-mode").selected_text(name(self.draw_mode)).width(110.0).show_ui(ui, |ui| {
                     for m in [DrawMode::AddLand, DrawMode::Expand, DrawMode::Take, DrawMode::NewCountry] {
                         ui.selectable_value(&mut self.draw_mode, m, name(m)).on_hover_text(hint(m));

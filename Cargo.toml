@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/map_core", "crates/map_io", "crates/map_render", "crates/map_app", "crates/map_bench", "crates/map_api", "crates/map_ai"]
 
 [workspace.package]
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/UnknownGlyph/atlas-forge"
@@ -22,7 +22,7 @@ csv = "1.4"
 earcutr = "0.5"
 bytemuck = { version = "1", features = ["derive"] }
 glam = "0.34"
-eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "accesskit"] }
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "accesskit", "links"] }
 rfd = "0.17"
 tiny-skia = "0.12"
 ab_glyph = "0.2"

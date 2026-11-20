@@ -172,19 +172,10 @@ fn along(rings: &[Vec<P2>], angle: f64, em: f64) -> Option<(Vec<P2>, f64, f64)> 
     }
     let du = (umax - umin) / N as f64;
     // the runs of land across each step
-    let cols: Vec<Vec<Run>> = (0..N)
-        .map(|i| {
-            let u = umin + du * (i as f64 + 0.5);
-            let mut vs: Vec<f64> = Vec::new();
-            for ring in &rot {
-                let n = ring.len();
-                for j in 0..n {
-                    let (a, b) = (ring[j], ring[(j + 1) % n]);
-                    if (a[0] > u) != (b[0] > u) {
-                        vs.push(a[1] + (b[1] - a[1]) * (u - a[0]) / (b[0] - a[0]));
-                    }
-                }
-            }
+    let samples = std::array::from_fn(|i| umin + du * (i as f64 + 0.5));
+    let crossings = geom::scan_crossings::<0, N>(&samples, rot.iter().map(Vec::as_slice));
+    let cols: Vec<Vec<Run>> = samples.into_iter().zip(crossings)
+        .map(|(u, mut vs)| {
             vs.sort_by(f64::total_cmp);
             vs.as_chunks::<2>().0.iter().map(|p| Run { u, lo: p[0], hi: p[1] }).collect()
         })
@@ -395,18 +386,18 @@ impl Document {
         let polys = if tree.len() == self.faces_of(e).len() { self.dissolve(e) } else { self.dissolve_faces(&tree) };
         let r = self.radius();
         let area = |p: &PlanarPolygon| geom::spherical_area(&p.outer, r).abs();
-        let best = polys.iter().max_by(|a, b| area(a).total_cmp(&area(b)));
+        let best = polys.iter().map(|p| (p, area(p))).max_by(|a, b| a.1.total_cmp(&b.1));
         let level = |(at, w): (LonLat, f64)| LabelPath::straight(at, 0.0, w * 0.5, w * 0.3, em);
         // the background (it has no outer ring) and caps over a pole: level, at the anchor
-        let open_sea = self.owner.get(&BACKGROUND) == Some(&e) && best.is_none_or(|b| area(b) < self.topo.face_area(BACKGROUND, r));
-        let polar = best.is_some_and(|b| {
+        let open_sea = self.owner.get(&BACKGROUND) == Some(&e) && best.is_none_or(|(_, a)| a < self.topo.face_area(BACKGROUND, r));
+        let polar = best.is_some_and(|(b, _)| {
             let bb = geom::bbox(&b.outer);
             bb[2] - bb[0] > 359.9
         });
         if open_sea || polar {
             return self.label_anchor(e).map(level);
         }
-        let best = best?;
+        let (best, _) = best?;
         let (c, w) = geom::interior_point(&best.outer, &best.holes)?;
         Some(path_through(best, c, em).unwrap_or_else(|| level((LonLat::new(geom::wrap_lon(c[0]), c[1]), w))))
     }

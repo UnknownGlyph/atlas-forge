@@ -58,8 +58,8 @@ use map_core::geom::{self, LonLat};
 
 impl App {
     /// Select tool: a click on a city's point selects it.
-    pub fn city_select_click(&mut self, p: LonLat, tol: f64) -> bool {
-        let Some(id) = self.doc.city_at(p, tol) else { return false };
+    pub fn city_select_click(&mut self, p: LonLat, tol: f64, detail: crate::map_detail::Detail) -> bool {
+        let Some(id) = self.doc.city_at_where(p, tol, |id| self.city_shown(id, detail)) else { return false };
         self.selected = Some(id);
         self.selected_face = None;
         self.selected_river = None;
@@ -199,7 +199,9 @@ impl App {
     /// the line is long enough on screen); `taken` gets their glyphs' boxes.
     pub fn draw_line_names(&self, painter: &egui::Painter, vg: &ViewGeom, taken: &mut Vec<egui::Rect>) {
         use map_core::path_text::{along_path, NAME_PX};
-        for (id, r) in self.doc.rivers.iter().filter(|(id, r)| r.show_name && !r.name.is_empty() && !r.hidden && !self.doc.group_hides(**id)) {
+        let detail = self.map_detail(vg);
+        for (id, r) in self.doc.rivers.iter().filter(|(id, r)| r.show_name && !r.name.is_empty() && !r.hidden
+            && !self.doc.group_hides(**id) && self.line_shown(**id, r, detail)) {
             // as see-through as its layer
             let mut layer = painter.clone();
             layer.multiply_opacity(self.doc.group_opacity(*id));
@@ -251,7 +253,9 @@ impl App {
     /// on the end. Drawn over the map, under labels.
     pub fn draw_routes(&self, painter: &egui::Painter, vg: &ViewGeom, pass: map_core::stack::DrawPass) {
         use egui::Shape;
-        for (_, r) in self.doc.rivers.iter().filter(|(id, r)| !r.hidden && self.doc.group_of_id(**id) == pass.group) {
+        let detail = self.map_detail(vg);
+        for (_, r) in self.doc.rivers.iter().filter(|(id, r)| !r.hidden && self.doc.group_of_id(**id) == pass.group
+            && self.line_shown(**id, r, detail)) {
             let Some(rs) = r.route else {
                 // a river in a layer is drawn in the turn of its layer
                 // (rivers in no layer are part of the base map, drawn with it)

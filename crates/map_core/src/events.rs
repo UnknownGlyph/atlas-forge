@@ -47,7 +47,8 @@ impl Document {
 
     /// Add an event (an empty name: "事件 n"); returns its id.
     pub fn add_event(&mut self, name: &str, year: i32, end: Option<i32>) -> u32 {
-        let id = self.events.iter().map(|e| e.id).max().map_or(1, |m| m + 1);
+        let id = self.next_event_id.unwrap_or(1).max(self.events.iter().map(|e| e.id).max().map_or(1, |m| m + 1));
+        self.next_event_id = id.checked_add(1);
         let name = match name.trim() {
             "" => format!("事件 {}", self.events.len() + 1),
             n => n.to_string(),
@@ -72,6 +73,9 @@ impl Document {
     }
 
     pub fn remove_event(&mut self, id: u32) -> TResult<()> {
+        if self.next_event_id.is_none() {
+            self.next_event_id = self.events.iter().map(|e| e.id).max().and_then(|id| id.checked_add(1));
+        }
         let n = self.events.len();
         self.events.retain(|e| e.id != id);
         if self.events.len() == n {

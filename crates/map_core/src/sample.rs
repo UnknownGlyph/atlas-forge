@@ -126,6 +126,8 @@ pub fn grid_world(nx: usize, ny: usize, detail: usize, seed: u64) -> Document {
 pub fn demo_world() -> Document {
     let mut rng = Rng::new(7);
     let mut doc = Document::new("示例世界 · 艾瑞亚", 6371.0088);
+    // This built-in example uses the original cartographic style.
+    doc.style.admin_typography = false;
     let west = doc.add_ring_face(&blob(&mut rng, LonLat::new(-60.0, 20.0), 38.0, 30.0, 140, 0.18), FaceKind::Land).unwrap();
     let _ = west;
     doc.add_ring_face(&blob(&mut rng, LonLat::new(60.0, 5.0), 32.0, 35.0, 140, 0.2), FaceKind::Land).unwrap();

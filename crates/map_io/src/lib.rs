@@ -8,6 +8,8 @@
 
 pub mod atlas;
 pub mod batch;
+pub mod checkpoints;
+pub mod dossier;
 pub mod clip;
 pub mod fonts;
 pub mod geojson;

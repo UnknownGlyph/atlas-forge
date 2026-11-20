@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "id": "atlas.example.city",
+  "name": "城市制图示例",
+  "version": "1.0.0",
+  "commands": [
+    {
+      "id": "create-city",
+      "label": "放置城市",
+      "description": "从参数读取城市名和坐标，生成一个地图草稿，随后列出城市。",
+      "parameters": {
+        "name": {"label": "城市名", "type": "string", "default": "望海港"},
+        "lon": {"label": "经度", "type": "number", "default": 105.0},
+        "lat": {"label": "纬度", "type": "number", "default": 25.0}
+      },
+      "requests": [
+        {
+          "id": "create",
+          "op": "edit.create",
+          "args": {
+            "kind": "city",
+            "name": {"$param": "name"},
+            "lon": {"$param": "lon"},
+            "lat": {"$param": "lat"}
+          }
+        },
+        {"id": "read", "op": "entities.list", "args": {"kind": "city"}}
+      ]
+    }
+  ]
+}

@@ -15,6 +15,7 @@
 //! Offline: no network, no model service.
 
 mod edits;
+pub mod automation;
 pub mod mcp;
 mod preview;
 mod queries;
@@ -171,9 +172,12 @@ impl Session {
         let Some(c) = c.filter(|c| !c.is_null()) else {
             return Ok(Context { year: None, layer: POLITICAL });
         };
+        if !c.is_object() {
+            return Err(ApiError::BadRequest("context 须为 JSON 对象或 null".into()));
+        }
         let year = match c.get("year") {
             None | Some(Value::Null) => None,
-            Some(v) => Some(v.as_i64().filter(|y| y.abs() < 1_000_000).ok_or_else(|| ApiError::BadRequest("context.year 必须是整数或 null".into()))? as i32),
+            Some(v) => Some(v.as_i64().filter(|y| (-999_999..=999_999).contains(y)).ok_or_else(|| ApiError::BadRequest("context.year 须为 -999999 至 999999 的整数或 null".into()))? as i32),
         };
         let layer = match c.get("layer") {
             None | Some(Value::Null) => POLITICAL,

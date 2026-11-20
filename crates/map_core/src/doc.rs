@@ -206,7 +206,7 @@ pub struct Layer {
     pub shares: ShareStore,
 }
 
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 6;
 /// Built-in, geometry-derived field key.
 pub const AREA_KEY: &str = "area_km2";
 
@@ -808,6 +808,9 @@ pub struct Style {
     pub border_width: f32,
     pub internal: [u8; 4],
     pub internal_width: f32,
+    /// Hide mesh seams between faces with the same owner in exported maps.
+    #[serde(default)]
+    pub hide_face_seams_in_export: bool,
     pub river: [u8; 4],
     pub river_width: f32,
     pub label: [u8; 4],
@@ -817,6 +820,9 @@ pub struct Style {
     pub label_font: Option<String>,
     #[serde(default)]
     pub label_bold: bool,
+    /// Use different faces and sizes for countries, provinces and lower tiers.
+    #[serde(default)]
+    pub admin_typography: bool,
     pub show_labels: bool,
     pub show_cities: bool,
     /// Another partition layer drawn as boundary lines over the active
@@ -909,11 +915,13 @@ impl Default for Style {
             border_width: 1.4,
             internal: [120, 120, 120, 160],
             internal_width: 0.6,
+            hide_face_seams_in_export: false,
             river: [90, 140, 200, 255],
             river_width: 1.2,
             label: [30, 30, 30, 255],
             label_font: None,
             label_bold: false,
+            admin_typography: false,
             show_labels: true,
             show_cities: true,
             overlay_layer: None,
@@ -928,10 +936,41 @@ impl Default for Style {
     }
 }
 
+/// Starting orientation for a geographic project and its globe.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HomeView {
+    pub projection: crate::projection::Projection,
+    pub central_meridian: f64,
+    pub globe_latitude: f64,
+    /// Full longitude and latitude span in degrees for a regional opening view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flat_extent: Option<[f64; 2]>,
+}
+
+impl HomeView {
+    pub fn valid(self) -> bool {
+        (-180.0..=180.0).contains(&self.central_meridian)
+            && (-89.0..=89.0).contains(&self.globe_latitude)
+            && self.flat_extent.is_none_or(|[lon, lat]| {
+                (0.01..=360.0).contains(&lon) && (0.01..=180.0).contains(&lat)
+            })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_view: Option<HomeView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paper: Option<crate::paper::Paper>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diplomacy: Option<std::sync::Arc<crate::diplomacy::Diplomacy>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book: Option<std::sync::Arc<crate::world_book::WorldBook>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub climate: Option<std::sync::Arc<crate::climate::Project>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub star_chart: Option<std::sync::Arc<crate::star_chart::StarChart>>,
     pub format_version: u32,
     pub meta: Meta,
     pub topo: Topology,
@@ -1025,6 +1064,8 @@ pub struct Document {
     /// Named events of the history (see [`crate::events`]).
     #[serde(default)]
     pub events: Vec<crate::events::Event>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_event_id: Option<u32>,
     /// Name styles given to units (a culture's, say): new names for the
     /// places a unit covers follow its style ([`Document::name_style_for`]).
     #[serde(default)]
@@ -1106,10 +1147,23 @@ impl Default for Document {
 }
 
 impl Document {
+    pub fn new_paper(name: &str, size: crate::paper::Paper) -> Self {
+        let mut doc = Self::new(name, 6371.0);
+        doc.paper = Some(size);
+        doc.style.ocean = [255; 4];
+        doc.style.coast_glow_width = 0.0;
+        doc
+    }
+
     pub fn new(name: &str, radius_km: f64) -> Self {
         Self {
             format_version: FORMAT_VERSION,
+            home_view: None,
+            book: None,
+            paper: None,
+            diplomacy: None,
             climate: None,
+            star_chart: None,
             meta: Meta { name: name.into(), planet_radius_km: radius_km, description: String::new() },
             topo: Topology::default(),
             entities: OrdMap::new(),
@@ -1126,7 +1180,7 @@ impl Document {
             annotations: OrdMap::new(),
             symbols: OrdMap::new(),
             areas: OrdMap::new(),
-            style: Style::default(),
+            style: Style { admin_typography: true, ..Style::default() },
             theme: ThemeSpec::default(),
             year: None,
             underlays: Vec::new(),
@@ -1141,6 +1195,7 @@ impl Document {
             focuses: Vec::new(),
             calendar: Default::default(),
             events: Vec::new(),
+            next_event_id: None,
             name_styles: OrdMap::new(),
             terrain: None,
         }
@@ -1325,10 +1380,13 @@ impl Document {
         }
     }
 
-    pub fn rename_layer(&mut self, l: LayerId, name: &str) {
-        let mut x = self.layers.get(&l).cloned().unwrap_or_default();
-        x.name = name.into();
-        self.layers.insert(l, x);
+    pub fn rename_layer(&mut self, l: LayerId, name: &str) -> TResult<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("分区层名称不能为空".into());
+        }
+        self.layers.get_mut(&l).ok_or("分区层不存在")?.name = name.into();
+        Ok(())
     }
 
     /// Delete a layer with its entities (not the political layer).
@@ -1436,10 +1494,14 @@ impl Document {
 
     /// The city whose point is nearest to `p` within `tol` degrees.
     pub fn city_at(&self, p: LonLat, tol: f64) -> Option<EntityId> {
+        self.city_at_where(p, tol, |_| true)
+    }
+
+    pub fn city_at_where(&self, p: LonLat, tol: f64, visible: impl Fn(EntityId) -> bool) -> Option<EntityId> {
         self.entities
             .iter()
             .filter_map(|(id, e)| match (e.kind, e.pos) {
-                (EntityKind::City, Some(q)) => Some((*id, geom::geo_dist_deg(p, q))),
+                (EntityKind::City, Some(q)) if e.exists_in(self.year) && visible(*id) => Some((*id, geom::geo_dist_deg(p, q))),
                 _ => None,
             })
             .filter(|(_, d)| *d <= tol)
@@ -1790,6 +1852,8 @@ impl Document {
             .chain(shares)
             .chain(self.kind_changes.values().flat_map(|c| c.keys().copied()))
             .chain(self.entities.values().flat_map(|e| e.parent_changes.keys().copied()))
+            .chain(self.diplomacy.iter().flat_map(|d| d.records.values())
+                .flat_map(|r| r.from.into_iter().chain(r.until.and_then(|year| year.checked_add(1)))))
             // founding years, and the year after an end
             .chain(self.entities.values().flat_map(|e| e.founded.into_iter().chain(e.ended.map(|y| y + 1))))
             .collect()
@@ -1978,23 +2042,24 @@ impl Document {
 
     /// The faces of an entity and of everything under it.
     pub fn faces_of_tree(&self, e: EntityId) -> Vec<FaceId> {
-        let mut top: HashMap<EntityId, EntityId> = HashMap::new();
+        let mut belongs = HashMap::<EntityId, bool>::new();
         self.owner
             .iter()
-            .filter(|(_, o)| **o == e || *top.entry(**o).or_insert_with(|| self.top_ancestor(**o)) == e)
+            .filter(|(_, o)| *belongs.entry(**o).or_insert_with(|| self.ancestors(**o).any(|a| a == e)))
             .map(|(f, _)| *f)
             .collect()
     }
 
     /// Top-level country for an entity (follows `parent`).
-    pub fn top_ancestor(&self, mut e: EntityId) -> EntityId {
-        for _ in 0..16 {
-            match self.entities.get(&e).and_then(|x| x.parent) {
-                Some(p) if self.entities.contains_key(&p) => e = p,
-                _ => break,
-            }
-        }
-        e
+    pub fn top_ancestor(&self, e: EntityId) -> EntityId {
+        self.ancestors(e).last().unwrap_or(e)
+    }
+
+    /// The entity followed by its parents in the active historical view.
+    pub fn ancestors(&self, e: EntityId) -> impl Iterator<Item = EntityId> + '_ {
+        std::iter::successors(Some(e), |id| {
+            self.entities.get(id)?.parent.filter(|parent| self.entities.contains_key(parent))
+        }).take(self.entities.len().max(1))
     }
 
     /// Merge entity `from` into `into`: territory, cities and missing values move.
@@ -2135,8 +2200,12 @@ impl Document {
     /// The river passing nearest to `p` within `tol` degrees: its id, the
     /// segment, and the closest point on it.
     pub fn river_at(&self, p: LonLat, tol: f64) -> Option<(LineId, usize, LonLat)> {
+        self.river_at_where(p, tol, |_, _| true)
+    }
+
+    pub fn river_at_where(&self, p: LonLat, tol: f64, visible: impl Fn(LineId, &LineFeature) -> bool) -> Option<(LineId, usize, LonLat)> {
         let mut best: Option<(f64, LineId, usize, LonLat)> = None;
-        for (id, r) in self.rivers.iter().filter(|(id, r)| !r.hidden && !self.group_hides(**id)) {
+        for (id, r) in self.rivers.iter().filter(|(id, r)| !r.hidden && !self.group_hides(**id) && visible(**id, r)) {
             for (i, w) in r.pts.windows(2).enumerate() {
                 let (q, d, _) = geom::closest_on_segment(p, w[0], w[1]);
                 if d <= tol && best.is_none_or(|b| d < b.0) {

@@ -18,11 +18,54 @@ pub struct Partition {
     pub target: Option<EntityId>,
     pub spec: PartitionSpec,
     pub plan: Option<(PartitionSpec, Result<Plan, String>)>,
+    source: Option<(u64, u64, Option<i32>, map_core::doc::LayerId)>,
+    pub adopt: Option<(EntityId, String, std::collections::BTreeSet<EntityId>)>,
 }
 
 const PLAN: Color32 = Color32::from_rgb(20, 120, 200);
 
 impl App {
+    pub fn adoption_window(&mut self, ctx: &egui::Context) {
+        let Some((parent, filter, selected)) = self.partition.adopt.as_mut() else { return; };
+        let parent = *parent;
+        let mut open = true;
+        let mut apply = false;
+        egui::Window::new("批量设置为下级").open(&mut open).default_width(430.0).show(ctx, |ui| {
+            ui.label(format!("上级 · {}", self.doc.entities.get(&parent).map_or("已删除", |e| e.name.as_str())));
+            ui.add(egui::TextEdit::singleline(filter).hint_text("搜索名称或编号（例如 YY-）"));
+            let needle = filter.trim().to_lowercase();
+            let candidates: Vec<_> = self.doc.entities.iter().filter(|(id, e)| {
+                **id != parent && e.kind == map_core::EntityKind::Country && e.layer == self.doc.active_layer
+                    && e.parent != Some(parent) && e.exists_in(self.doc.year)
+                    && (e.name.to_lowercase().contains(&needle) || e.code.to_lowercase().contains(&needle))
+            }).collect();
+            ui.horizontal(|ui| {
+                if ui.button("全选筛选结果").clicked() {
+                    selected.extend(candidates.iter().map(|(id,_)| **id));
+                }
+                if ui.button("清空选择").clicked() { selected.clear(); }
+            });
+            egui::ScrollArea::vertical().max_height(360.).show(ui, |ui| {
+                for (id, unit) in candidates {
+                    let mut marked = selected.contains(id);
+                    if ui.checkbox(&mut marked,format!("{}  ·  {}",unit.name,unit.code)).changed() {
+                        if marked { selected.insert(*id); } else { selected.remove(id); }
+                    }
+                }
+            });
+            ui.label(format!("已选 {} 个单位",selected.len()));
+            if ui.add_enabled(!selected.is_empty(),egui::Button::new("应用上级")).clicked() { apply = true; }
+        });
+        if apply {
+            let ids = selected.clone();
+            if self.edit("批量设置为下级", |doc| {
+                for id in ids { doc.record_parent(id, Some(parent))?; }
+                Ok(())
+            }).is_some() { open = false; }
+        }
+        if !open { self.partition.adopt = None; }
+    }
+
     pub fn open_partition(&mut self, e: EntityId) {
         self.partition.target = Some(e);
         self.partition.plan = None;
@@ -33,16 +76,20 @@ impl App {
     }
 
     pub fn partition_window(&mut self, ctx: &egui::Context) {
+        self.adoption_window(ctx);
         let Some(e) = self.partition.target.filter(|e| self.doc.entities.contains_key(e)) else {
             self.partition.target = None;
             return;
         };
         // the plan follows the settings (worked out again when they change)
-        let stale = self.partition.plan.as_ref().is_none_or(|(s, _)| *s != self.partition.spec);
+        let source = (self.history.generation(), self.scene.geometry_gen, self.doc.year, self.doc.active_layer);
+        let stale = self.partition.source != Some(source)
+            || self.partition.plan.as_ref().is_none_or(|(s, _)| *s != self.partition.spec);
         if stale {
             let spec = self.partition.spec.clone();
             let plan = self.doc.partition_plan(e, &spec);
             self.partition.plan = Some((spec, plan));
+            self.partition.source = Some(source);
         }
         let name = self.doc.entities[&e].name.clone();
         let mut open = true;

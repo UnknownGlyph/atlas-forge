@@ -2,7 +2,7 @@
 //! Built directly from the document (not from screen pixels), so exports
 //! are resolution-independent and keep real geometry.
 
-use map_core::doc::{Document, EntityKind, PlanarPolygon};
+use map_core::doc::{Document, EntityId, EntityKind, PlanarPolygon};
 use map_core::labels::LabelPath;
 use map_core::geom::{self, P2};
 use map_core::projection::Projection;
@@ -390,6 +390,19 @@ impl PixelMap {
 }
 
 pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Scene {
+    let paper_opts;
+    let o = if let Some(paper) = doc.paper {
+        paper_opts = ExportOptions {
+            projection: Projection::Equirectangular,
+            lon0: 0.0,
+            bounds: Some(paper.bounds()),
+            graticule: false,
+            scale_bar: false,
+            north_arrow: false,
+            ..o.clone()
+        };
+        &paper_opts
+    } else { o };
     let m = Mapper::new(o);
     let (w, h, scale) = (m.w, m.h, m.scale);
     let st = &doc.style;
@@ -468,38 +481,48 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
     }
     let kind = |f: FaceId| doc.topo.faces[&f].kind;
     let k = (o.width as f32 / 1600.0).max(1.0);
-    for pass in 0..3 {
-        for (_, e) in doc.topo.edges.iter() {
-            if doc.topo.on_pole(e) {
-                continue;
-            }
-            let (kl, kr) = (kind(e.left), kind(e.right));
-            let class = match (kl, kr) {
-                (FaceKind::Water, FaceKind::Water) => continue,
-                (FaceKind::Land, FaceKind::Land) => {
-                    let ta = doc.owner.get(&e.left).map(|x| doc.top_ancestor(*x));
-                    let tb = doc.owner.get(&e.right).map(|x| doc.top_ancestor(*x));
-                    if ta != tb {
-                        2
-                    } else {
-                        0
+    let mut by_rank = [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    let mut ancestry = std::collections::HashMap::<EntityId, Vec<EntityId>>::new();
+    for (_, edge) in &doc.topo.edges {
+        if doc.topo.on_pole(edge) {
+            continue;
+        }
+        let rank = match (kind(edge.left), kind(edge.right)) {
+            (FaceKind::Water, FaceKind::Water) => continue,
+            (FaceKind::Land, FaceKind::Land) => {
+                let (a, b) = (doc.owner.get(&edge.left), doc.owner.get(&edge.right));
+                if a == b {
+                    if st.hide_face_seams_in_export { continue; }
+                    2
+                } else if let (Some(&a), Some(&b)) = (a,b) {
+                    for id in [a,b] {
+                        ancestry.entry(id).or_insert_with(|| doc.ancestors(id).collect());
                     }
+                    let shared = ancestry[&a].iter().rev().zip(ancestry[&b].iter().rev())
+                        .take_while(|(a,b)| a == b).count();
+                    match shared { 0 => 4, 1 => 2, 2 => 1, _ => 0 }
+                } else {
+                    4
                 }
-                _ => 1,
-            };
-            if class != pass {
-                continue;
             }
+            _ => 3,
+        };
+        by_rank[rank].push(edge);
+    }
+    for (class, edges) in by_rank.into_iter().enumerate() {
+        for e in edges {
             let (c, wd) = match class {
-                0 => (st.internal, st.internal_width),
-                1 => (st.coast, st.coast_width),
+                0 => (st.internal, st.internal_width * 0.43),
+                1 => (st.internal, st.internal_width * 0.68),
+                2 => (st.internal, st.internal_width),
+                3 => (st.coast, st.coast_width),
                 _ => (st.border, st.border_width),
             };
             let pts = geom::unwrap_path(&doc.topo.edge_full(e), None);
             let from = s.lines.len();
             add_line(&mut s, &pts, c, wd * k);
             // a map theme's bands along the coast, widest first (sorted below)
-            if class == 1 && st.coast_glow_width > 0.0 {
+            if class == 3 && st.coast_glow_width > 0.0 {
                 let pieces: Vec<Vec<P2>> = s.lines[from..].iter().map(|l| l.pts.clone()).collect();
                 for (c, f) in st.glow_bands().into_iter().zip([2.0, 4.0 / 3.0, 2.0 / 3.0]) {
                     for p in &pieces {
@@ -734,22 +757,42 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
             // the application), bent glyph by glyph; placed ones where put
             let kk = k.min(2.0);
             let (min_px, max_px, min_fit) = (9.0 * kk, 38.0 * kk, 8.5 * kk);
-            let mut cands: Vec<(f64, String, Option<LabelPath>, Option<map_core::doc::LabelPlace>)> = Vec::new();
+            struct Candidate<'a> {
+                depth: usize,
+                name: &'a str,
+                path: Option<LabelPath>,
+                place: Option<map_core::doc::LabelPlace>,
+                manual: bool,
+            }
+            let mut cands = Vec::<Candidate<'_>>::new();
             for id in doc.countries() {
                 let e = &doc.entities[&id];
                 // no label in a year the country does not exist; a unit under
                 // another is named with its country
-                if e.label_hidden || !e.exists_in(doc.year) || e.name.trim().is_empty() || (e.parent.is_some() && e.label.is_none()) {
+                if e.label_hidden || !e.exists_in(doc.year) || e.name.trim().is_empty()
+                    || (!st.admin_typography && e.parent.is_some() && e.label.is_none()) {
                     continue;
                 }
+                let depth = doc.ancestors(id).count().saturating_sub(1);
                 let path = doc.label_path(id);
-                if e.label.is_none() && path.is_none() {
+                let place = e.label.or_else(|| {
+                    if !st.admin_typography || depth == 0 { return None; }
+                    let (at, free) = doc.label_anchor(id)?;
+                    let projected = m.scale * free.to_radians();
+                    (projected > 10.0).then(|| map_core::doc::LabelPlace::at(at))
+                });
+                if place.is_none() && path.is_none() {
                     continue;
                 }
-                cands.push((path.as_ref().map_or(0.0, |p| p.fit()), e.name.trim().to_string(), path, e.label));
+                cands.push(Candidate { depth, name:e.name.trim(), path, place, manual:e.label.is_some() });
             }
             // placed labels first: they always show, automatic ones keep clear of them
-            cands.sort_by(|a, b| b.3.is_some().cmp(&a.3.is_some()).then(b.0.total_cmp(&a.0)));
+            cands.sort_by(|a, b| {
+                let tier = if st.admin_typography { a.depth.cmp(&b.depth) } else { std::cmp::Ordering::Equal };
+                tier.then(b.manual.cmp(&a.manual)).then_with(|| {
+                    b.path.as_ref().map_or(0.0, |p| p.fit()).total_cmp(&a.path.as_ref().map_or(0.0, |p| p.fit()))
+                })
+            });
             let px_of = |ll: map_core::geom::LonLat| {
                 let q = m.px([geom::wrap_lon(ll.lon - o.lon0), ll.lat]);
                 [q[0] as f32, q[1] as f32]
@@ -775,8 +818,10 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
                 let (hw, hh) = ((tw * c + size * sn) * 0.5 + 1.5, (tw * sn + size * c) * 0.5 + 1.5);
                 [cx - hw, cy - hh, cx + hw, cy + hh]
             };
-            for (_, text, path, place) in cands {
-                let em = map_core::labels::name_em(&text) as f32;
+            for Candidate { depth, name: text, path, place, manual } in cands {
+                let face = st.label_type(map_core::label_type::Tier::administrative(depth));
+                let font = || face.font.map(str::to_owned);
+                let em = map_core::labels::name_em(text) as f32;
                 // the line on the image (its longest piece, left to right), its
                 // length and the room across it, and how large the name can be there
                 let line = path.as_ref().and_then(|p| longest_px_piece(&m, &p.line(32)).map(|l| (p, l)));
@@ -789,14 +834,19 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
                 });
                 match place {
                     Some(pl) => {
-                        let base = fitted.map_or(14.0 * kk, |(_, f, _)| f.clamp(min_px, max_px));
+                        let base = fitted.map_or(face.size * kk, |(_, f, _)| f.clamp(min_px, max_px));
                         let size = base * pl.scale;
-                        let tw = text_width(&text, size);
+                        let tw = text_width(text, size);
                         let p = px_of(pl.at);
                         // the box of the turned label, for the automatic ones to avoid
-                        boxes.push(glyph_box(p[0], p[1], tw, size, pl.angle));
+                        let b = glyph_box(p[0], p[1], tw, size, pl.angle);
+                        if st.admin_typography && !manual && (b[0] < 0.0 || b[1] < 0.0 || b[2] > w as f32
+                            || b[3] > h as f32 || boxes.iter().any(|q| !(b[2] < q[0] || q[2] < b[0] || b[3] < q[1] || q[3] < b[1]))) {
+                            continue;
+                        }
+                        boxes.push(b);
                         let (sa, ca) = pl.angle.to_radians().sin_cos();
-                        s.labels.push(SceneLabel { text, pos: [(p[0] + 0.35 * size * sa) as f64, (p[1] + 0.35 * size * ca) as f64], size, color: st.label, angle: pl.angle, italic: false, font: st.label_font.clone(), bold: st.label_bold });
+                        s.labels.push(SceneLabel { text:text.to_owned(), pos: [(p[0] + 0.35 * size * sa) as f64, (p[1] + 0.35 * size * ca) as f64], size, color: st.label, angle: pl.angle, italic: false, font:font(), bold:face.bold });
                     }
                     None => {
                         let (Some((_, l)), Some((len, fit, room))) = (line, fitted) else { continue };
@@ -879,7 +929,7 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
                         boxes.extend(gb);
                         let label = |text: String, c: [f32; 2], ang: f32| {
                             let (sa, ca) = ang.to_radians().sin_cos();
-                            SceneLabel { text, pos: [(c[0] + 0.35 * size * sa) as f64, (c[1] + 0.35 * size * ca) as f64], size, color: st.label, angle: ang, italic: false, font: st.label_font.clone(), bold: st.label_bold }
+                            SceneLabel { text, pos: [(c[0] + 0.35 * size * sa) as f64, (c[1] + 0.35 * size * ca) as f64], size, color: st.label, angle: ang, italic: false, font:font(), bold:face.bold }
                         };
                         let (a0, a1) = places.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.1), hi.max(p.1)));
                         if spacing < size * 0.05 && a1 - a0 < 1.0 {
@@ -891,7 +941,7 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
                             // the middle between the outer edges of the first and last glyphs
                             let d = (wl - wf) * 0.25;
                             let c = [(first[0] + last[0]) * 0.5 + d * ca, (first[1] + last[1]) * 0.5 - d * sa];
-                            s.labels.push(label(text, c, ang));
+                            s.labels.push(label(text.to_owned(), c, ang));
                         } else {
                             for (g, (c, ang)) in glyphs.into_iter().zip(places) {
                                 if !g.trim().is_empty() {
@@ -966,7 +1016,9 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
         // city names dark, or a dark theme's light ones
         let city_ink = if map_core::doc::halo_for(st.label) == [255, 255, 255, 255] { [40, 40, 40, 255] } else { st.label };
         if st.show_cities {
-            for (_, e) in doc.entities.iter() {
+            let capitals: HashSet<_> = doc.entities.values().filter(|e| e.parent.is_none() && e.layer == doc.active_layer && e.exists_in(doc.year))
+                .filter_map(|e| e.capital).collect();
+            for (id, e) in doc.entities.iter() {
                 let (EntityKind::City, Some(pos)) = (e.kind, e.pos) else { continue };
                 if !e.exists_in(doc.year) {
                     continue;
@@ -977,10 +1029,12 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
                 }
                 let r = 2.5 * k;
                 s.dots.push((p, r, [40, 40, 40, 255]));
-                let size = 11.0 * k.min(2.0);
+                let tier = if capitals.contains(id) { map_core::label_type::Tier::Capital } else { map_core::label_type::Tier::City };
+                let face = st.label_type(tier);
+                let size = if st.admin_typography { face.size } else { 11.0 } * k.min(2.0);
                 let tx = p[0] as f32 + r + 3.0 + text_width(&e.name, size) * 0.5;
                 if fits(&mut boxes, tx, p[1] as f32 + size * 0.35, text_width(&e.name, size), size) {
-                    s.labels.push(SceneLabel { text: e.name.clone(), pos: [tx as f64, p[1] + size as f64 * 0.35], size, color: city_ink, angle: 0.0, italic: false, font: None, bold: false });
+                    s.labels.push(SceneLabel { text: e.name.clone(), pos: [tx as f64, p[1] + size as f64 * 0.35], size, color: city_ink, angle: 0.0, italic: false, font:face.font.map(str::to_owned), bold:face.bold });
                 }
             }
         }

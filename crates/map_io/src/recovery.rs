@@ -24,6 +24,8 @@ pub struct RecoveryInfo {
     /// The crash log, when the snapshot was written as the program crashed.
     #[serde(default)]
     pub crash_log: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_history: Option<String>,
 }
 
 pub struct Recovery {
@@ -119,8 +121,16 @@ impl Recovery {
     /// As [`Recovery::write`], from a crash: the snapshot names its log.
     pub fn write_with(&self, doc: &Document, original: Option<PathBuf>, crash_log: Option<PathBuf>) -> Result<(), String> {
         let bytes = project::to_bytes(doc)?;
-        write_atomic(&self.path(&self.session, "atlas"), &bytes).map_err(|e| e.to_string())?;
-        let info = RecoveryInfo { session: self.session.clone(), original, name: doc.meta.name.clone(), saved_at: now_secs(), crash_log };
+        let existing = original.is_none().then(|| {
+            let bytes = fs::read(self.path(&self.session, "json")).ok()?;
+            serde_json::from_slice::<RecoveryInfo>(&bytes).ok()?.draft_history
+        }).flatten();
+        self.write_encoded(&bytes, &doc.meta.name, original, crash_log, existing)
+    }
+
+    pub fn write_encoded(&self, bytes: &[u8], name: &str, original: Option<PathBuf>, crash_log: Option<PathBuf>, draft_history: Option<String>) -> Result<(),String> {
+        write_atomic(&self.path(&self.session, "atlas"), bytes).map_err(|e| e.to_string())?;
+        let info = RecoveryInfo { session: self.session.clone(), original, name: name.into(), saved_at: now_secs(), crash_log, draft_history };
         let json = serde_json::to_vec_pretty(&info).map_err(|e| e.to_string())?;
         write_atomic(&self.path(&self.session, "json"), &json).map_err(|e| e.to_string())
     }
@@ -226,7 +236,7 @@ mod tests {
         a.write_with(&doc, None, Some(log.clone())).unwrap();
         let session_a = a.session().to_string();
         // an older snapshot's metadata has no `crash_log`
-        let old = RecoveryInfo { session: "old".into(), original: None, name: "旧".into(), saved_at: 1, crash_log: None };
+        let old = RecoveryInfo { session: "old".into(), original: None, name: "旧".into(), saved_at: 1, crash_log: None, draft_history: None };
         let mut v = serde_json::to_value(&old).unwrap();
         v.as_object_mut().unwrap().remove("crash_log");
         assert_eq!(serde_json::from_value::<RecoveryInfo>(v).unwrap(), old);

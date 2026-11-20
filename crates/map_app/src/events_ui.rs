@@ -40,13 +40,15 @@ impl App {
             };
             let r = r.on_hover_text(format!("{}　{when}{}", e.name, if e.note.trim().is_empty() { String::new() } else { format!("\n{}", e.note.trim()) }));
             if r.clicked() {
-                jump = Some(e);
+                jump = Some((e,r.double_clicked()));
             }
         }
-        if let Some(e) = jump {
+        if let Some((e,double)) = jump {
             self.set_year(Some(e.year));
             self.event_sel = Some(e.id);
             self.events_open = true;
+            let board=map_core::world_book::WorldBook::current(&self.doc);
+            self.book_related(map_core::world_book::Node::Event(board,e.id),double);
         }
     }
 
@@ -59,6 +61,7 @@ impl App {
         let mut remove = None;
         let mut add = false;
         let mut save = false;
+        let mut book_open = None;
         let cal = self.doc.calendar.clone();
         egui::Window::new("事件时间线").open(&mut open).default_width(340.0).show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -88,6 +91,7 @@ impl App {
             });
             let Some(e) = self.event_sel.and_then(|id| self.doc.event(id)).cloned() else { return };
             ui.separator();
+            if ui.button("事件资料与画板…").clicked(){book_open=Some(e.id);}
             let (mut name, mut note) = self.event_text.clone().filter(|t| t.0 == e.id).map(|t| (t.1, t.2)).unwrap_or((e.name.clone(), e.note.clone()));
             let rn = ui.add(egui::TextEdit::singleline(&mut name).hint_text("名称").desired_width(300.0));
             ui.horizontal(|ui| {
@@ -160,6 +164,9 @@ impl App {
                 }
             });
         });
+        if let Some(event)=book_open {
+            self.book_context(map_core::world_book::Node::Event(map_core::world_book::WorldBook::current(&self.doc),event));
+        }
         if add {
             let y = self.doc.year.unwrap_or(self.timeline_last_year);
             if let Some(id) = self.edit("新建事件", |d| Ok(d.add_event("", y, None))) {

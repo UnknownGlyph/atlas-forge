@@ -25,11 +25,12 @@ A world from the new-world wizard (seed 7), exported straight to PNG: hill shadi
 
 Atlas Forge 把陆地、国家、河流与城市画在**同一张共享边界的矢量拓扑**上：两国之间的边界只有一条，改一处，两边一起变。边界、海岸与归属**逐年变化**——在某一年做的修改从那一年起生效，更早的年份保持原样。画好的世界可以直接导出成**成品地图**。二维多投影地图与三维地球共用同一份数据，**完全离线**；可选的 **AI 助手**能在一份草稿上与你共同创作。
 
-> **v0.1.0-alpha** 是第一个公开版本。功能已经很多，但仍在打磨：请为重要的工程保留备份（程序保存时也会自动保留备份）。目前只支持 Windows。
+> **v0.2.0-alpha** 提供 Windows 便携版。新增磁盘保存点、按时间或编辑步数自动保存、五国区域示例及 22 章创作教程。
 
 ### 功能
 
 - **行星环境与气候（开发版）**：从空白行星或现有地图生成逐月参考图，在平面与球体上查看，可手动运行、实时更新、固定局部结果并比较方案。[气候使用说明](docs/CLIMATE.md)
+- **世界资料**：关联历史事件、地理对象、图文资料和各自有图层与年份的独立画板。支持多层浏览、跨画板链接和单独或批量导出。[世界资料使用说明](docs/WORLD_BOOK.md)
 
 - **绘制与拓扑**：画陆地、挖湖泊；为国家扩张（只占海与无主地）或夺取（连邻国一起）；切分、合并、编辑顶点（共享边界两侧同时更新，非法形状会被拒绝）；吸附到边、节点与参考线；完整的撤销历史。
 - **时间**：时间轴上选好年份再编辑；国家的建立与终结、继承者、随年份变化的上下级；事件时间轴、局部视图（一个区域、一段年份，可回放）、自定义历法。
@@ -37,7 +38,7 @@ Atlas Forge 把陆地、国家、河流与城市画在**同一张共享边界的
 - **图层与数据**：文化、宗教等图层与政治层并存；按百分比分享的份额层；随年份变化的数据字段与专题图；CSV、GeoJSON、Shapefile 导入导出。
 - **外观**：地图主题（现代、古典图集、羊皮纸、深色）、命名样式、山地与森林图案、地形晕渲；行军路线、商路、航线、铁路及其装饰；战役等符号；国名沿国土弯曲、贴在地球上。
 - **导出与版式**：PNG、SVG、PDF；逐年系列、动画（借助 ffmpeg）、按已存版式出图集；标题、图例、比例尺、指北针与插图。拥挤的地图上，国名优先于河流与路线的名称，后者沿自己的线滑开让位。
-- **脚本与 AI 接口**：`atlas-query`（JSON 行查询）、`atlas-mcp`（MCP 服务器，26 个工具）、`atlas-agent`（命令行助手）与应用内的 AI 助手——编辑只改草稿，看过前后对比再一步采用，可撤销。
+- **脚本与 AI 接口**：`atlas-script` 可离线查询、编辑草稿、批量处理和运行插件。Codex 和 Claude Code 可接入 `atlas-mcp`。内置助手及 `atlas-agent` 支持 Gemini、OpenAI、Anthropic 与兼容端点。[本地 API](docs/API.md) · [插件编写](docs/PLUGINS.md)
 
 <img src="docs/images/test_world_1800.png" alt="The test world in 1800" width="100%">
 
@@ -45,7 +46,7 @@ Atlas Forge 把陆地、国家、河流与城市画在**同一张共享边界的
 
 ### 下载与运行
 
-1. 从 [Releases](https://github.com/UnknownGlyph/atlas-forge/releases) 下载 `AtlasForge-0.1.0-alpha-windows-x64.zip`，解压后运行 `atlas.exe`，无需安装。
+1. 从 [Releases](https://github.com/UnknownGlyph/atlas-forge/releases) 下载 `AtlasForge-0.2.0-alpha-windows-x64.zip`，解压后运行 `atlas.exe`，无需安装。
 2. 需要 Windows 10/11 x64，以及支持 DirectX 12、Vulkan 或 OpenGL 的显卡。
 3. 检查程序：`atlas.exe --self-test <文件夹>` 会生成世界、划分国家、修路、保存读回并导出 PNG/SVG/PDF，把报告写到该文件夹的 `自检报告.txt`。
 4. 打开工程：把 `.atlas` 文件拖到 `atlas.exe` 上，或 `atlas.exe 世界.atlas`。压缩包里带一个示例世界。
@@ -88,8 +89,8 @@ crates/map_core    数据模型与算法：共享边界拓扑、按年份的归�
 crates/map_io      .atlas 工程、导出场景与 PNG/SVG/PDF、GeoJSON/CSV/Shapefile、字体
 crates/map_render  三角化与分块缓存、wgpu 绘制（平面与地球）、相机
 crates/map_app     桌面程序 atlas.exe（egui/eframe）
-crates/map_api     查询与编辑接口：atlas-query、atlas-mcp
-crates/map_ai      AI 助手（Gemini 与 OpenAI 兼容接口）：atlas-agent
+crates/map_api     查询、草稿编辑、脚本与插件：atlas-query、atlas-mcp、atlas-script
+crates/map_ai      AI 助手（Gemini、OpenAI、Anthropic 与兼容接口）：atlas-agent
 crates/map_bench   性能基准
 assets/fonts       随附字体 Noto Sans SC（SIL OFL 1.1）
 ```
@@ -116,7 +117,7 @@ assets/fonts       随附字体 Noto Sans SC（SIL OFL 1.1）
 
 Atlas Forge draws land, countries, rivers and cities on **one shared-border vector topology**: there is one border between two countries, and moving it changes both. Borders, coasts and ownership **change year by year**: an edit made in a year takes effect from that year on, and earlier years stay as they were. A finished world exports straight to **finished maps**. The flat map, in several projections, and the 3D globe share the same data, and everything works **offline**; an optional **AI assistant** can co-create with you on a draft.
 
-> **v0.1.0-alpha** is the first public release. It already does a lot, but it is still being polished: keep backups of important projects (the program also keeps backups when it saves). Windows only for now.
+> **v0.2.0-alpha** is available as a portable Windows build. It adds named checkpoints, configurable autosave, and an illustrated 22-chapter tutorial with an editable five-country atlas.
 
 ### Features
 
@@ -126,11 +127,11 @@ Atlas Forge draws land, countries, rivers and cities on **one shared-border vect
 - **Layers and data**: culture or religion layers beside the political one; share layers split a face by percentage; data fields that change by year drive thematic maps; CSV, GeoJSON and Shapefile import and export.
 - **Look**: map themes (modern, classic atlas, parchment, dark), named styles, mountain and forest patterns, hill shading; campaign routes, trade routes, sea lanes and railways with their decorations; battle and other symbols; country names bent along the land and draped on the globe.
 - **Export and layout**: PNG, SVG, PDF; one map per year, animations (with ffmpeg), atlases from saved layouts; title, legend, scale bar, north arrow and insets. On crowded maps country names come before the names of rivers and routes, which slide along their lines to make room.
-- **Scripting and AI**: `atlas-query` (JSON-lines queries), `atlas-mcp` (an MCP server with 26 tools), `atlas-agent` (a command-line assistant) and the in-app AI assistant. Edits change only a draft, which you apply in one undoable step after comparing before and after.
+- **Scripting and AI**: `atlas-script` handles local queries, draft editing and plugin commands. `atlas-mcp` connects tools to Codex and Claude Code. The desktop and `atlas-agent` use Gemini, OpenAI, Anthropic and compatible endpoints. [Local API](docs/API.md) · [Plugin guide](docs/PLUGINS.md)
 
 ### Download and run
 
-1. Download `AtlasForge-0.1.0-alpha-windows-x64.zip` from [Releases](https://github.com/UnknownGlyph/atlas-forge/releases), unzip it and run `atlas.exe`; nothing is installed.
+1. Download `AtlasForge-0.2.0-alpha-windows-x64.zip` from [Releases](https://github.com/UnknownGlyph/atlas-forge/releases), unzip it and run `atlas.exe`; nothing is installed.
 2. It needs Windows 10/11 x64 and a graphics card with DirectX 12, Vulkan or OpenGL.
 3. Checking the program: `atlas.exe --self-test <folder>` makes a world, partitions a country, builds roads, saves and reads back, exports PNG/SVG/PDF, and writes its report to `自检报告.txt` in that folder.
 4. Opening a project: drop a `.atlas` file on `atlas.exe`, or run `atlas.exe world.atlas`. A sample world comes in the zip.

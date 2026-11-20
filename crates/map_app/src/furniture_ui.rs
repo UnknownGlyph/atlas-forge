@@ -17,7 +17,7 @@ fn nice(t: f64) -> f64 {
 impl App {
     /// The scale bar and north arrow, in the lower left of a view.
     pub fn draw_furniture(&self, painter: &egui::Painter, vg: &ViewGeom) {
-        if !self.furniture {
+        if !self.furniture || self.doc.paper.is_some() {
             return;
         }
         let r = vg.rect;

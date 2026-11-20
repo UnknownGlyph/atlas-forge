@@ -1,0 +1,574 @@
+{
+  "regions": [
+    {
+      "name": "燧明市",
+      "code": "SM",
+      "seat": "燧明市区",
+      "group": 1,
+      "area": 2.6,
+      "pop": 3000,
+      "gdp": 28650,
+      "xy": [
+        39,
+        44
+      ]
+    },
+    {
+      "name": "中央省",
+      "code": "ZY",
+      "seat": "明心市",
+      "group": 1,
+      "area": 35.0,
+      "pop": 3500,
+      "gdp": 28000,
+      "xy": [
+        44,
+        44
+      ]
+    },
+    {
+      "name": "兴川市",
+      "code": "XC",
+      "seat": "兴川市区",
+      "group": 1,
+      "area": 1.8,
+      "pop": 1900,
+      "gdp": 19950,
+      "xy": [
+        48,
+        50
+      ]
+    },
+    {
+      "name": "兴汉省",
+      "code": "XH",
+      "seat": "兴源市",
+      "group": 1,
+      "area": 21.9,
+      "pop": 2800,
+      "gdp": 18480,
+      "xy": [
+        38,
+        34
+      ]
+    },
+    {
+      "name": "春秋省",
+      "code": "CQ",
+      "seat": "青序市",
+      "group": 1,
+      "area": 35.0,
+      "pop": 2500,
+      "gdp": 16750,
+      "xy": [
+        27,
+        44
+      ]
+    },
+    {
+      "name": "四季平省",
+      "code": "SJP",
+      "seat": "丰稔市",
+      "group": 1,
+      "area": 30.6,
+      "pop": 3000,
+      "gdp": 19200,
+      "xy": [
+        40,
+        61
+      ]
+    },
+    {
+      "name": "共和市",
+      "code": "GH",
+      "seat": "共和市区",
+      "group": 2,
+      "area": 2.2,
+      "pop": 2500,
+      "gdp": 23500,
+      "xy": [
+        4,
+        38
+      ]
+    },
+    {
+      "name": "境地省",
+      "code": "JD",
+      "seat": "境宁市",
+      "group": 2,
+      "area": 30.6,
+      "pop": 2600,
+      "gdp": 19500,
+      "xy": [
+        10,
+        38
+      ]
+    },
+    {
+      "name": "日落省",
+      "code": "RL",
+      "seat": "西霞市",
+      "group": 2,
+      "area": 30.6,
+      "pop": 1350,
+      "gdp": 8775,
+      "xy": [
+        4,
+        25
+      ]
+    },
+    {
+      "name": "西洋省",
+      "code": "XY",
+      "seat": "澜港市",
+      "group": 2,
+      "area": 35.0,
+      "pop": 2250,
+      "gdp": 15525,
+      "xy": [
+        12,
+        55
+      ]
+    },
+    {
+      "name": "阿尔比恩省",
+      "code": "ABE",
+      "seat": "白崖市",
+      "group": 2,
+      "area": 17.5,
+      "pop": 1400,
+      "gdp": 10220,
+      "xy": [
+        15,
+        25
+      ]
+    },
+    {
+      "name": "理因省",
+      "code": "LYn",
+      "seat": "格致市",
+      "group": 2,
+      "area": 26.2,
+      "pop": 1600,
+      "gdp": 12320,
+      "xy": [
+        22,
+        35
+      ]
+    },
+    {
+      "name": "切斯特省",
+      "code": "QST",
+      "seat": "切斯港",
+      "group": 3,
+      "area": 26.2,
+      "pop": 1200,
+      "gdp": 9720,
+      "xy": [
+        15,
+        9
+      ]
+    },
+    {
+      "name": "沙丘省",
+      "code": "SQ",
+      "seat": "赤沙绿洲市",
+      "group": 3,
+      "area": 35.0,
+      "pop": 750,
+      "gdp": 6225,
+      "xy": [
+        24,
+        19
+      ]
+    },
+    {
+      "name": "北宁省",
+      "code": "BN",
+      "seat": "朔宁市",
+      "group": 3,
+      "area": 30.6,
+      "pop": 1100,
+      "gdp": 6930,
+      "xy": [
+        34,
+        9
+      ]
+    },
+    {
+      "name": "广野省",
+      "code": "GY",
+      "seat": "原丰市",
+      "group": 3,
+      "area": 30.6,
+      "pop": 1250,
+      "gdp": 8125,
+      "xy": [
+        38,
+        22
+      ]
+    },
+    {
+      "name": "新日尔扎省",
+      "code": "XRZ",
+      "seat": "雪原城",
+      "group": 3,
+      "area": 17.5,
+      "pop": 900,
+      "gdp": 6390,
+      "xy": [
+        46,
+        9
+      ]
+    },
+    {
+      "name": "青野省",
+      "code": "QY",
+      "seat": "苍原城",
+      "group": 3,
+      "area": 21.9,
+      "pop": 1100,
+      "gdp": 6600,
+      "xy": [
+        50,
+        26
+      ]
+    },
+    {
+      "name": "南卡罗州",
+      "code": "NKL",
+      "seat": "南卡罗城",
+      "group": 4,
+      "area": 47.8,
+      "pop": 2100,
+      "gdp": 14910,
+      "xy": [
+        58,
+        12
+      ]
+    },
+    {
+      "name": "林茂省",
+      "code": "LM",
+      "seat": "松涛市",
+      "group": 4,
+      "area": 43.7,
+      "pop": 1050,
+      "gdp": 6195,
+      "xy": [
+        76,
+        11
+      ]
+    },
+    {
+      "name": "木翠省",
+      "code": "MC",
+      "seat": "翠林市",
+      "group": 4,
+      "area": 30.6,
+      "pop": 1200,
+      "gdp": 7320,
+      "xy": [
+        68,
+        25
+      ]
+    },
+    {
+      "name": "叶归省",
+      "code": "YG",
+      "seat": "丹枫市",
+      "group": 4,
+      "area": 21.9,
+      "pop": 1300,
+      "gdp": 8190,
+      "xy": [
+        58,
+        30
+      ]
+    },
+    {
+      "name": "新天省",
+      "code": "XT",
+      "seat": "星穹市",
+      "group": 4,
+      "area": 30.6,
+      "pop": 1450,
+      "gdp": 12035,
+      "xy": [
+        80,
+        29
+      ]
+    },
+    {
+      "name": "龙吟港市",
+      "code": "LY",
+      "seat": "龙吟港区",
+      "group": 5,
+      "area": 2.4,
+      "pop": 2300,
+      "gdp": 23690,
+      "xy": [
+        83,
+        50
+      ]
+    },
+    {
+      "name": "初耀省",
+      "code": "CY",
+      "seat": "晨曦市",
+      "group": 5,
+      "area": 35.0,
+      "pop": 2100,
+      "gdp": 15540,
+      "xy": [
+        86,
+        40
+      ]
+    },
+    {
+      "name": "新洋省",
+      "code": "XYa",
+      "seat": "东澜市",
+      "group": 5,
+      "area": 43.7,
+      "pop": 3000,
+      "gdp": 25200,
+      "xy": [
+        70,
+        43
+      ]
+    },
+    {
+      "name": "江东省",
+      "code": "JDo",
+      "seat": "澄江市",
+      "group": 5,
+      "area": 43.7,
+      "pop": 3700,
+      "gdp": 31635,
+      "xy": [
+        56,
+        50
+      ]
+    },
+    {
+      "name": "东波州",
+      "code": "DB",
+      "seat": "东波城",
+      "group": 5,
+      "area": 35.0,
+      "pop": 2450,
+      "gdp": 18620,
+      "xy": [
+        79,
+        60
+      ]
+    },
+    {
+      "name": "东定省",
+      "code": "DD",
+      "seat": "定澜市",
+      "group": 5,
+      "area": 35.0,
+      "pop": 2150,
+      "gdp": 16125,
+      "xy": [
+        65,
+        62
+      ]
+    },
+    {
+      "name": "新四方省",
+      "code": "XSF",
+      "seat": "通达市",
+      "group": 5,
+      "area": 21.9,
+      "pop": 2000,
+      "gdp": 14300,
+      "xy": [
+        51,
+        65
+      ]
+    },
+    {
+      "name": "南江省",
+      "code": "NJ",
+      "seat": "南江市",
+      "group": 6,
+      "area": 35.0,
+      "pop": 3000,
+      "gdp": 21900,
+      "xy": [
+        54,
+        77
+      ]
+    },
+    {
+      "name": "福至省",
+      "code": "FZ",
+      "seat": "福湾市",
+      "group": 6,
+      "area": 30.6,
+      "pop": 2200,
+      "gdp": 15400,
+      "xy": [
+        68,
+        75
+      ]
+    },
+    {
+      "name": "南安省",
+      "code": "NA",
+      "seat": "安海市",
+      "group": 6,
+      "area": 26.2,
+      "pop": 2000,
+      "gdp": 13800,
+      "xy": [
+        59,
+        90
+      ]
+    },
+    {
+      "name": "圣基艾姆州",
+      "code": "SJM",
+      "seat": "圣基艾姆城",
+      "group": 6,
+      "area": 39.3,
+      "pop": 2400,
+      "gdp": 18480,
+      "xy": [
+        43,
+        94
+      ]
+    },
+    {
+      "name": "盛花省",
+      "code": "SH",
+      "seat": "百花市",
+      "group": 6,
+      "area": 26.2,
+      "pop": 1700,
+      "gdp": 10200,
+      "xy": [
+        39,
+        74
+      ]
+    },
+    {
+      "name": "独岛省",
+      "code": "DDa",
+      "seat": "天火港市",
+      "group": 6,
+      "area": 13.1,
+      "pop": 900,
+      "gdp": 6750,
+      "xy": [
+        88,
+        96
+      ]
+    },
+    {
+      "name": "川南省",
+      "code": "CN",
+      "seat": "汇川城",
+      "group": 7,
+      "area": 35.0,
+      "pop": 2400,
+      "gdp": 18000,
+      "xy": [
+        28,
+        60
+      ]
+    },
+    {
+      "name": "麻里亚州",
+      "code": "MLY",
+      "seat": "麻里亚城",
+      "group": 7,
+      "area": 21.9,
+      "pop": 1400,
+      "gdp": 8260,
+      "xy": [
+        20,
+        68
+      ]
+    },
+    {
+      "name": "奇普州",
+      "code": "QP",
+      "seat": "奇普城",
+      "group": 7,
+      "area": 17.5,
+      "pop": 1200,
+      "gdp": 6960,
+      "xy": [
+        28,
+        78
+      ]
+    },
+    {
+      "name": "异域省",
+      "code": "YY",
+      "seat": "赤霞城",
+      "group": 7,
+      "area": 17.5,
+      "pop": 900,
+      "gdp": 4950,
+      "xy": [
+        14,
+        75
+      ]
+    },
+    {
+      "name": "马丘比丘省",
+      "code": "MQ",
+      "seat": "云梯城",
+      "group": 7,
+      "area": 30.6,
+      "pop": 1150,
+      "gdp": 6555,
+      "xy": [
+        20,
+        87
+      ]
+    },
+    {
+      "name": "盘山省",
+      "code": "PSh",
+      "seat": "盘龙城",
+      "group": 7,
+      "area": 35.0,
+      "pop": 1250,
+      "gdp": 10125,
+      "xy": [
+        34,
+        89
+      ]
+    }
+  ],
+  "grid": [
+    ".. .. .. .. .. .. ML ML ML ML ML .. .. PS PS PS PS PS PS PS PS PS PS PS PS .. .. .. .. .. .. ..",
+    ".. .. .. .. .. ML ML ML ML ML ML ML PS PS PS PS PS PS PS PS PS PS PS PS PS PS .. .. .. .. .. ..",
+    ".. .. .. .. ML ML ML ML ML ML ML ML PS PS PS PS PS PS PS PS PS PS PS PS PS PS .. .. .. .. .. ..",
+    ".. .. .. .. ML ML ML ML ML ML ML ML PS PS PS PS PS PS PS PS PS PS PS PS PS .. .. .. .. .. .. ..",
+    ".. .. .. .. ML ML ML ML ML ML ML ML PS PS PS PS PS PS PS PS PS PS PS PS .. .. .. .. .. .. .. ..",
+    ".. .. .. .. .. ML ML QST QST QST BN BN BN BN XRZ XRZ NKL NKL NKL NKL LM LM LM LM .. .. .. .. .. .. .. ..",
+    ".. .. .. .. .. .. QST QST QST SQ SQ BN BN BN XRZ XRZ NKL NKL NKL NKL LM LM LM LM .. .. .. .. .. .. .. ..",
+    ".. .. .. .. .. RL RL ABE SQ SQ SQ SQ GY GY GY QY NKL NKL NKL MC MC LM LM XT .. .. .. .. .. .. .. ..",
+    ".. .. .. .. RL RL RL ABE ABE SQ SQ GY GY GY GY QY QY YG YG MC MC MC XT XT .. .. .. .. .. .. .. ..",
+    ".. .. .. .. RL RL JD JD ABE LYn LYn LYn XH XH XH QY QY YG YG MC MC XT XT XT CY .. .. .. .. .. .. ..",
+    ".. .. .. .. .. GH JD JD LYn LYn CQ CQ XH XH ZY ZY ZY YG XYa XYa XYa XYa XT CY CY CY .. .. .. .. .. ..",
+    ".. .. .. .. .. JD JD JD LYn CQ CQ CQ CQ SM ZY ZY JDo JDo JDo XYa XYa XYa CY CY CY CY .. .. .. .. .. ..",
+    ".. .. .. .. .. .. XY XY XY CQ CQ CN ZY ZY ZY XC JDo JDo JDo JDo XYa XYa XYa LY .. .. .. .. .. .. .. ..",
+    ".. .. .. .. .. .. XY XY XY CN CN CN SJP SJP SJP JDo JDo JDo DD DD DD DB DB DB DB .. .. .. .. .. .. ..",
+    ".. .. .. XJ XJ XJ XY XY MLY MLY CN CN SJP SJP SJP XSF XSF XSF DD DD DD DB DB DB DS DS DS DS .. .. .. ..",
+    ".. .. XJ XJ XJ XJ XJ YY MLY MLY CN CN SH SH SJP XSF XSF NJ DD DD FZ FZ DB DS DS DS DS DS DS DS .. ..",
+    ".. XJ XJ XJ XJ XJ XJ YY YY MLY QP QP SH SH SH NJ NJ NJ NJ FZ FZ FZ .. DS DS DS DS DS DS DS .. ..",
+    ".. XJ XJ XJ XJ XJ XJ YY MQ MQ QP QP PSh PSh SH NJ NJ NJ FZ FZ CW CW .. .. DS DS DS DS DS .. DS ..",
+    ".. XJ XJ XJ XJ XJ XJ MQ MQ MQ MQ PSh PSh PSh SJM SJM NA NA NA NA CW CW .. .. .. DS DS DS .. .. DS ..",
+    ".. .. XJ XJ XJ XJ XJ KL KL KL MQ PSh PSh SJM SJM SJM SJM NA NA .. .. .. .. .. DDa DDa .. .. .. .. .. ..",
+    ".. .. .. XJ XJ XJ XJ .. KL KL KL PSh SJM SJM SJM .. .. .. .. .. .. .. .. .. DDa .. .. .. .. .. .. ..",
+    ".. .. XJ XJ .. XJ XJ .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .."
+  ]
+}
