@@ -42,19 +42,35 @@ Copy-Item "$root\docs\USER_GUIDE.en.md" (Join-Path $out "USER_GUIDE.en.md")
 Copy-Item "$root\docs\CLIMATE.md" (Join-Path $out "CLIMATE.md")
 Copy-Item "$root\docs\API.md", "$root\docs\PLUGINS.md" $out
 Copy-Item "$root\docs\WORLD_BOOK.md" $out
+Copy-Item "$root\docs\CREATION_WORKSPACES.md", "$root\docs\ASTRONOMY.md" $out
 Copy-Item "$root\docs\tutorial" (Join-Path $out "tutorial") -Recurse
 Copy-Item "$root\docs\examples\create-city.atlas-plugin.json" (Join-Path $out "示例")
 Copy-Item "$root\crates\map_io\tests\fixtures\v1_world.atlas" (Join-Path $out "示例\示例世界.atlas")
 # no path or name of this computer in the programs
-$private = @($root, $env:USERPROFILE, $env:USERNAME) | Where-Object { $_ -and $_.Length -ge 3 }
+$privatePaths = @($root, $env:USERPROFILE) | Where-Object { $_ -and $_.Length -ge 3 }
+$byteText = [Text.Encoding]::GetEncoding(28591)
+$gaia = [IO.File]::ReadAllText((Join-Path $root 'assets/astronomy/gaia-dr3-bright.csv')).Replace("`r`n", "`n")
+$knownGaia = $byteText.GetString([Text.Encoding]::UTF8.GetBytes($gaia))
 foreach ($exe in $programs) {
     $bytes = [IO.File]::ReadAllBytes((Join-Path $out $exe))
-    $text = [Text.Encoding]::GetEncoding(28591).GetString($bytes)
+    $text = $byteText.GetString($bytes)
     $wide = [Text.Encoding]::Unicode.GetString($bytes)
-    foreach ($s in $private) {
-        $utf8 = [Text.Encoding]::GetEncoding(28591).GetString([Text.Encoding]::UTF8.GetBytes($s))
-        if ($text.IndexOf($utf8, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or $wide.IndexOf($s, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-            throw "$exe 中含有本机的路径或用户名"
+    foreach ($path in $privatePaths) {
+        foreach ($spelling in @($path, $path.Replace([char]92, [char]47))) {
+            $utf8 = $byteText.GetString([Text.Encoding]::UTF8.GetBytes($spelling))
+            if ($text.IndexOf($utf8, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or $wide.IndexOf($spelling, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                throw "$exe 中含有本机路径"
+            }
+        }
+    }
+    if ($env:USERNAME -and $env:USERNAME.Length -ge 3) {
+        # Exact embedded public catalog bytes can contain a decimal value
+        # whose digits coincide with a local account name. Check every byte
+        # outside that known block and keep the path check over the whole file.
+        $accountText = if ($exe -eq "atlas.exe") { $text.Replace($knownGaia, "") } else { $text }
+        $account = $byteText.GetString([Text.Encoding]::UTF8.GetBytes($env:USERNAME))
+        if ($accountText.IndexOf($account, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or $wide.IndexOf($env:USERNAME, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            throw "$exe 中含有本机用户名"
         }
     }
 }

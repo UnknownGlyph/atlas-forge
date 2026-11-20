@@ -30,9 +30,9 @@ impl App {
         let parent = *parent;
         let mut open = true;
         let mut apply = false;
-        egui::Window::new("批量设置为下级").open(&mut open).default_width(430.0).show(ctx, |ui| {
-            ui.label(format!("上级 · {}", self.doc.entities.get(&parent).map_or("已删除", |e| e.name.as_str())));
-            ui.add(egui::TextEdit::singleline(filter).hint_text("搜索名称或编号（例如 YY-）"));
+        egui::Window::new(crate::i18n::tr("批量设置为下级")).open(&mut open).default_width(430.0).show(ctx, |ui| {
+            ui.label(crate::trf!("上级 · {}", self.doc.entities.get(&parent).map_or("已删除", |e| e.name.as_str())));
+            ui.add(egui::TextEdit::singleline(filter).hint_text(crate::i18n::tr("搜索名称或编号（例如 YY-）")));
             let needle = filter.trim().to_lowercase();
             let candidates: Vec<_> = self.doc.entities.iter().filter(|(id, e)| {
                 **id != parent && e.kind == map_core::EntityKind::Country && e.layer == self.doc.active_layer
@@ -40,10 +40,10 @@ impl App {
                     && (e.name.to_lowercase().contains(&needle) || e.code.to_lowercase().contains(&needle))
             }).collect();
             ui.horizontal(|ui| {
-                if ui.button("全选筛选结果").clicked() {
+                if ui.button(crate::i18n::tr("全选筛选结果")).clicked() {
                     selected.extend(candidates.iter().map(|(id,_)| **id));
                 }
-                if ui.button("清空选择").clicked() { selected.clear(); }
+                if ui.button(crate::i18n::tr("清空选择")).clicked() { selected.clear(); }
             });
             egui::ScrollArea::vertical().max_height(360.).show(ui, |ui| {
                 for (id, unit) in candidates {
@@ -53,8 +53,8 @@ impl App {
                     }
                 }
             });
-            ui.label(format!("已选 {} 个单位",selected.len()));
-            if ui.add_enabled(!selected.is_empty(),egui::Button::new("应用上级")).clicked() { apply = true; }
+            ui.label(crate::trf!("已选 {} 个单位",selected.len()));
+            if ui.add_enabled(!selected.is_empty(),egui::Button::new(crate::i18n::tr("应用上级"))).clicked() { apply = true; }
         });
         if apply {
             let ids = selected.clone();
@@ -94,36 +94,36 @@ impl App {
         let name = self.doc.entities[&e].name.clone();
         let mut open = true;
         let mut apply = false;
-        egui::Window::new("自动划分").open(&mut open).resizable(false).default_width(300.0).show(ctx, |ui| {
+        egui::Window::new(crate::i18n::tr("自动划分")).open(&mut open).resizable(false).default_width(300.0).show(ctx, |ui| {
             ui.label(egui::RichText::new(&name).strong());
             let s = &mut self.partition.spec;
             egui::Grid::new("partition-grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                ui.label("单位数");
+                ui.label(crate::i18n::tr("单位数"));
                 ui.add(egui::Slider::new(&mut s.units, 2..=40));
                 ui.end_row();
-                ui.label("划为");
+                ui.label(crate::i18n::tr("划为"));
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut s.provinces, false, "新国家").on_hover_text("原国家保留其中一块，其余成为新的国家");
-                    ui.radio_value(&mut s.provinces, true, "下级地区（省）").on_hover_text("全部成为这个国家的下级；政治地图上仍是一个国家，内部画出省界");
+                    ui.radio_value(&mut s.provinces, false, crate::i18n::tr("新国家")).on_hover_text(crate::i18n::tr("原国家保留其中一块，其余成为新的国家"));
+                    ui.radio_value(&mut s.provinces, true, crate::i18n::tr("下级地区（省）")).on_hover_text(crate::i18n::tr("全部成为这个国家的下级；政治地图上仍是一个国家，内部画出省界"));
                 });
                 ui.end_row();
-                ui.label("面积");
-                ui.checkbox(&mut s.balance, "大致均衡");
+                ui.label(crate::i18n::tr("面积"));
+                ui.checkbox(&mut s.balance, crate::i18n::tr("大致均衡"));
                 ui.end_row();
-                ui.label("边界");
-                ui.checkbox(&mut s.follow, "尽量沿河流与山脊").on_hover_text("有河流或地形时，跨越它们的代价更高");
+                ui.label(crate::i18n::tr("边界"));
+                ui.checkbox(&mut s.follow, crate::i18n::tr("尽量沿河流与山脊")).on_hover_text(crate::i18n::tr("有河流或地形时，跨越它们的代价更高"));
                 ui.end_row();
-                ui.label("名称风格");
+                ui.label(crate::i18n::tr("名称风格"));
                 egui::ComboBox::from_id_salt("partition-style").selected_text(s.style.name()).show_ui(ui, |ui| {
                     for st in NameStyle::ALL {
                         ui.selectable_value(&mut s.style, st, st.name());
                     }
                 });
                 ui.end_row();
-                ui.label("方案");
+                ui.label(crate::i18n::tr("方案"));
                 ui.horizontal(|ui| {
                     ui.add(egui::DragValue::new(&mut s.seed).speed(1.0));
-                    if ui.small_button("换一个方案").clicked() {
+                    if ui.small_button(crate::i18n::tr("换一个方案")).clicked() {
                         s.seed = s.seed.wrapping_add(1);
                     }
                 });
@@ -134,12 +134,12 @@ impl App {
                 Some(Ok(plan)) => {
                     let total: f64 = plan.areas.iter().sum();
                     let (lo, hi) = plan.areas.iter().fold((f64::MAX, 0.0f64), |(a, b), x| (a.min(*x), b.max(*x)));
-                    ui.label(format!("{} 块，面积 {:.0}–{:.0} 万 km²（共 {:.0} 万 km²）", plan.units.len(), lo / 1e4, hi / 1e4, total / 1e4));
+                    ui.label(crate::trf!("{} 块，面积 {:.0}–{:.0} 万 km²（共 {:.0} 万 km²）", plan.units.len(), lo / 1e4, hi / 1e4, total / 1e4));
                     ui.weak(match self.doc.year {
-                        Some(y) => format!("地图上蓝色虚线为预览；应用后从 {} 起生效，更早的年份不变。", self.doc.calendar.show(y)),
+                        Some(y) => crate::trf!("地图上蓝色虚线为预览；应用后从 {} 起生效，更早的年份不变。", self.doc.calendar.show(y)),
                         None => "地图上蓝色虚线为预览；应用对所有年份生效（已有历史的地块需先在时间轴选择年份）。".to_string(),
                     });
-                    if ui.button("应用").clicked() {
+                    if ui.button(crate::i18n::tr("应用")).clicked() {
                         apply = true;
                     }
                 }
@@ -153,7 +153,7 @@ impl App {
             if let Some((spec, Ok(plan))) = self.partition.plan.take() {
                 let n = plan.units.len();
                 if let Some(units) = self.edit(&format!("划分 {name}"), |d| d.apply_partition(&plan, &spec)) {
-                    self.set_status(format!("已把{name}划分为 {n} 块：{}", units.iter().filter_map(|u| self.doc.entities.get(u)).map(|x| x.name.clone()).collect::<Vec<_>>().join("、")), false);
+                    self.set_status(crate::trf!("已把{name}划分为 {n} 块：{}", units.iter().filter_map(|u| self.doc.entities.get(u)).map(|x| x.name.clone()).collect::<Vec<_>>().join("、")), false);
                     self.partition.target = None;
                     return;
                 }

@@ -64,7 +64,12 @@ pub enum Act {
     NewFocus,
     ExitFocus,
     Tool(Tool),
+    LandMove,
+    LandScale,
+    GeographicGuides,
     Timeline,
+    TimelinePlayback,
+    Studio,
     PrevChange,
     NextChange,
     PrevYear,
@@ -78,6 +83,9 @@ pub enum Act {
     Assistant,
     Plugins,
     WorldBook,
+    Worldview,
+    Environment,
+    Visualizations,
     Climate,
     StarChart,
     About,
@@ -202,7 +210,9 @@ fn table_with(translate: bool) -> Vec<Action> {
         a(Act::Layout(Layout::Globe), Menu::View, "三维球体", None, ""),
         a(Act::Layout(Layout::Split), Menu::View, "二维 + 三维", None, ""),
         g(Act::Graticule, Menu::View, "经纬网", None, ""),
+        a(Act::Studio, Menu::View, "切换创作工作室", key(CMD | Modifiers::ALT, Key::F10), "在专业界面与创作工作室窗口之间切换，继续编辑同一份工程。"),
         a(Act::ProgressiveDetail, Menu::View, "按缩放显示细节", None, "放大时逐级显示行政边界、地名、城镇和道路。"),
+        a(Act::GeographicGuides, Menu::View, "地理参考线…", None, "添加固定的经线和纬线，控制辅助吸附与导出。"),
         a(Act::Furniture, Menu::View, "比例尺与指北针", None, "在两个视图的左下角显示按视图中心量出的比例尺和指向北方的指北针。"),
         Action { also: key(CMD, Key::Num0), ..g(Act::FitAll, Menu::View, "缩放到全图", key(NONE, Key::Home), "") },
         Action { also: key(CMD, Key::Plus), ..a(Act::ZoomIn, Menu::View, "放大", key(CMD, Key::Equals), "") },
@@ -219,6 +229,7 @@ fn table_with(translate: bool) -> Vec<Action> {
     }
     t.extend([
         a(Act::Timeline, Menu::Time, "按年份查看与编辑", key(CMD, Key::T), "开启后地图显示所选年份的状态，修改从该年起生效；关闭则显示最新状态。"),
+        a(Act::TimelinePlayback, Menu::Time, "时间播放与视频", None, "设置年份间隔、总时长与速度，播放全局或局部视图并导出 MP4。"),
         g(Act::PrevChange, Menu::Time, "上一个变化年份", key(NONE, Key::PageUp), ""),
         a(Act::NextChange, Menu::Time, "下一个变化年份", key(NONE, Key::PageDown), ""),
         a(Act::PrevYear, Menu::Time, "上一年", key(Modifiers::SHIFT, Key::PageUp), ""),
@@ -227,10 +238,15 @@ fn table_with(translate: bool) -> Vec<Action> {
         g(Act::Diplomacy, Menu::Time, "外交关系…", None, "记录双边关系、多边协约、时间区间和关联事件。"),
         g(Act::StarChart, Menu::View, "星图", None, ""),
         g(Act::Names, Menu::Tools, "名称生成器…", None, "按风格生成国名、城市名、地区、海洋、河流、山脉与人名；单击即给所选国家或城市改名，或复制。"),
+        a(Act::LandMove, Menu::Tools, "整体移动陆块", None, "用鼠标移动相连的陆地、城市和共享边界；可输入精确经纬度偏移。"),
+        a(Act::LandScale, Menu::Tools, "整体缩放陆块", None, "围绕选中陆块的中心等比缩放海岸、共享边界和附属要素，并检查冲突。"),
         a(Act::Assistant, Menu::Tools, "AI 助手…", None, "把任务交给语言模型（Gemini 或 DeepSeek）：它查看地图并修改一份草稿，看过前后对比再决定是否采用。"),
         a(Act::Climate, Menu::Tools, "行星环境与气候…", None, "根据恒星、行星与地图地理计算逐月气候参考图。"),
         a(Act::Plugins, Menu::Tools, "本地插件…", None, "打开插件清单，预览命令对地图草稿的修改。"),
         a(Act::WorldBook, Menu::View, "世界资料库…", None, "浏览文档、事件、画板及其关联。"),
+        a(Act::Worldview, Menu::View, "世界观设定…", None, "管理自定义实体类型、关系、数值规则和模板。"),
+        a(Act::Environment, Menu::Tools, "环境生成与图层…", None, "生成地形、水文、气候、生态及自定义资源图层。"),
+        a(Act::Visualizations, Menu::View, "数据可视化…", None, "从地图、世界观和表格数据创建曲线、关系网络、剖面和专题图。"),
         a(Act::Roads, Menu::Tools, "道路与旅行…", None, "在城市之间生成道路网（绕开海与湖，陡坡代价更高），预览后应用为线路；查两城之间沿线路的路程与步行、骑马等所需天数。"),
         a(Act::Palette, Menu::Help, "命令面板…", key(CMD, Key::K), "按名称查找并执行任何命令。"),
         a(Act::Shortcuts, Menu::Help, "快捷键一览", key(NONE, Key::F1), ""),
@@ -277,13 +293,10 @@ pub struct Palette {
 impl App {
     /// The years just before and after the selected one that have changes.
     pub fn change_neighbours(&self) -> (Option<i32>, Option<i32>) {
-        // in a local view: its own change years, within its years
-        if let Some(n) = self.focus_neighbours() {
-            return n;
-        }
         let Some(y) = self.doc.year else { return (None, None) };
-        let years = self.doc.change_years();
-        (years.range(..y).next_back().copied(), years.range(y + 1..).next().copied())
+        let years = self.study_years();
+        let later = years.range((std::ops::Bound::Excluded(y), std::ops::Bound::Unbounded)).next().copied();
+        (years.range(..y).next_back().copied(), later)
     }
 
     /// Lon/lat points spanning what is selected.
@@ -351,12 +364,12 @@ impl App {
 
     /// Whether the action can run now.
     pub fn can(&self, act: Act) -> bool {
-        if self.star_map.open && !matches!(act, Act::StarChart | Act::About | Act::Shortcuts | Act::Tutorial | Act::Palette | Act::Prefs |
+        if self.star_map.open && !matches!(act, Act::StarChart | Act::Studio | Act::Assistant | Act::About | Act::Shortcuts | Act::Tutorial | Act::Palette | Act::Prefs |
             Act::Save | Act::SaveAs | Act::Open | Act::OpenRecent(_) | Act::NewBlank | Act::NewDemo | Act::Undo | Act::Redo) {
             return false;
         }
         match act {
-            Act::StarChart | Act::Climate | Act::NewFocus | Act::ImportWorld | Act::ImportIslands | Act::Layout(Layout::Globe | Layout::Split)
+            Act::StarChart | Act::Climate | Act::Environment | Act::LandMove | Act::LandScale | Act::GeographicGuides | Act::NewFocus | Act::ImportWorld | Act::ImportIslands | Act::Layout(Layout::Globe | Layout::Split)
                 if self.doc.paper.is_some() => false,
             Act::NewTestWorld | Act::NewDetailedWorld => !self.making_test_world(),
             Act::Undo => self.history.can_undo(),
@@ -419,7 +432,7 @@ impl App {
         match act {
             Act::NewBlank => {
                 self.new_doc(map_core::Document::default());
-                self.set_status("已新建空白世界。使用“绘制陆地”工具 (L) 开始。", false);
+                self.set_status(crate::i18n::tr("已新建空白世界。使用“绘制陆地”工具 (L) 开始。"), false);
             }
             Act::NewDemo => self.new_doc(map_core::sample::demo_world()),
             Act::TutorialExample => {
@@ -434,7 +447,7 @@ impl App {
                         self.fit_pending = false;
                         self.globe.dist = 1.8;
                         self.tutorial.open = false;
-                        self.set_status("已打开远洋人民共和国教程成品",false);
+                        self.set_status(crate::i18n::tr("已打开远洋人民共和国教程成品"),false);
                     }
                     Err(err) => self.set_status(err,true),
                 }
@@ -500,8 +513,8 @@ impl App {
             Act::Distribute(by_lon) => self.distribute_selection(by_lon),
             Act::TidyFaces => self.tidy_faces(),
             Act::Validate => match self.doc.topo.validate() {
-                Ok(()) => self.set_status("拓扑校验通过", false),
-                Err(e) => self.set_status(format!("拓扑错误：{e}"), true),
+                Ok(()) => self.set_status(crate::i18n::tr("拓扑校验通过"), false),
+                Err(e) => self.set_status(crate::trf!("拓扑错误：{e}"), true),
             },
             Act::Layout(l) => { self.globe_inertia.stop(); self.layout = l; },
             Act::Graticule => self.graticule = !self.graticule,
@@ -520,6 +533,8 @@ impl App {
             Act::History => self.history_open = !self.history_open,
             Act::Checkpoints => self.checkpoints.open = true,
             Act::NewFocus => self.new_focus(),
+            Act::TimelinePlayback => self.open_playback(self.focus.is_some()),
+            Act::Studio => self.switch_workspace(),
             Act::ExitFocus => self.exit_focus(),
             Act::Prefs => self.prefs_open = true,
             Act::ZoomSelection => self.zoom_to_selection(),
@@ -544,9 +559,17 @@ impl App {
             }
             Act::Names => self.names_open = true,
             Act::Roads => self.roads.open = true,
-            Act::Assistant => self.ai.open = true,
+            Act::Assistant => {
+                self.ai.open = !self.ai.open;
+            }
+            Act::LandMove => self.start_land_move(),
+            Act::LandScale => self.start_land_scale(),
+            Act::GeographicGuides => self.guide_draft = Some(self.doc.guides.clone()),
             Act::Plugins => self.plugins.open = true,
             Act::WorldBook => self.book_current_context(),
+            Act::Worldview => self.open_worldview(None),
+            Act::Environment => self.open_environment(),
+            Act::Visualizations => self.open_visualizations(),
             Act::Climate => self.climate_open(),
             Act::Events => self.events_open = true,
         }
@@ -633,7 +656,7 @@ impl App {
         }
         self.action_button(ui, find(Act::ZoomSelection));
         if let Some(e) = self.selected.filter(|e| self.doc.entities.get(e).is_some_and(|x| x.pos.is_none())) {
-            if ui.add_enabled(self.brush != Some(e), egui::Button::new("设为画笔国家")).on_hover_text("之后用“领土画笔”或绘制陆地时归属这个国家。").clicked() {
+            if ui.add_enabled(self.brush != Some(e), egui::Button::new(crate::i18n::tr("设为画笔国家"))).on_hover_text(crate::i18n::tr("之后用“领土画笔”或绘制陆地时归属这个国家。")).clicked() {
                 self.brush = Some(e);
             }
         }
@@ -674,8 +697,8 @@ impl App {
         }
         let mut run: Option<Act> = None;
         let mut open = !esc;
-        egui::Window::new("命令面板").title_bar(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0.0, 60.0]).min_width(460.0).max_width(460.0).show(ctx, |ui| {
-            let edit = ui.add(egui::TextEdit::singleline(&mut p.query).hint_text("输入命令名称… （↑↓ 选择，回车执行，Esc 关闭）").desired_width(f32::INFINITY));
+        egui::Window::new(crate::i18n::tr("命令面板")).title_bar(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0.0, 60.0]).min_width(460.0).max_width(460.0).show(ctx, |ui| {
+            let edit = ui.add(egui::TextEdit::singleline(&mut p.query).hint_text(crate::i18n::tr("输入命令名称… （↑↓ 选择，回车执行，Esc 关闭）")).desired_width(f32::INFINITY));
             if p.focus {
                 edit.request_focus();
                 p.focus = false;
@@ -700,7 +723,7 @@ impl App {
                     }
                 }
                 if found.is_empty() {
-                    ui.weak("没有匹配的命令");
+                    ui.weak(crate::i18n::tr("没有匹配的命令"));
                 }
             });
         });
@@ -721,7 +744,7 @@ impl App {
             return;
         }
         let mut open = true;
-        egui::Window::new("快捷键一览").open(&mut open).resizable(false).show(ctx, |ui| {
+        egui::Window::new(crate::i18n::tr("快捷键一览")).open(&mut open).resizable(false).show(ctx, |ui| {
             egui::ScrollArea::vertical().max_height(520.0).min_scrolled_height(420.0).show(ui, |ui| {
                 let all = table();
                 for m in Menu::ALL {
@@ -743,7 +766,7 @@ impl App {
                     });
                     ui.add_space(6.0);
                 }
-                ui.label(RichText::new("选择工具").strong());
+                ui.label(RichText::new(crate::i18n::tr("选择工具")).strong());
                 egui::Grid::new("keys-select").num_columns(2).min_col_width(150.0).show(ui, |ui| {
                     for (k, what) in [("单击", "选中国家、地块或要素"), ("Shift / Ctrl + 单击", "加选或减选要素"), ("Shift + 拖动", "框选要素"), ("拖动所选要素", "一起移动"), ("双击文字或符号", "用它的工具编辑")] {
                         ui.label(k);
@@ -752,7 +775,7 @@ impl App {
                     }
                 });
                 ui.add_space(6.0);
-                ui.label(RichText::new("绘制时").strong());
+                ui.label(RichText::new(crate::i18n::tr("绘制时")).strong());
                 egui::Grid::new("keys-draw").num_columns(2).min_col_width(150.0).show(ui, |ui| {
                     for (k, what) in [("Enter / 双击", "完成当前绘制"), ("Backspace", "撤回上一个草稿点"), ("Esc", "放弃当前绘制"), ("[ 与 ]", "缩小 / 放大画笔"), ("Shift", "约束 15° 方向"), ("Ctrl", "临时关闭吸附"), ("右键拖动 / 中键拖动", "平移视图（球体为旋转）"), ("空格 + 拖动", "任何工具下平移视图"), ("滚轮", "缩放")] {
                         ui.label(k);
@@ -770,16 +793,16 @@ impl App {
         let Some(act) = self.confirm_replace else { return };
         let mut choice: Option<bool> = None;
         let mut cancel = false;
-        egui::Window::new("放弃未保存的修改？").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-            ui.label("当前世界有未保存的修改，继续会丢失它们。是否先保存？");
+        egui::Window::new(crate::i18n::tr("放弃未保存的修改？")).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+            ui.label(crate::i18n::tr("当前世界有未保存的修改，继续会丢失它们。是否先保存？"));
             ui.horizontal(|ui| {
-                if ui.button("保存并继续").clicked() {
+                if ui.button(crate::i18n::tr("保存并继续")).clicked() {
                     choice = Some(true);
                 }
-                if ui.button("不保存，继续").clicked() {
+                if ui.button(crate::i18n::tr("不保存，继续")).clicked() {
                     choice = Some(false);
                 }
-                cancel = ui.button("取消").clicked();
+                cancel = ui.button(crate::i18n::tr("取消")).clicked();
             });
         });
         if cancel {

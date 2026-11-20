@@ -23,6 +23,7 @@ pub struct Prefs {
     pub autosave_keep: usize,
     /// Additional trigger, in committed history operations. Zero is time only.
     pub autosave_steps: u64,
+    pub cloud_backup: crate::cloud::Config,
     /// Show the start window when the program opens without a file.
     pub welcome: bool,
     /// Open the latest file at start instead of the sample world.
@@ -37,13 +38,13 @@ pub struct Prefs {
     pub perf_in_status: bool,
     /// Undo steps kept.
     pub undo_limit: usize,
-    /// The interface's language: "zh" or "en".
+    /// Locale code of the application's interface, for example "en" or "zh-TW".
     pub language: String,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Self { recent: vec![], ui_scale: 1.0, autosave_secs: 60, autosave_on: true, autosave_keep: 20, autosave_steps: 10, welcome: true, reopen_last: false, layout: "split".into(), graticule: true, progressive_detail: true, furniture: true, perf_in_status: false, undo_limit: 500, language: "zh".into() }
+        Self { recent: vec![], ui_scale: 1.0, autosave_secs: 60, autosave_on: true, autosave_keep: 20, autosave_steps: 10, cloud_backup: Default::default(), welcome: true, reopen_last: false, layout: "split".into(), graticule: true, progressive_detail: true, furniture: true, perf_in_status: false, undo_limit: 500, language: "zh".into() }
     }
 }
 

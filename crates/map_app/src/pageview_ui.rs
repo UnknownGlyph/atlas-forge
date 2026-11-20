@@ -103,9 +103,9 @@ impl App {
             }
         }
         let mut open = true;
-        egui::Window::new("版式视图").open(&mut open).default_size([920.0, 640.0]).resizable(true).show(ctx, |ui| {
+        egui::Window::new(crate::i18n::tr("版式视图")).open(&mut open).default_size([920.0, 640.0]).resizable(true).show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
-                if ui.button("添加插图框").on_hover_text("在页面右下角放一个插图框，显示二维视图当前看到的区域（二维视图需与导出的投影相同）；之后可拖动、拖右下角改大小").clicked() {
+                if ui.button(crate::i18n::tr("添加插图框")).on_hover_text(crate::i18n::tr("在页面右下角放一个插图框，显示二维视图当前看到的区域（二维视图需与导出的投影相同）；之后可拖动、拖右下角改大小")).clicked() {
                     let world = o.projection.bounds();
                     let bounds = self.view_bounds_for_page().unwrap_or_else(|| {
                         let (cx, cy, dx, dy) = ((world[0] + world[2]) * 0.5, (world[1] + world[3]) * 0.5, (world[2] - world[0]) * 0.1, (world[3] - world[1]) * 0.1);
@@ -114,29 +114,29 @@ impl App {
                     self.export.placement.insets.push(Inset { rect: [0.66, 0.6, 0.3, 0.32], bounds, title: String::new() });
                     self.page.selected = Some(self.export.placement.insets.len() - 1);
                 }
-                if ui.button("全部复位").on_hover_text("标题、图例、比例尺、指北针回到默认位置（插图框不变）").clicked() {
+                if ui.button(crate::i18n::tr("全部复位")).on_hover_text(crate::i18n::tr("标题、图例、比例尺、指北针回到默认位置（插图框不变）")).clicked() {
                     let p = &mut self.export.placement;
                     (p.title, p.legend, p.scale_bar, p.north_arrow) = (None, None, None, None);
                 }
-                ui.weak(format!("页面 {} × {}", o.width, o.height));
+                ui.weak(crate::trf!("页面 {} × {}", o.width, o.height));
                 if self.page.job.is_some() {
                     ui.add(egui::Spinner::new().size(12.0));
-                    ui.weak("更新中…");
+                    ui.weak(crate::i18n::tr("更新中…"));
                 }
             });
             // the selected inset: its title, region, removal
             if let Some(i) = self.page.selected.filter(|i| *i < self.export.placement.insets.len()) {
                 let view = self.view_bounds_for_page();
                 ui.horizontal(|ui| {
-                    ui.label(format!("插图框 {}", i + 1));
+                    ui.label(crate::trf!("插图框 {}", i + 1));
                     let inset = &mut self.export.placement.insets[i];
-                    ui.add(egui::TextEdit::singleline(&mut inset.title).hint_text("标题（可空）").desired_width(140.0));
-                    if ui.add_enabled(view.is_some(), egui::Button::new("范围用当前二维视图")).on_disabled_hover_text("二维视图的投影与中央经线需与导出相同").clicked() {
+                    ui.add(egui::TextEdit::singleline(&mut inset.title).hint_text(crate::i18n::tr("标题（可空）")).desired_width(140.0));
+                    if ui.add_enabled(view.is_some(), egui::Button::new(crate::i18n::tr("范围用当前二维视图"))).on_disabled_hover_text(crate::i18n::tr("二维视图的投影与中央经线需与导出相同")).clicked() {
                         if let Some(b) = view {
                             inset.bounds = b;
                         }
                     }
-                    if ui.button("删除").clicked() {
+                    if ui.button(crate::i18n::tr("删除")).clicked() {
                         self.export.placement.insets.remove(i);
                         self.page.selected = None;
                     }
@@ -146,7 +146,7 @@ impl App {
                 ui.colored_label(Color32::from_rgb(220, 90, 60), e);
             }
             let Some(tex) = &self.page.texture else {
-                ui.weak("正在生成页面…");
+                ui.weak(crate::i18n::tr("正在生成页面…"));
                 return;
             };
             let [pw, ph] = [self.page.size[0] as f32, self.page.size[1] as f32];
@@ -225,7 +225,7 @@ impl App {
             if hover.is_some() {
                 ctx.set_cursor_icon(egui::CursorIcon::Grab);
             }
-            ui.weak("拖动标题、图例、比例尺、指北针或插图框改变位置；拖插图框右下角改大小。位置随导出设置保存，也会存进版式。");
+            ui.weak(crate::i18n::tr("拖动标题、图例、比例尺、指北针或插图框改变位置；拖插图框右下角改大小。位置随导出设置保存，也会存进版式。"));
         });
         if !open {
             self.page.open = false;

@@ -110,19 +110,19 @@ impl App {
         let mut keep = rs.keep_area;
         let mut amount = rs.amount as f32;
         let label = rs.label();
-        egui::Window::new(format!("预览：{label}")).collapsible(false).resizable(false).default_width(330.0).show(ctx, |ui| {
+        egui::Window::new(crate::trf!("预览：{label}")).collapsible(false).resizable(false).default_width(330.0).show(ctx, |ui| {
             match &rs.result {
                 Err(e) => {
                     ui.colored_label(Color32::from_rgb(190, 60, 20), e);
                 }
                 Ok(c) => {
-                    ui.label(format!("将改变 {} 条边界（橙色为新边界，灰色为原边界）。", c.edges.len()));
+                    ui.label(crate::trf!("将改变 {} 条边界（橙色为新边界，灰色为原边界）。", c.edges.len()));
                     if c.views > 1 {
-                        ui.label(RichText::new(format!("边界形状是所有年份共用的：这会同时改变 {} 个年份视图中的地图。", c.views)).color(Color32::from_rgb(190, 90, 10)));
+                        ui.label(RichText::new(crate::trf!("边界形状是所有年份共用的：这会同时改变 {} 个年份视图中的地图。", c.views)).color(Color32::from_rgb(190, 90, 10)));
                     }
                     ui.separator();
                     let when = self.doc.year.map(|y| format!("{y} 年")).unwrap_or_else(|| "当前（无年份）".into());
-                    ui.label(RichText::new(format!("面积变化（{when}）")).strong());
+                    ui.label(RichText::new(crate::trf!("面积变化（{when}）")).strong());
                     egui::Grid::new("reshape_rows").striped(true).show(ui, |ui| {
                         for (e, a, b) in c.now.iter().take(8) {
                             let name = match e {
@@ -136,24 +136,24 @@ impl App {
                             ui.end_row();
                         }
                     });
-                    ui.label(format!("所有年份中单个国家的最大面积变化：{:.4}%", c.worst * 100.0));
+                    ui.label(crate::trf!("所有年份中单个国家的最大面积变化：{:.4}%", c.worst * 100.0));
                 }
             }
             ui.separator();
-            if ui.checkbox(&mut keep, "保持面积").on_hover_text("修正每条边界，使两侧面积不变：所有国家在所有年份的面积都保持，只改变形状").changed() {
+            if ui.checkbox(&mut keep, crate::i18n::tr("保持面积")).on_hover_text(crate::i18n::tr("修正每条边界，使两侧面积不变：所有国家在所有年份的面积都保持，只改变形状")).changed() {
                 redo = true;
             }
-            if rs.style == LineStyle::Natural && ui.add(egui::Slider::new(&mut amount, 0.05..=1.0).text("粗糙度")).drag_stopped() {
+            if rs.style == LineStyle::Natural && ui.add(egui::Slider::new(&mut amount, 0.05..=1.0).text(crate::i18n::tr("粗糙度"))).drag_stopped() {
                 redo = true;
             }
             ui.horizontal(|ui| {
-                apply = ui.add_enabled(rs.result.is_ok(), egui::Button::new("应用")).clicked();
-                cancel = ui.button("取消").clicked();
+                apply = ui.add_enabled(rs.result.is_ok(), egui::Button::new(crate::i18n::tr("应用"))).clicked();
+                cancel = ui.button(crate::i18n::tr("取消")).clicked();
             });
         });
         if cancel {
             self.reshape = None;
-            self.set_status(format!("{label}：已取消"), false);
+            self.set_status(crate::trf!("{label}：已取消"), false);
         } else if apply {
             let Some(rs) = self.reshape.take() else { return };
             let (Ok(c), keep) = (rs.result, rs.keep_area) else { return };
@@ -164,7 +164,7 @@ impl App {
                 Ok(())
             }).is_some() {
                 let how = if keep { "，面积保持" } else { "" };
-                self.set_status(format!("{label}：改变了 {n} 条边{how}"), false);
+                self.set_status(crate::trf!("{label}：改变了 {n} 条边{how}"), false);
             }
         } else if redo {
             self.keep_area = keep;

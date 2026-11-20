@@ -202,6 +202,7 @@ pub fn ffmpeg_available() -> bool {
     std::process::Command::new("ffmpeg").arg("-version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success())
 }
 
+#[derive(Clone)]
 pub struct AnimJob {
     pub years: Vec<i32>,
     pub path: PathBuf,
@@ -217,6 +218,19 @@ pub struct AnimJob {
 fn render_frame(doc: &Document, y: i32, job: &AnimJob, fixed: Option<&FixedScale>) -> Result<image::RgbaImage, String> {
     let mut d = doc.clone();
     d.set_year(Some(y));
+    if let Some(project) = d.environment.clone().filter(|p| p.live && p.selected.is_none()) {
+        // Evaluate with the geometry and rule values of the rendered year.
+        // Frozen and manually generated versions stay as authored.
+        let current = map_core::environment::generate(&d, &project)?;
+        std::sync::Arc::make_mut(d.environment.as_mut().unwrap()).current = Some(std::sync::Arc::new(current));
+    }
+    if let Some(project) = d.climate.clone().filter(|p| p.live && p.visible && p.selected.is_none()) {
+        use map_core::climate::{sample, Scenario};
+        let ground = sample(&d, &project.surface_edits, project.background);
+        let mut current = Scenario::new(project.settings.clone(), d.year, project.region, &ground)?;
+        if let Some(previous) = &project.current { current.retain_locks(previous); }
+        std::sync::Arc::make_mut(d.climate.as_mut().unwrap()).current = Some(std::sync::Arc::new(current));
+    }
     let mut opts = job.opts.clone();
     opts.title = title_in(&job.opts.title, y, &doc.calendar);
     let theme = map_core::theme::evaluate_with(&d, fixed);
@@ -309,10 +323,49 @@ impl Sink {
 /// rendered a batch at a time on all cores. On cancel or error the partial
 /// file is removed; cancel returns Ok(None).
 pub fn export_animation(doc: &Document, job: &AnimJob, done: &AtomicUsize, cancel: &AtomicBool) -> Result<Option<PathBuf>, String> {
+    write_animation(doc,job,None,done,cancel)
+}
+
+pub fn export_scheduled(
+    doc: &Document,
+    job: &AnimJob,
+    schedule: &[map_core::playback::Sample],
+    done: &AtomicUsize,
+    cancel: &AtomicBool,
+) -> Result<Option<PathBuf>, String> {
+    if schedule.iter().any(|s| s.hold_ms == 0 || s.hold_ms % 40 != 0) {
+        return Err("视频时间表的间隔无效。".into());
+    }
+    let mut job=job.clone();
+    job.years=schedule.iter().map(|s|s.year).collect();
+    job.frame_ms=40;
+    write_animation(doc,&job,Some(schedule),done,cancel)
+}
+
+fn write_animation(doc:&Document, output:&AnimJob, schedule:Option<&[map_core::playback::Sample]>,done:&AtomicUsize,cancel:&AtomicBool)->Result<Option<PathBuf>,String>{
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let session = NEXT.fetch_add(1,Ordering::Relaxed);
+    let mut job = output.clone();
+    job.path = output.path.with_file_name(format!(".atlas-render-{}-{session}.{}",std::process::id(),output.kind.ext()));
+    // Keep the requested file intact until the whole export has succeeded.
+    let result = render_animation(doc,&job,schedule,done,cancel);
+    if matches!(&result,Ok(Some(_))) && !cancel.load(Ordering::Relaxed) {
+        let commit = std::fs::rename(&job.path,&output.path).map_err(|e|format!("视频写入失败：{e}"));
+        if commit.is_ok() { return Ok(Some(output.path.clone())); }
+        let _=std::fs::remove_file(&job.path);
+        commit?;
+    }
+    let _=std::fs::remove_file(&job.path);
+    result.map(|_|None)
+}
+
+fn render_animation(doc: &Document, job: &AnimJob, schedule: Option<&[map_core::playback::Sample]>, done: &AtomicUsize, cancel: &AtomicBool) -> Result<Option<PathBuf>, String> {
     if job.years.is_empty() {
         return Err("没有要导出的年份".into());
     }
-    let workers = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let pixels = u64::from(job.opts.width).saturating_mul(u64::from(job.opts.height)).max(1);
+    let memory_workers = ((128 * 1024 * 1024) / pixels.saturating_mul(12)).clamp(1,8) as usize;
+    let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).min(memory_workers);
     let fixed = map_core::theme::fixed_scale(doc);
     let fixed = fixed.as_ref();
     let mut sink: Option<Sink> = None;
@@ -333,6 +386,10 @@ pub fn export_animation(doc: &Document, job: &AnimJob, done: &AtomicUsize, cance
             hs.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("渲染线程意外退出".into()))).collect()
         });
         for (k, f) in frames.into_iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                fail(sink,String::new());
+                return Ok(None);
+            }
             let img = match f {
                 Ok(i) => i,
                 Err(e) => return Err(fail(sink, e)),
@@ -340,8 +397,9 @@ pub fn export_animation(doc: &Document, job: &AnimJob, done: &AtomicUsize, cance
             if sink.is_none() {
                 sink = Some(Sink::open(job, img.width(), img.height()).map_err(|e| fail(None, e))?);
             }
-            let last = ci * workers + k + 1 == job.years.len();
-            let ms = if last { job.frame_ms * 2 } else { job.frame_ms };
+            let index = ci * workers + k;
+            let last = index + 1 == job.years.len();
+            let ms = schedule.map_or_else(|| if last { job.frame_ms.saturating_mul(2) } else { job.frame_ms }, |s|s[index].hold_ms);
             if let Err(e) = sink.as_mut().unwrap().push(&img, ms, job.frame_ms) {
                 return Err(fail(sink, e));
             }

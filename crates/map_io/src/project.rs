@@ -23,8 +23,18 @@ pub fn to_bytes(doc: &Document) -> Result<Vec<u8>, String> {
         book.validate()?;
         WorldBook::switch(&mut stored, ROOT, None)?;
     }
+    validate_generated(&stored)?;
+    if let Some(book) = &stored.book {
+        for board in book.boards.values().filter_map(|b| b.doc.as_deref()) { validate_generated(board)?; }
+    }
     let requires_six = |d: &Document| d.paper.is_some() || d.diplomacy.is_some();
-    let version = if requires_six(&stored) || stored.book.as_ref().is_some_and(|b| {
+    let requires_seven = |d: &Document| d.star_chart.as_ref().is_some_and(|s| s.requires_extended_format());
+    let needs_eight = |d: &Document| d.environment.is_some() || d.visualization.is_some();
+    let version = if needs_eight(&stored) || stored.book.as_ref().is_some_and(|book| {
+        book.worldview.is_some() || book.boards.values().filter_map(|b| b.doc.as_deref()).any(needs_eight)
+    }) { 8 } else if requires_seven(&stored) || stored.book.as_ref().is_some_and(|b| {
+        b.boards.values().filter_map(|x| x.doc.as_deref()).any(requires_seven)
+    }) { 7 } else if requires_six(&stored) || stored.book.as_ref().is_some_and(|b| {
         b.boards.values().filter_map(|x| x.doc.as_deref()).any(requires_six)
     }) { 6 } else if stored.book.is_some() { 5 } else { match &stored.star_chart {
         Some(chart) if !chart.moon.is_default() => 4,
@@ -65,6 +75,12 @@ pub fn from_bytes(bytes: &[u8]) -> Result<Document, String> {
     Ok(doc)
 }
 
+fn validate_generated(doc: &Document) -> Result<(), String> {
+    if let Some(p) = &doc.environment { p.validate()?; }
+    if let Some(p) = &doc.visualization { p.validate()?; }
+    Ok(())
+}
+
 fn restore(doc: &mut Document, version: u32) -> Result<(), String> {
     if doc.home_view.is_some_and(|view| !view.valid()) {
         return Err("工程默认视角的经纬度无效".into());
@@ -72,6 +88,7 @@ fn restore(doc: &mut Document, version: u32) -> Result<(), String> {
     if let Some(paper) = doc.paper { paper.validate()?; }
     if let Some(diplomacy) = &doc.diplomacy { diplomacy.validate()?; }
     if let Some(p) = &doc.climate { p.validate_storage()?; }
+    validate_generated(doc)?;
     if let Some(chart) = &doc.star_chart { chart.validate()?; }
     migrate(doc, version);
     // merges before the fix could leave a unit its own parent

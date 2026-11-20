@@ -36,33 +36,33 @@ impl App {
         }
         let mut open = true;
         let mut chosen: Option<String> = None;
-        egui::Window::new("名称生成器").open(&mut open).resizable(false).default_width(330.0).show(ctx, |ui| {
+        egui::Window::new(crate::i18n::tr("名称生成器")).open(&mut open).resizable(false).default_width(330.0).show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label("风格");
+                ui.label(crate::i18n::tr("风格"));
                 egui::ComboBox::from_id_salt("name-style").selected_text(self.name_style.name()).show_ui(ui, |ui| {
                     for s in NameStyle::ALL {
                         ui.selectable_value(&mut self.name_style, s, s.name());
                     }
                 });
-                ui.label("种类");
+                ui.label(crate::i18n::tr("种类"));
                 egui::ComboBox::from_id_salt("name-kind").selected_text(self.name_kind.name()).show_ui(ui, |ui| {
                     for k in NameKind::ALL {
                         ui.selectable_value(&mut self.name_kind, k, k.name());
                     }
                 });
-                if ui.button("换一批").clicked() {
+                if ui.button(crate::i18n::tr("换一批")).clicked() {
                     self.name_seed = self.name_seed.wrapping_add(1);
                 }
             });
             let target = self.selected.and_then(|e| self.doc.entities.get(&e)).filter(|x| matches!((x.kind, self.name_kind), (EntityKind::Country, NameKind::Country) | (EntityKind::City, NameKind::City)));
             ui.weak(match target {
-                Some(x) => format!("单击一个名称，把“{}”改为它（可撤销）", x.name),
+                Some(x) => crate::trf!("单击一个名称，把“{}”改为它（可撤销）", x.name),
                 None => "单击一个名称复制它；选中国家或城市并选对应种类时，单击即改名".to_string(),
             });
             if let Some(s) = self.selected.and_then(|e| self.doc.name_style_for(e)).filter(|s| *s != self.name_style) {
                 ui.horizontal(|ui| {
-                    ui.weak(format!("所选单位的名称风格是“{}”", s.name()));
-                    if ui.small_button("改用它").clicked() {
+                    ui.weak(crate::trf!("所选单位的名称风格是“{}”", s.name()));
+                    if ui.small_button(crate::i18n::tr("改用它")).clicked() {
                         self.name_style = s;
                     }
                 });
@@ -92,7 +92,7 @@ impl App {
                 }
                 None => {
                     ctx.copy_text(n.clone());
-                    self.set_status(format!("已复制“{n}”"), false);
+                    self.set_status(crate::trf!("已复制“{n}”"), false);
                 }
             }
         }

@@ -405,11 +405,12 @@ impl App {
             }
         }
         // a drag on the selected river, route or area moves it instead of the map
-        let climate_pick = self.climate_ui.open && self.climate_ui.picking;
-        let moving = !climate_pick && (self.curve_drag(&resp, &vg) || self.move_drag(&resp, &vg));
+        let environment_pick = self.environment_ui.picking;
+        let climate_pick = !environment_pick && self.climate_ui.open && self.climate_ui.picking;
+        let moving = !environment_pick && !climate_pick && !self.land_move.active && (self.curve_drag(&resp, &vg) || self.move_drag(&resp, &vg));
         let nav = resp.dragged_by(egui::PointerButton::Secondary)
             || resp.dragged_by(egui::PointerButton::Middle)
-            || (resp.dragged_by(egui::PointerButton::Primary) && (self.space_pan || (matches!(self.tool, crate::view::Tool::Select) && !moving)));
+            || (resp.dragged_by(egui::PointerButton::Primary) && (self.space_pan || (matches!(self.tool, crate::view::Tool::Select) && !moving && !self.land_move.active)));
         if resp.hovered() && ui.input(|i| i.key_down(egui::Key::Space)) && !ui.ctx().egui_wants_keyboard_input() {
             ui.ctx().set_cursor_icon(if self.space_pan { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
         }
@@ -457,7 +458,11 @@ impl App {
             self.cursor = hover_ll;
         }
         // a press that began with Space held pans; the tool does not see it
-        if climate_pick && !self.space_pan {
+        if environment_pick && !self.space_pan {
+            if resp.clicked_by(egui::PointerButton::Primary) {
+                if let Some(point) = hover_ll { self.environment_pick(point); }
+            }
+        } else if climate_pick && !self.space_pan {
             if resp.clicked_by(egui::PointerButton::Primary) {
                 if let Some(point) = hover_ll { self.climate_pick(point); }
             }
@@ -466,10 +471,14 @@ impl App {
             // outlines while the user is only rotating the camera.
             self.hover_face = None;
         } else if !self.space_pan {
-            self.tool_input(&resp, &vg, hover_ll);
+            if self.land_move.active {
+                self.land_move_input(&resp, &vg, hover_ll);
+            } else {
+                self.tool_input(&resp, &vg, hover_ll);
+            }
         }
         // the select tool's context menu (other tools use the right button)
-        if self.tool == Tool::Select {
+        if self.tool == Tool::Select && !self.land_move.active {
             resp.context_menu(|ui| self.canvas_menu(ui));
         }
 
@@ -513,6 +522,8 @@ impl App {
             painter.with_clip_rect(clipped)
         } else { painter };
         painter.add(egui_wgpu::Callback::new_paint_callback(rect, MapCallback(data)));
+        self.draw_land_move(&painter, &vg);
+        self.draw_geographic_guides(&painter, &vg);
         let t_ov = std::time::Instant::now();
         if light_overlays {
             self.draw_globe_navigation(&painter, &vg);
@@ -534,7 +545,7 @@ impl App {
             }
         }
         if kind == ViewKind::Globe && self.layout == crate::app::Layout::Split {
-            painter.text(rect.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP, "三维球体", egui::FontId::proportional(13.0), Color32::from_gray(230));
+            painter.text(rect.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP, crate::i18n::tr("三维球体"), egui::FontId::proportional(13.0), Color32::from_gray(230));
         }
         self.draw_book_points(&painter,&vg);
     }
@@ -646,7 +657,7 @@ impl App {
                     if let Some(e) = self.selected {
                         self.tab = crate::panels::Tab::Countries;
                         let name = self.doc.entities[&e].name.clone();
-                        self.set_status(format!("已选择 {name}"), false);
+                        self.set_status(crate::trf!("已选择 {name}"), false);
                     }
                 }
                 if resp.clicked() && self.doc.book.is_some(){
@@ -698,7 +709,7 @@ impl App {
                                 }
                                 self.status_err = false;
                             }
-                            Err(e) => self.set_status(format!("此位置无效：{e}"), true),
+                            Err(e) => self.set_status(crate::trf!("此位置无效：{e}"), true),
                         }
                     }
                 }
@@ -718,18 +729,18 @@ impl App {
                 if self.assign_fill || self.press_mods.shift {
                     if resp.clicked_by(Secondary) && land {
                         if let Some(n) = self.edit("取消一片的归属", |d| d.fill(f, None)) {
-                            self.set_status(format!("{n} 个地块成为无主地"), false);
+                            self.set_status(crate::trf!("{n} 个地块成为无主地"), false);
                         }
                     }
                     if resp.clicked() && land {
                         let layer = self.doc.active_layer;
                         let Some(b) = self.brush.filter(|b| self.doc.entities.get(b).is_some_and(|e| e.layer == layer)) else {
-                            self.set_status("请先在“国家”面板选择或新建一个国家作为画笔", true);
+                            self.set_status(crate::i18n::tr("请先在“国家”面板选择或新建一个国家作为画笔"), true);
                             return;
                         };
                         let name = self.entity_name(Some(b));
                         if let Some(n) = self.edit("填充领土", |d| d.fill(f, Some(b))) {
-                            self.set_status(if n == 0 { format!("这片土地已属于{name}") } else { format!("填充：{n} 个相连的地块归属{name}") }, false);
+                            self.set_status(if n == 0 { crate::trf!("这片土地已属于{name}") } else { crate::trf!("填充：{n} 个相连的地块归属{name}") }, false);
                         }
                     }
                     return;
@@ -741,7 +752,7 @@ impl App {
                 if painting && land {
                     let layer = self.doc.active_layer;
                     let Some(b) = self.brush.filter(|b| self.doc.entities.get(b).is_some_and(|e| e.layer == layer)) else {
-                        self.set_status("请先在“国家”面板选择或新建一个国家作为画笔", true);
+                        self.set_status(crate::i18n::tr("请先在“国家”面板选择或新建一个国家作为画笔"), true);
                         return;
                     };
                     // on a share layer the brush sets its unit's share
@@ -813,6 +824,7 @@ impl App {
             self.draw_annotations(&p, vg, &mut taken, pass);
             self.draw_symbols(&p, vg, &mut taken, pass);
         }
+        self.draw_visualization_icons(painter, vg, &mut taken);
         let t_features = t_a.elapsed().as_secs_f32() * 1000.0;
         // a local view's region, the frame of an export
         self.draw_focus(painter, vg);

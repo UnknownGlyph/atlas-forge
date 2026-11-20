@@ -77,3 +77,108 @@ fn custom_satellite_roundtrips_and_format_3_gets_the_default_moon() {
         chart.moon
     );
 }
+
+#[test]
+fn simulation_and_three_stars_roundtrip_in_the_extended_project() {
+    use map_core::star_chart::{Companion, GalaxyStar, Moon};
+    let mut chart = StarChart::default();
+    chart.gravity = true;
+    chart.companions.push(Companion {
+        star: chart.star.clone(),
+        orbit: chart.planets[4].orbit.clone(),
+    });
+    chart.companions.push(Companion {
+        star: chart.star.clone(),
+        orbit: chart.planets[6].orbit.clone(),
+    });
+    chart.satellites.push(Moon {
+        name: "Observation satellite".into(),
+        category: "Artificial".into(),
+        mass_kg: Some(21000.0),
+        ..Moon::default()
+    });
+    chart.galaxy.stars.push(GalaxyStar {
+        name: "Pillar".into(),
+        position_kly: [18.0, 0.2, 4.0],
+        temperature: 8700.0,
+        category: "Star".into(),
+        model: None,
+    });
+    let doc = Document {
+        star_chart: Some(Arc::new(chart.clone())),
+        ..Default::default()
+    };
+    let bytes = map_io::project::to_bytes(&doc).unwrap();
+    assert_eq!(&bytes[8..12], &7u32.to_le_bytes());
+    assert_eq!(
+        map_io::project::from_bytes(&bytes)
+            .unwrap()
+            .star_chart
+            .as_deref(),
+        Some(&chart)
+    );
+}
+
+#[test]
+fn a_shared_model_is_saved_with_its_links_in_each_part_of_the_star_chart() {
+    use map_core::{
+        star_chart::{BodyKey, Companion, GalaxyStar, Moon},
+        underlay::Blob,
+        world_book::{Attachment, Link, Node, WorldBook, ROOT},
+    };
+    let mut doc = Document::default();
+    let book = WorldBook::edit(&mut doc);
+    let asset = book.add_asset(Attachment {
+        name: "probe.obj".into(),
+        bytes: Blob(Arc::new(b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n".to_vec())),
+    });
+    book.add_link(Link::new(Node::Map(ROOT), Node::Asset(asset), false))
+        .unwrap();
+    let mut chart = StarChart::default();
+    chart.companions.push(Companion {
+        star: chart.star.clone(),
+        orbit: chart.planets[2].orbit.clone(),
+    });
+    chart.satellites.push(Moon::default());
+    chart.galaxy.stars.push(GalaxyStar {
+        name: "Distant system".into(),
+        position_kly: [12., 1., 5.],
+        temperature: 6000.0,
+        category: "Star".into(),
+        model: None,
+    });
+    for key in [
+        BodyKey::Star,
+        BodyKey::Home,
+        BodyKey::Planet(0),
+        BodyKey::Companion(0),
+        BodyKey::Moon,
+        BodyKey::Satellite(0),
+        BodyKey::GalaxyStar(0),
+    ] {
+        *chart.model_slot(key).unwrap() = Some(asset);
+    }
+    doc.star_chart = Some(Arc::new(chart));
+    let stored = map_io::project::from_bytes(&map_io::project::to_bytes(&doc).unwrap()).unwrap();
+    assert_eq!(
+        stored
+            .star_chart
+            .as_deref()
+            .unwrap()
+            .model_ids()
+            .collect::<Vec<_>>(),
+        vec![asset; 7]
+    );
+    let book = stored.book.unwrap();
+    assert!(book
+        .links
+        .values()
+        .any(|l| l.from == Node::Map(ROOT) && l.to == Node::Asset(asset)));
+    assert_eq!(
+        map_io::model::decode(&book.assets[&asset])
+            .unwrap()
+            .triangles
+            .len(),
+        1
+    );
+}

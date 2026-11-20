@@ -102,7 +102,7 @@ impl App {
         }
         match self.doc.topo.snap_boundary(p, tol) {
             Some(s) => (s, true),
-            None => (p, false),
+            None => (map_core::guides::snap(&self.doc.guides, p, tol).unwrap_or(p), false),
         }
     }
 
@@ -125,11 +125,7 @@ impl App {
     fn add_draft_point(&mut self, vg: &ViewGeom, screen: Pos2, p: LonLat, shift: bool, ctrl: bool) {
         self.last_draft_view = Some(*vg);
         let tol = vg.deg_per_px(screen, GRAB_PX);
-        let (mut q, mut snapped) = self.snap(p, tol);
-        // Ctrl: no snapping for a river or route either
-        if ctrl && self.tool == Tool::River {
-            q = p;
-        }
+        let (mut q, mut snapped) = if ctrl { (p, false) } else { self.snap(p, tol) };
         // Shift: 15° steps from the previous point, on screen
         if shift {
             if let Some(prev) = self.draft.last().and_then(|l| vg.to_screen(*l)) {
@@ -207,7 +203,7 @@ impl App {
                 self.draft_drag = Some(DraftDrag::Move(i + 1));
             } else {
                 if self.tool.ends_on_boundary() && self.draft.is_empty() && self.doc.topo.snap_boundary(o, vg.deg_per_px(origin, GRAB_PX)).is_none() {
-                    self.set_status("这条线必须从已有边界开始（光标靠近边界时会吸附）", true);
+                    self.set_status(crate::i18n::tr("这条线必须从已有边界开始（光标靠近边界时会吸附）"), true);
                     return;
                 }
                 self.add_draft_point(vg, origin, o, false, ctrl);
@@ -255,7 +251,7 @@ impl App {
             if self.tool.ends_on_boundary() && self.draft.is_empty() {
                 let tol = vg.deg_per_px(pos, GRAB_PX);
                 if self.doc.topo.snap_boundary(p, tol).is_none() {
-                    self.set_status("这条线必须从已有边界开始（光标靠近边界时会吸附）", true);
+                    self.set_status(crate::i18n::tr("这条线必须从已有边界开始（光标靠近边界时会吸附）"), true);
                     return;
                 }
             }
@@ -367,7 +363,7 @@ impl App {
 
     pub fn finish_draft(&mut self) {
         if self.bg_edit.is_some() {
-            return self.set_status("正在处理上一次绘制，请稍候", true);
+            return self.set_status(crate::i18n::tr("正在处理上一次绘制，请稍候"), true);
         }
         if self.tool == Tool::Pen {
             return self.pen_finish(false);
@@ -417,7 +413,7 @@ impl App {
                                 self.brush = created;
                             }
                             self.clear_draft();
-                            return self.set_status(format!("{label}：完成"), false);
+                            return self.set_status(crate::trf!("{label}：完成"), false);
                         }
                     }
                 }
@@ -442,7 +438,7 @@ impl App {
                     year: self.doc.year, layer: self.doc.active_layer, started: Instant::now(),
                     pts: self.draft.clone(), created, handle });
                 self.clear_draft();
-                self.set_status(format!("{label}：正在计算…"), false);
+                self.set_status(crate::trf!("{label}：正在计算…"), false);
             }
             Tool::Split => {
                 let pts = self.densified(false);
@@ -457,7 +453,7 @@ impl App {
                 let plan = match map_core::redraw::plan(&self.doc, &pts, tol) {
                     Ok(p) => p,
                     // keep the draft so it can be fixed
-                    Err(e) => return self.set_status(format!("重画国界：{e}"), true),
+                    Err(e) => return self.set_status(crate::trf!("重画国界：{e}"), true),
                 };
                 let doc = self.doc.clone();
                 let handle = std::thread::spawn(move || map_core::redraw::apply(&doc, &plan));
@@ -466,7 +462,7 @@ impl App {
                     year: self.doc.year, layer: self.doc.active_layer, started: Instant::now(),
                     pts: self.draft.clone(), created: None, handle });
                 self.clear_draft();
-                self.set_status(format!("{label}：正在计算…"), false);
+                self.set_status(crate::trf!("{label}：正在计算…"), false);
             }
             Tool::Hatch => {
                 let ring = self.drafted();
@@ -482,7 +478,7 @@ impl App {
                         self.selected = None;
                         self.selected_river = None;
                         self.tab = crate::panels::Tab::Countries;
-                        self.set_status("已添加斜线区域：在国家页面板中命名、调整样式和年份（不改变领土）", false);
+                        self.set_status(crate::i18n::tr("已添加斜线区域：在国家页面板中命名、调整样式和年份（不改变领土）"), false);
                     }
                 }
             }
@@ -505,7 +501,7 @@ impl App {
                         self.selected_river = Some(id);
                         self.selected_area = None;
                         let name = self.doc.rivers.get(&id).map(|r| r.name.clone()).unwrap_or_default();
-                        self.set_status(format!("已延长{kind} {name}"), false);
+                        self.set_status(crate::trf!("已延长{kind} {name}"), false);
                     }
                     return;
                 }
@@ -545,7 +541,7 @@ impl App {
             Ok(_) if changed => {
                 self.draft = bg.pts;
                 self.sync_snaps();
-                self.set_status(format!("{label}：计算期间地图已被修改，结果作废，草稿已恢复，可回车重新提交"), true);
+                self.set_status(crate::trf!("{label}：计算期间地图已被修改，结果作废，草稿已恢复，可回车重新提交"), true);
             }
             Ok((new, r)) => {
                 let before = std::mem::replace(&mut self.doc, new);
@@ -574,7 +570,7 @@ impl App {
             Err(e) => {
                 self.draft = bg.pts;
                 self.sync_snaps();
-                self.set_status(format!("{label}失败：{e}（草稿已恢复，可修改后重新提交）"), true);
+                self.set_status(crate::trf!("{label}失败：{e}（草稿已恢复，可修改后重新提交）"), true);
             }
         }
     }
@@ -585,7 +581,7 @@ impl App {
         if let Some(bg) = &self.bg_edit {
             let t = bg.started.elapsed().as_secs_f32();
             let dots = ".".repeat(1 + (t * 3.0) as usize % 3);
-            painter.text(vg.rect.center_top() + Vec2::new(0.0, 28.0), egui::Align2::CENTER_TOP, format!("{}：正在计算{dots} {:.1} s", bg.label, t), egui::FontId::proportional(14.0), Color32::from_rgb(200, 70, 10));
+            painter.text(vg.rect.center_top() + Vec2::new(0.0, 28.0), egui::Align2::CENTER_TOP, crate::trf!("{}：正在计算{dots} {:.1} s", bg.label, t), egui::FontId::proportional(14.0), Color32::from_rgb(200, 70, 10));
         }
         if !draw_tool {
             return;

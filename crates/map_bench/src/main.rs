@@ -14,6 +14,9 @@ fn ms(t: Instant) -> f64 {
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("authoring") {
+        return authoring();
+    }
     if std::env::args().nth(1).as_deref() == Some("history") {
         let n = |i: usize, d: usize| std::env::args().nth(i).and_then(|s| s.parse().ok()).unwrap_or(d);
         let km = std::env::args().nth(5).and_then(|s| s.parse().ok());
@@ -235,4 +238,60 @@ fn history(nx: usize, ny: usize, events: usize, refine_km: Option<f64>) {
     } else {
         let _ = std::fs::remove_file(&path);
     }
+}
+
+
+fn authoring() {
+    use map_core::{environment, visualization, world_book::WorldBook, worldview};
+    use std::{collections::BTreeMap, sync::Arc};
+
+    let mut doc = grid_world(80, 50, 8, 42);
+    let mut config = environment::Project::default();
+    config.settings.resolution = 768;
+    let start = Instant::now();
+    let generation = environment::generate(&doc, &config).expect("generate environment");
+    println!("environment {} × {}: {:.1} ms", generation.grid.width, generation.grid.height, ms(start));
+    config.current = Some(Arc::new(generation));
+    doc.environment = Some(Arc::new(config));
+
+    let now = Instant::now();
+    let schema;
+    {
+        let catalog = worldview::Catalog::edit(&mut doc);
+        schema = catalog.alloc().expect("worldbuilding type id");
+        catalog.schemas.insert(schema, Arc::new(worldview::Schema {
+            name: "Surveyed site".into(),
+            fields: BTreeMap::from([("score".into(), worldview::Field {
+                name: "Score".into(), kind: worldview::Kind::Number,
+                rule: Some(worldview::Rule { expression: "year * 1.1".into(), inputs: BTreeMap::new() }),
+                ..Default::default()
+            })]),
+            ..Default::default()
+        }));
+        for i in 0..50_000 {
+            let id = catalog.alloc().expect("worldbuilding record id");
+            catalog.records.insert(id, Arc::new(worldview::Record {
+                schema, name: format!("Site {i}"), ..Default::default()
+            }));
+        }
+        catalog.validate().expect("validate survey catalog");
+    }
+    println!("worldbuilding create + validate 50,000 records: {:.1} ms", ms(now));
+    doc.set_year(Some(2020));
+    let chart = visualization::Spec {
+        name: "Site survey".into(),
+        data: visualization::Data::Property { schema: Some(schema), key: "score".into() },
+        ..Default::default()
+    };
+    let start = Instant::now();
+    let output = chart.evaluate(&doc).expect("evaluate chart");
+    assert_eq!(output.rows.len(), 50_000);
+    println!("chart through 50,000 numeric rules: {:.1} ms", ms(start));
+    let start = Instant::now();
+    let bytes = map_io::project::to_bytes(&doc).expect("serialize workspace");
+    let write = ms(start);
+    let start = Instant::now();
+    let restored = map_io::project::from_bytes(&bytes).expect("restore workspace");
+    assert_eq!(WorldBook::current(&restored), WorldBook::current(&doc));
+    println!("workspace {} KiB, serialize {:.1} ms, restore {:.1} ms", bytes.len() / 1024, write, ms(start));
 }

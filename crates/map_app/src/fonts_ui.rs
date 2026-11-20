@@ -91,7 +91,7 @@ impl App {
         }
         if !self.fonts_missing.is_empty() && loaded.len() < wanted.len() {
             let gone: Vec<String> = wanted.difference(&loaded).map(|k| k.trim_end_matches("#bold").to_string()).collect();
-            self.set_status(format!("这台电脑上没有字体：{}（用默认字体显示）", gone.join("、")), true);
+            self.set_status(crate::trf!("这台电脑上没有字体：{}（用默认字体显示）", gone.join("、")), true);
         }
         ctx.set_fonts(defs);
         self.fonts_loaded = loaded;
@@ -121,17 +121,17 @@ pub fn font_picker(ui: &mut egui::Ui, salt: &str, font: &mut Option<String>, bol
         .show_ui(ui, |ui| {
         let (mut query, mut cjk_only): (String, bool) = ui.data_mut(|d| d.get_temp(id).unwrap_or((String::new(), true)));
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut query).hint_text("搜索字体").desired_width(110.0));
-            ui.checkbox(&mut cjk_only, "只列中文字体");
+            ui.add(egui::TextEdit::singleline(&mut query).hint_text(crate::i18n::tr("搜索字体")).desired_width(110.0));
+            ui.checkbox(&mut cjk_only, crate::i18n::tr("只列中文字体"));
         });
         ui.data_mut(|d| d.insert_temp(id, (query.clone(), cjk_only)));
-        if ui.selectable_label(font.is_none(), "默认字体").on_hover_text("界面与导出所用的默认中文字体").clicked() {
+        if ui.selectable_label(font.is_none(), crate::i18n::tr("默认字体")).on_hover_text(crate::i18n::tr("界面与导出所用的默认中文字体")).clicked() {
             *font = None;
             changed = true;
             ui.close();
         }
         let Some(all) = map_io::fonts::families_if_ready() else {
-            ui.weak("正在读取系统字体……");
+            ui.weak(crate::i18n::tr("正在读取系统字体……"));
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
             return;
         };
@@ -140,7 +140,7 @@ pub fn font_picker(ui: &mut egui::Ui, salt: &str, font: &mut Option<String>, bol
         for f in all.iter().filter(|f| (!cjk_only || f.cjk) && (q.is_empty() || f.display.to_lowercase().contains(&q) || f.family.to_lowercase().contains(&q))) {
             n += 1;
             let label = if f.display != f.family { format!("{}  {}", f.display, f.family) } else { f.family.clone() };
-            let r = ui.selectable_label(font.as_deref() == Some(f.family.as_str()), label).on_hover_text(if f.bold.is_some() { "有粗体" } else { "没有粗体（粗体时仍用常规字形）" });
+            let r = ui.selectable_label(font.as_deref() == Some(f.family.as_str()), label).on_hover_text(if f.bold.is_some() { crate::i18n::tr("有粗体") } else { crate::i18n::tr("没有粗体（粗体时仍用常规字形）") });
             if r.clicked() {
                 *font = Some(f.family.clone());
                 changed = true;
@@ -148,15 +148,15 @@ pub fn font_picker(ui: &mut egui::Ui, salt: &str, font: &mut Option<String>, bol
             }
         }
         if n == 0 {
-            ui.weak("没有符合的字体");
+            ui.weak(crate::i18n::tr("没有符合的字体"));
         }
     });
-    if ui.checkbox(bold, "粗体").changed() {
+    if ui.checkbox(bold, crate::i18n::tr("粗体")).changed() {
         changed = true;
     }
     if let Some(f) = font.as_deref() {
         if map_io::fonts::families_if_ready().is_some_and(|all| !all.iter().any(|x| x.family == f)) {
-            ui.label(RichText::new("（本机没有）").weak()).on_hover_text("这台电脑上没有这个字体，用默认字体显示与导出");
+            ui.label(RichText::new(crate::i18n::tr("（本机没有）")).weak()).on_hover_text(crate::i18n::tr("这台电脑上没有这个字体，用默认字体显示与导出"));
         }
     }
     changed

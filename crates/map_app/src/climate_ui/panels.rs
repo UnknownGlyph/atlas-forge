@@ -10,7 +10,7 @@ impl ClimateUi {
         let mut changed = false;
         ui.horizontal_wrapped(|ui| {
             egui::ComboBox::from_id_salt("climate-presets")
-                .selected_text("载入行星模板")
+                .selected_text(crate::i18n::tr("载入行星模板"))
                 .show_ui(ui, |ui| {
                     for (i, label) in PRESETS.iter().enumerate() {
                         if ui.button(*label).clicked() {
@@ -20,10 +20,10 @@ impl ClimateUi {
                         }
                     }
                 });
-            if ui.button("读取自定义模板").clicked() {
+            if ui.button(crate::i18n::tr("读取自定义模板")).clicked() {
                 *external = Some(FileAction::Load);
             }
-            if ui.button("保存为模板").clicked() {
+            if ui.button(crate::i18n::tr("保存为模板")).clicked() {
                 *external = Some(FileAction::Save);
             }
         });
@@ -31,14 +31,14 @@ impl ClimateUi {
         changed |= ui
             .checkbox(
                 &mut s.planet.linked,
-                "关联重力、密度、光度、辐照、公转和大气密度",
+                crate::i18n::tr("关联重力、密度、光度、辐照、公转和大气密度"),
             )
             .changed();
         ui.horizontal(|ui| {
             changed |= ui
-                .checkbox(&mut s.planet.locked_rotation, "潮汐锁定")
+                .checkbox(&mut s.planet.locked_rotation, crate::i18n::tr("潮汐锁定"))
                 .changed();
-            changed |= ui.checkbox(&mut s.planet.retrograde, "逆向自转").changed();
+            changed |= ui.checkbox(&mut s.planet.retrograde, crate::i18n::tr("逆向自转")).changed();
         });
         egui::ComboBox::from_id_salt("climate-gas")
             .selected_text(s.planet.gas.name())
@@ -49,7 +49,7 @@ impl ClimateUi {
                         .changed();
                 }
             });
-        ui.weak("手动值可直接编辑；固定值需先解锁。只允许自动参数随约束或目标搜索改变。");
+        ui.weak(crate::i18n::tr("手动值可直接编辑；固定值需先解锁。只允许自动参数随约束或目标搜索改变。"));
         use Param::*;
         let groups: &[(&str, &[Param])] = &[
             (
@@ -75,9 +75,9 @@ impl ClimateUi {
                 if label == "恒星与轨道" {
                     let t = s.planet[StarTemp];
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(format!("辐射光谱峰值约 {:.0} nm", 2.898e6 / t));
+                        ui.label(crate::trf!("辐射光谱峰值约 {:.0} nm", 2.898e6 / t));
                         egui::ComboBox::from_id_salt("stellar-spectrum")
-                            .selected_text("恒星光谱模板")
+                            .selected_text(crate::i18n::tr("恒星光谱模板"))
                             .show_ui(ui, |ui| {
                                 for (name, t) in [
                                     ("M 红矮星", 3200.),
@@ -174,24 +174,24 @@ impl ClimateUi {
             if ui
                 .add_enabled(
                     self.job.is_none(),
-                    egui::Button::new("搜索参数并生成参考图"),
+                    egui::Button::new(crate::i18n::tr("搜索参数并生成参考图")),
                 )
                 .clicked()
             {
                 *run = Some(Run::Fit);
             }
-            ui.weak("在所选区域比较模拟值与目标；气候比例目标是创作参考值。");
+            ui.weak(crate::i18n::tr("在所选区域比较模拟值与目标；气候比例目标是创作参考值。"));
         });
         changed
     }
     pub(super) fn ground_tab(&mut self, ui: &mut egui::Ui, p: &mut Project) -> bool {
         let mut changed = false;
         self.position(ui);
-        ui.add(egui::Slider::new(&mut self.radius, 0.0..=90.).text("笔刷角半径 °"));
+        ui.add(egui::Slider::new(&mut self.radius, 0.0..=90.).text(crate::i18n::tr("笔刷角半径 °")));
         ui.collapsing("添加地表资料 / 绘制高原", |ui| {
-            ui.label("拓扑与已有高程提供底图。此处可单独指定地表与海拔。");
+            ui.label(crate::i18n::tr("拓扑与已有高程提供底图。此处可单独指定地表与海拔。"));
             egui::ComboBox::from_id_salt("climate-bg")
-                .selected_text(format!("未绘区：{}", p.background.name()))
+                .selected_text(crate::trf!("未绘区：{}", p.background.name()))
                 .show_ui(ui, |ui| {
                     for s in [Surface::Unknown, Surface::Water, Surface::Land] {
                         changed |= ui
@@ -200,7 +200,7 @@ impl ClimateUi {
                     }
                 });
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.set_surface, "地表");
+                ui.checkbox(&mut self.set_surface, crate::i18n::tr("地表"));
                 egui::ComboBox::from_id_salt("climate-brush")
                     .selected_text(self.surface.name())
                     .show_ui(ui, |ui| {
@@ -210,7 +210,7 @@ impl ClimateUi {
                     });
             });
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.set_height, "海拔 m");
+                ui.checkbox(&mut self.set_height, crate::i18n::tr("海拔 m"));
                 ui.add(
                     egui::DragValue::new(&mut self.height)
                         .speed(20.)
@@ -218,7 +218,7 @@ impl ClimateUi {
                 );
             });
             ui.horizontal(|ui| {
-                if ui.button("写入所选地区").clicked() {
+                if ui.button(crate::i18n::tr("写入所选地区")).clicked() {
                     for i in footprint(self.point, self.radius) {
                         let mut e = p.surface_edits.get(&i).copied().unwrap_or_default();
                         if self.set_surface {
@@ -231,7 +231,7 @@ impl ClimateUi {
                     }
                     changed = true;
                 }
-                if ui.button("恢复地图地表").clicked() {
+                if ui.button(crate::i18n::tr("恢复地图地表")).clicked() {
                     for i in footprint(self.point, self.radius) {
                         p.surface_edits.remove(&i);
                     }
@@ -240,17 +240,17 @@ impl ClimateUi {
             });
         });
         ui.separator();
-        ui.label(format!(
+        ui.label(crate::trf!(
             "人工修订　{} · {}",
             p.field.name(),
             p.period.name()
         ));
         if p.selected.is_some() {
-            ui.label("正在查看留存方案。切回当前结果后可修订。");
+            ui.label(crate::i18n::tr("正在查看留存方案。切回当前结果后可修订。"));
             return changed;
         }
         if p.current.is_none() {
-            ui.label("运行模拟后可修订或固定参考值。");
+            ui.label(crate::i18n::tr("运行模拟后可修订或固定参考值。"));
             return changed;
         }
         ui.horizontal_wrapped(|ui| {
@@ -279,7 +279,7 @@ impl ClimateUi {
                         .range(bounds),
                 );
             }
-            ui.checkbox(&mut self.lock, "重算时固定此图层");
+            ui.checkbox(&mut self.lock, crate::i18n::tr("重算时固定此图层"));
         });
         let mut op = None;
         ui.horizontal_wrapped(|ui| {
@@ -311,7 +311,7 @@ impl ClimateUi {
             }
             changed = true;
         }
-        ui.weak("固定保存所选网格的逐月值。未固定的人工修订在下次模拟时更新。");
+        ui.weak(crate::i18n::tr("固定保存所选网格的逐月值。未固定的人工修订在下次模拟时更新。"));
         changed
     }
     pub(super) fn records_tab(
@@ -323,13 +323,13 @@ impl ClimateUi {
     ) -> bool {
         let mut changed = false;
         ui.horizontal(|ui| {
-            ui.label("方案名称");
+            ui.label(crate::i18n::tr("方案名称"));
             ui.text_edit_singleline(&mut self.name);
         });
         if ui
             .add_enabled(
                 p.current.is_some() && !self.name.trim().is_empty(),
-                egui::Button::new("留存当前结果和参数"),
+                egui::Button::new(crate::i18n::tr("留存当前结果和参数")),
             )
             .clicked()
         {
@@ -341,7 +341,7 @@ impl ClimateUi {
             changed = true;
         }
         changed |= ui
-            .selectable_value(&mut p.selected, None, "当前结果")
+            .selectable_value(&mut p.selected, None, crate::i18n::tr("当前结果"))
             .changed();
         for (i, (name, _)) in p.saved.iter().enumerate() {
             changed |= ui
@@ -360,21 +360,21 @@ impl ClimateUi {
                     }
                     let a = self.comparison.as_ref().unwrap().1;
                     let b = shown.stats;
-                    ui.label(format!(
+                    ui.label(crate::trf!(
                         "相对当前结果　均温 {:+.1} °C　年降水 {:+.0} mm",
                         b[0] - a[0],
                         b[1] - a[1]
                     ));
                 } else if current.region != s.region {
-                    ui.label("两个方案的模拟范围不同。");
+                    ui.label(crate::i18n::tr("两个方案的模拟范围不同。"));
                 }
             }
-            if ui.button("复用此方案参数").clicked() {
+            if ui.button(crate::i18n::tr("复用此方案参数")).clicked() {
                 p.settings = s.settings.clone();
                 p.region = s.region;
                 changed = true;
             }
-            if ui.button("移除此留存方案").clicked() {
+            if ui.button(crate::i18n::tr("移除此留存方案")).clicked() {
                 p.saved.remove(i);
                 p.selected = None;
                 changed = true;
@@ -384,13 +384,13 @@ impl ClimateUi {
         ui.horizontal_wrapped(|ui| {
             let ready = p.shown().is_some();
             if ui
-                .add_enabled(ready, egui::Button::new("导出当前图层 PNG"))
+                .add_enabled(ready, egui::Button::new(crate::i18n::tr("导出当前图层 PNG")))
                 .clicked()
             {
                 *external = Some(FileAction::Png);
             }
             if ui
-                .add_enabled(ready, egui::Button::new("导出逐月数据 CSV"))
+                .add_enabled(ready, egui::Button::new(crate::i18n::tr("导出逐月数据 CSV")))
                 .clicked()
             {
                 *external = Some(FileAction::Csv);
@@ -398,14 +398,14 @@ impl ClimateUi {
             if ui
                 .add_enabled(
                     p.current.is_some() || self.job.is_some(),
-                    egui::Button::new("清除当前结果"),
+                    egui::Button::new(crate::i18n::tr("清除当前结果")),
                 )
                 .clicked()
             {
                 *clear = true;
             }
         });
-        ui.weak("保存 .atlas 工程时一并保存结果、固定区域和留存方案。");
+        ui.weak(crate::i18n::tr("保存 .atlas 工程时一并保存结果、固定区域和留存方案。"));
         changed
     }
 }
@@ -425,7 +425,7 @@ impl App {
         if matches!(action, FileAction::Load) {
             let Some(path) = self
                 .file_dialog()
-                .add_filter("气候模板", &["json"])
+                .add_filter(crate::i18n::tr("气候模板"), &["json"])
                 .pick_file()
             else {
                 return Ok(false);

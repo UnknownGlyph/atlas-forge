@@ -62,7 +62,7 @@ impl Stat {
 /// selected year, and areas in other years computed once on demand.
 pub struct Stats<'a> {
     doc: &'a Document,
-    areas: HashMap<EntityId, f64>,
+    areas: std::borrow::Cow<'a, HashMap<EntityId, f64>>,
     other: RefCell<HashMap<i32, HashMap<EntityId, f64>>>,
 }
 
@@ -72,13 +72,17 @@ impl<'a> Stats<'a> {
     }
 
     pub fn with_areas(doc: &'a Document, areas: HashMap<EntityId, f64>) -> Self {
-        Self { doc, areas, other: RefCell::new(HashMap::new()) }
+        Self { doc, areas: std::borrow::Cow::Owned(areas), other: RefCell::new(HashMap::new()) }
+    }
+
+    pub fn with_borrowed_areas(doc: &'a Document, areas: &'a HashMap<EntityId, f64>) -> Self {
+        Self { doc, areas: std::borrow::Cow::Borrowed(areas), other: RefCell::new(HashMap::new()) }
     }
 
     /// Reuse other years' areas computed earlier for the same document
     /// state (the caller decides when that state changed).
     pub fn with_cache(doc: &'a Document, areas: HashMap<EntityId, f64>, other: HashMap<i32, HashMap<EntityId, f64>>) -> Self {
-        Self { doc, areas, other: RefCell::new(other) }
+        Self { doc, areas: std::borrow::Cow::Owned(areas), other: RefCell::new(other) }
     }
 
     /// Other years' areas computed so far, to pass to [`Stats::with_cache`].

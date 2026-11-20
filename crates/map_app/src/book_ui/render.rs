@@ -16,12 +16,12 @@ pub(super) fn article(
     actions: &mut Vec<Action>,
 ) {
     ui.horizontal_wrapped(|ui| {
-        ui.selectable_value(&mut state.editor, false, "阅读");
-        ui.selectable_value(&mut state.editor, true, "编辑");
-        if ui.button("导出文档").clicked() {
+        ui.selectable_value(&mut state.editor, false, crate::i18n::tr("阅读"));
+        ui.selectable_value(&mut state.editor, true, crate::i18n::tr("编辑"));
+        if ui.button(crate::i18n::tr("导出文档")).clicked() {
             actions.push(Action::Export(vec![id], false));
         }
-        if ui.button("附件单独导出").clicked() {
+        if ui.button(crate::i18n::tr("附件单独导出")).clicked() {
             actions.push(Action::ExportAssets(vec![id]));
         }
     });
@@ -49,7 +49,7 @@ pub(super) fn article(
                     markup = Some((before, after, sample.to_owned()));
                 }
             }
-            ui.menu_button("内部链接", |ui| {
+            ui.menu_button(crate::i18n::tr("内部链接"), |ui| {
                 egui::ScrollArea::vertical()
                     .max_height(250.)
                     .show(ui, |ui| {
@@ -105,10 +105,10 @@ pub(super) fn article(
             changed = true;
         }
         ui.horizontal_wrapped(|ui| {
-            if ui.button("插入图片或附件…").clicked() {
+            if ui.button(crate::i18n::tr("插入图片或附件…")).clicked() {
                 actions.push(Action::Attach(id));
             }
-            if ui.button("插入当前画板截图").clicked() {
+            if ui.button(crate::i18n::tr("插入当前画板截图")).clicked() {
                 actions.push(Action::Snapshot(id));
             }
         });
@@ -220,7 +220,7 @@ fn inline(
                         ui.weak(&span.text);
                     }
                 } else {
-                    ui.weak(format!("图片 · {}", span.text));
+                    ui.weak(crate::trf!("图片 · {}", span.text));
                 }
                 continue;
             }

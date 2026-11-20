@@ -127,7 +127,7 @@ impl App {
         let from = self.doc.year.unwrap_or(self.timeline_last_year);
         if let Some(id) = self.edit("新建局部视图", |d| d.add_focus("", bounds, Some((from, from + 10)))) {
             self.enter_focus(id, false);
-            self.set_status("已新建局部视图：范围是平面图当前的视野，年份可在局部视图窗口中修改", false);
+            self.set_status(crate::i18n::tr("已新建局部视图：范围是平面图当前的视野，年份可在局部视图窗口中修改"), false);
         }
     }
 
@@ -247,9 +247,9 @@ impl App {
 
     /// The local views as a menu: enter one; the active one is marked.
     pub fn focus_menu(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button("局部视图", |ui| {
+        ui.menu_button(crate::i18n::tr("局部视图"), |ui| {
             if self.doc.focuses.is_empty() {
-                ui.weak("（还没有局部视图：先把平面图移到要看的地区，再“新建局部视图”）");
+                ui.weak(crate::i18n::tr("（还没有局部视图：先把平面图移到要看的地区，再“新建局部视图”）"));
                 return;
             }
             let mut enter = None;
@@ -304,7 +304,7 @@ impl App {
         let mut changed: Option<Focus> = None;
         let mut leave = false;
         let mut delete = false;
-        egui::Window::new("局部视图")
+        egui::Window::new(crate::i18n::tr("局部视图"))
 
             .open(&mut open)
             .collapsible(true)
@@ -313,7 +313,7 @@ impl App {
             .default_pos(egui::pos2(screen.right() - 640.0, screen.top() + 90.0))
             .show(ctx, |ui| {
                 let mut name = self.focus_name.clone().unwrap_or_else(|| f.name.clone());
-                let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(240.0).hint_text("名称"));
+                let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(240.0).hint_text(crate::i18n::tr("名称")));
                 if r.changed() {
                     self.focus_name = Some(name.clone());
                 }
@@ -325,13 +325,13 @@ impl App {
                 }
                 ui.horizontal(|ui| {
                     let mut timed = f.years.is_some();
-                    if ui.checkbox(&mut timed, "年份").on_hover_text("不限年份时，只是一个地区").changed() {
+                    if ui.checkbox(&mut timed, crate::i18n::tr("年份")).on_hover_text(crate::i18n::tr("不限年份时，只是一个地区")).changed() {
                         let y = self.doc.year.unwrap_or(self.timeline_last_year);
                         changed = Some(Focus { years: timed.then_some((y, y + 10)), ..f.clone() });
                     }
                     if let Some((mut a, mut b)) = f.years {
                         let ra = ui.add(egui::DragValue::new(&mut a).speed(0.2));
-                        ui.label("至");
+                        ui.label(crate::i18n::tr("至"));
                         let rb = ui.add(egui::DragValue::new(&mut b).speed(0.2));
                         if (ra.changed() || rb.changed()) && !ra.dragged() && !rb.dragged() || ra.drag_stopped() || rb.drag_stopped() {
                             changed = Some(Focus { years: Some((a.min(b), a.max(b))), ..f.clone() });
@@ -340,8 +340,8 @@ impl App {
                 });
                 ui.horizontal(|ui| {
                     let [w, s, e, n] = f.bounds;
-                    ui.weak(format!("范围 {:.0}°–{:.0}°E，{:.0}°–{:.0}°N", w, e, s, n)).on_hover_text("经度超过 180° 的部分在日界线以东");
-                    if ui.small_button("设为当前视野").on_hover_text("用平面图现在显示的地区作为范围").clicked() {
+                    ui.weak(crate::trf!("范围 {:.0}°–{:.0}°E，{:.0}°–{:.0}°N", w, e, s, n)).on_hover_text(crate::i18n::tr("经度超过 180° 的部分在日界线以东"));
+                    if ui.small_button(crate::i18n::tr("设为当前视野")).on_hover_text(crate::i18n::tr("用平面图现在显示的地区作为范围")).clicked() {
                         changed = Some(Focus { bounds: self.visible_region(), ..f.clone() });
                     }
                 });
@@ -351,15 +351,15 @@ impl App {
                     (Some(_), Some(rep)) => {
                         let names = |e: Option<map_core::EntityId>| self.entity_name(e);
                         if rep.to == rep.from {
-                            ui.label(format!("{}：起始状态", self.doc.calendar.show(rep.from)));
+                            ui.label(crate::trf!("{}：起始状态", self.doc.calendar.show(rep.from)));
                         } else {
-                            ui.label(RichText::new(format!("{}至{}的变化", self.doc.calendar.show(rep.from), self.doc.calendar.show(rep.to))).strong());
+                            ui.label(RichText::new(crate::trf!("{}至{}的变化", self.doc.calendar.show(rep.from), self.doc.calendar.show(rep.to))).strong());
                         }
                         let moved: f64 = rep.transfers.iter().map(|t| t.2).sum();
                         if rep.transfers.is_empty() && rep.to_land == 0.0 && rep.to_water == 0.0 {
-                            ui.weak(if rep.to == rep.from { "红线标出此后易手的土地；拖动时间轴或播放来查看。" } else { "这一地区的归属没有变化。" });
+                            ui.weak(if rep.to == rep.from { crate::i18n::tr("红线标出此后易手的土地；拖动时间轴或播放来查看。") } else { crate::i18n::tr("这一地区的归属没有变化。") });
                         } else {
-                            ui.label(format!("易手土地 {} km²（红线标出）", fmt_km2(moved)));
+                            ui.label(crate::trf!("易手土地 {} km²（红线标出）", fmt_km2(moved)));
                             egui::Grid::new("focus-areas").num_columns(2).spacing([16.0, 2.0]).show(ui, |ui| {
                                 for (e, a, b) in rep.areas.iter().take(8) {
                                     ui.label(names(*e));
@@ -373,27 +373,28 @@ impl App {
                                 ui.weak(format!("{} → {}：{} km²", names(*a), names(*b), fmt_km2(*km2)));
                             }
                             if rep.to_land > 0.0 || rep.to_water > 0.0 {
-                                ui.weak(format!("陆地变水域 {} km²，水域变陆地 {} km²", fmt_km2(rep.to_water), fmt_km2(rep.to_land)));
+                                ui.weak(crate::trf!("陆地变水域 {} km²，水域变陆地 {} km²", fmt_km2(rep.to_water), fmt_km2(rep.to_land)));
                             }
                         }
                         let (a, b) = f.years.unwrap_or_default();
-                        ui.weak(format!("{a}–{b} 年间这一地区有 {} 个变化年份", view.map_or(0, |v| v.years.len())));
+                        ui.weak(crate::trf!("{a}–{b} 年间这一地区有 {} 个变化年份", view.map_or(0, |v| v.years.len())));
                     }
                     (Some(_), None) => {
-                        ui.weak("正在计算……");
+                        ui.weak(crate::i18n::tr("正在计算……"));
                     }
                     (None, _) => {
-                        ui.weak("不限年份：只聚焦地区。勾选“年份”可查看一段时间里的变化。");
+                        ui.weak(crate::i18n::tr("不限年份：只聚焦地区。勾选“年份”可查看一段时间里的变化。"));
                     }
                 }
                 ui.separator();
                 ui.horizontal(|ui| {
                     if f.years.is_some() {
                         let playing = self.focus_play.is_some();
-                        if ui.button(if playing { "暂停" } else { "播放" }).on_hover_text("从当前年份起，逐个变化年份播放到最后一年").clicked() {
+                        if ui.button(if playing { crate::i18n::tr("暂停") } else { crate::i18n::tr("播放") }).on_hover_text(crate::i18n::tr("从当前年份起，逐个变化年份播放到最后一年")).clicked() {
                             if playing {
                                 self.focus_play = None;
                             } else {
+                                self.stop_timeline_playback();
                                 if self.focus_neighbours().and_then(|n| n.1).is_none() {
                                     // at the end: from the start again
                                     if let Some((a, _)) = f.years {
@@ -404,16 +405,19 @@ impl App {
                             }
                         }
                     }
-                    if ui.button("导出…").on_hover_text("打开导出窗口，范围、标题与逐年导出的年份设为这个局部视图").clicked() {
+                    if ui.button(crate::i18n::tr("导出…")).on_hover_text(crate::i18n::tr("打开导出窗口，范围、标题与逐年导出的年份设为这个局部视图")).clicked() {
                         self.export_focus(&f);
                     }
-                    if ui.button("回到范围").on_hover_text("两个视图移回这个地区").clicked() {
+                    if ui.button(crate::i18n::tr("时间播放与视频")).clicked() {
+                        self.open_playback(true);
+                    }
+                    if ui.button(crate::i18n::tr("回到范围")).on_hover_text(crate::i18n::tr("两个视图移回这个地区")).clicked() {
                         self.fit_to_focus(&f);
                     }
-                    if ui.button("删除").on_hover_text("删除这个局部视图（地图本身不变，可撤销）").clicked() {
+                    if ui.button(crate::i18n::tr("删除")).on_hover_text(crate::i18n::tr("删除这个局部视图（地图本身不变，可撤销）")).clicked() {
                         delete = true;
                     }
-                    if ui.button("退出").clicked() {
+                    if ui.button(crate::i18n::tr("退出")).clicked() {
                         leave = true;
                     }
                 });

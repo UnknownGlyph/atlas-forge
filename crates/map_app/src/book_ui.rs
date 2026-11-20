@@ -103,6 +103,8 @@ enum Action {
     SaveLink(Option<BookId>, Link),
     RemoveLink(BookId),
     Attach(BookId),
+    ImportModel(Node),
+    ViewModel(BookId),
     Snapshot(BookId),
     Export(Vec<BookId>, bool),
     ExportAssets(Vec<BookId>),
@@ -146,11 +148,11 @@ fn name(book: &WorldBook, doc: &Document, node: Node) -> String {
 fn metadata(ui: &mut egui::Ui, meta: &mut Meta) -> bool {
     let mut changed = false;
     ui.horizontal_wrapped(|ui| {
-        ui.label("分类");
+        ui.label(crate::i18n::tr("分类"));
         changed |= ui
             .add(egui::TextEdit::singleline(&mut meta.category).desired_width(116.0))
             .changed();
-        ui.label("标签");
+        ui.label(crate::i18n::tr("标签"));
         changed |= ui
             .add(egui::TextEdit::singleline(&mut meta.tags).desired_width(160.0))
             .changed();
@@ -159,7 +161,7 @@ fn metadata(ui: &mut egui::Ui, meta: &mut Meta) -> bool {
         changed |= optional_year(ui, &mut meta.from, "起始年");
         changed |= optional_year(ui, &mut meta.until, "结束年");
     });
-    ui.label("说明");
+    ui.label(crate::i18n::tr("说明"));
     changed |= ui.text_edit_multiline(&mut meta.description).changed();
     changed
 }
@@ -186,6 +188,9 @@ fn catalog(
     let mut nodes = BTreeSet::from([focus]);
     nodes.extend(book.articles.keys().map(|id| Node::Article(*id)));
     nodes.extend(book.assets.keys().map(|id| Node::Asset(*id)));
+    if let Some(catalog) = &book.worldview {
+        nodes.extend(catalog.records.keys().copied().map(Node::Record));
+    }
     for id in book.boards.keys().copied() {
         nodes.insert(Node::Map(id));
         if let Some(d) = book.map(doc, id) {
@@ -268,17 +273,19 @@ impl App {
         self.book_context(node);
         true
     }
-    pub fn book_current_context(&mut self) {
+    pub(crate) fn current_book_node(&self) -> Node {
         let board = WorldBook::current(&self.doc);
-        let what = self
+        self
             .selection()
             .into_iter()
             .next()
             .map(|f| world_book::feature(board, f))
             .or_else(|| self.selected.map(|e| Node::Entity(board, e.0)))
             .or_else(|| self.selected_face.map(|f| Node::Face(board, f.0)))
-            .unwrap_or(Node::Map(board));
-        self.book_context(what);
+            .unwrap_or(Node::Map(board))
+    }
+    pub fn book_current_context(&mut self) {
+        self.book_context(self.current_book_node());
     }
     pub fn book_pick(
         &mut self,
@@ -318,7 +325,7 @@ impl App {
         if let Some(node) = geo {
             self.book_context(node);
         } else {
-            self.set_status("该位置没有可拾取的边界", true);
+            self.set_status(crate::i18n::tr("该位置没有可拾取的边界"), true);
             self.book_ui.open = true;
         }
         true
@@ -428,7 +435,7 @@ impl App {
             self.timeline_last_year = year;
         }
     }
-    fn enter_book_map(
+    pub(crate) fn enter_book_map(
         &mut self,
         id: BookId,
         year: Option<Option<i32>>,
@@ -458,12 +465,12 @@ impl App {
     pub fn book_bar(&mut self, ui: &mut egui::Ui) {
         let mut act = None;
         ui.horizontal_wrapped(|ui| {
-            if ui.button("世界资料").clicked() {
+            if ui.button(crate::i18n::tr("世界资料")).clicked() {
                 self.book_context(Node::Map(WorldBook::current(&self.doc)));
             }
             if self.book_ui.pick.is_some() {
-                ui.strong("在地图上取点");
-                if ui.button("取消").clicked() {
+                ui.strong(crate::i18n::tr("在地图上取点"));
+                if ui.button(crate::i18n::tr("取消")).clicked() {
                     self.book_ui.pick = None;
                     self.book_ui.open = true;
                 }
@@ -471,10 +478,10 @@ impl App {
             if let Some(book) = self.doc.book.as_ref() {
                 let current = book.current;
                 if current != ROOT {
-                    if ui.button("返回上层").clicked() {
+                    if ui.button(crate::i18n::tr("返回上层")).clicked() {
                         act = Some(Action::Back);
                     }
-                    if ui.button("世界地图").clicked() {
+                    if ui.button(crate::i18n::tr("世界地图")).clicked() {
                         act = Some(Action::Open(Node::Map(ROOT), None));
                     }
                 }
@@ -506,23 +513,23 @@ impl App {
         let book = doc.book.as_deref().unwrap_or(&empty);
         let state = &mut self.book_ui;
         let node = state.selected.unwrap_or(Node::Map(book.current));
-        egui::Window::new("世界资料库")
+        egui::Window::new(crate::i18n::tr("世界资料库"))
             .open(&mut open)
             .default_size([880., 630.])
             .scroll(true)
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    if ui.button("新文档").clicked() {
+                    if ui.button(crate::i18n::tr("新文档")).clicked() {
                         actions.push(Action::NewArticle(false));
                     }
-                    if ui.button("新事件").clicked() {
+                    if ui.button(crate::i18n::tr("新事件")).clicked() {
                         actions.push(Action::NewEvent);
                     }
-                    if ui.button("新画板").clicked() {
+                    if ui.button(crate::i18n::tr("新画板")).clicked() {
                         actions.push(Action::NewMap(BoardKind::Paper, false));
                     }
-                    ui.menu_button("画布尺寸", |ui| {
-                        ui.label("用于新建平面画布");
+                    ui.menu_button(crate::i18n::tr("画布尺寸"), |ui| {
+                        ui.label(crate::i18n::tr("用于新建平面画布"));
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::DragValue::new(&mut state.paper_size.width)
@@ -537,13 +544,16 @@ impl App {
                             );
                         });
                     });
-                    if ui.button("新建地理地图").clicked() {
+                    if ui.button(crate::i18n::tr("新建地理地图")).clicked() {
                         actions.push(Action::NewMap(BoardKind::Geographic, false));
                     }
-                    if ui.button("地图取对象…").clicked() {
+                    if ui.button(crate::i18n::tr("导入 3D 模型")).clicked() {
+                        actions.push(Action::ImportModel(node));
+                    }
+                    if ui.button(crate::i18n::tr("地图取对象…")).clicked() {
                         state.pick = Some(Pick::Object);
                     }
-                    if !state.reading.is_empty() && ui.button("返回资料").clicked() {
+                    if !state.reading.is_empty() && ui.button(crate::i18n::tr("返回资料")).clicked() {
                         if let Some(prior) = state.reading.pop() {
                             state.selected = Some(prior);
                             state.link_editor = None;
@@ -559,14 +569,14 @@ impl App {
                         (Tab::Events, "事件"),
                         (Tab::Assets, "图片与附件"),
                     ] {
-                        ui.selectable_value(&mut state.tab, tab, label);
+                        ui.selectable_value(&mut state.tab, tab, crate::i18n::tr(label));
                     }
                     ui.add(
                         egui::TextEdit::singleline(&mut state.filter)
-                            .hint_text("搜索名称、分类和标签")
+                            .hint_text(crate::i18n::tr("搜索名称、分类和标签"))
                             .desired_width(240.0),
                     );
-                    ui.checkbox(&mut state.follow_year, "按当前年份筛选");
+                    ui.checkbox(&mut state.follow_year, crate::i18n::tr("按当前年份筛选"));
                 });
                 let term = state.filter.trim().to_lowercase();
                 let items = catalog(book, doc, node, false);
@@ -634,9 +644,9 @@ impl App {
                                     );
                                 }
                             });
-                        ui.checkbox(&mut state.opts.events, "事件信息");
-                        ui.checkbox(&mut state.opts.maps, "关联地图截图");
-                        ui.checkbox(&mut state.opts.attachments, "附件目录");
+                        ui.checkbox(&mut state.opts.events, crate::i18n::tr("事件信息"));
+                        ui.checkbox(&mut state.opts.maps, crate::i18n::tr("关联地图截图"));
+                        ui.checkbox(&mut state.opts.attachments, crate::i18n::tr("附件目录"));
                     });
                     let ids: Vec<_> = state
                         .checked
@@ -646,13 +656,13 @@ impl App {
                         .collect();
                     if !ids.is_empty() {
                         a.horizontal_wrapped(|ui| {
-                            if ui.button("合并导出").clicked() {
+                            if ui.button(crate::i18n::tr("合并导出")).clicked() {
                                 actions.push(Action::Export(ids.clone(), false));
                             }
-                            if ui.button("批量逐篇").clicked() {
+                            if ui.button(crate::i18n::tr("批量逐篇")).clicked() {
                                 actions.push(Action::Export(ids.clone(), true));
                             }
-                            if ui.button("导出附件").clicked() {
+                            if ui.button(crate::i18n::tr("导出附件")).clicked() {
                                 actions.push(Action::ExportAssets(ids));
                             }
                         });
@@ -672,14 +682,18 @@ impl App {
                                     actions.push(Action::RenameAsset(id, title));
                                 }
                                 pane.weak(format!("{:.1} KB", asset.bytes.0.len() as f64 / 1024.0));
-                                if let Some(texture) = render::texture(pane, book, state, id) {
+                                if map_io::model::is_model(asset) {
+                                    if pane.button(crate::i18n::tr("打开 3D 查看器")).clicked() {
+                                        actions.push(Action::ViewModel(id));
+                                    }
+                                } else if let Some(texture) = render::texture(pane, book, state, id) {
                                     let size = texture.size_vec2();
                                     let k = (pane.available_width().max(100.0) / size.x)
                                         .min(300.0 / size.y)
                                         .min(1.0);
                                     pane.image((texture.id(), size * k));
                                 }
-                                if pane.button("单独导出附件").clicked() {
+                                if pane.button(crate::i18n::tr("单独导出附件")).clicked() {
                                     actions.push(Action::ExportAsset(id));
                                 }
                             }
@@ -698,7 +712,7 @@ impl App {
                                     book,
                                 );
                             } else if id == ROOT {
-                                pane.label("顶层地图");
+                                pane.label(crate::i18n::tr("顶层地图"));
                             }
                         }
                         Node::Event(id, event) => {
@@ -713,6 +727,11 @@ impl App {
                                         .cloned()
                                         .unwrap_or_default(),
                                 );
+                            }
+                        }
+                        Node::Record(_) => {
+                            if pane.button(crate::i18n::tr("打开世界观条目")).clicked() {
+                                actions.push(Action::Open(node, None));
                             }
                         }
                         Node::Place(_, id) => {
@@ -732,18 +751,18 @@ impl App {
                         }
                     }
                     if let Some(id) = node.board() {
-                        if !matches!(node, Node::Map(_)) && pane.button("打开所在画板").clicked()
+                        if !matches!(node, Node::Map(_)) && pane.button(crate::i18n::tr("打开所在画板")).clicked()
                         {
                             actions.push(Action::Open(Node::Map(id), None));
                         }
                         if let Node::Event(_, event) = node {
                             if let Some(e) = book.map(doc, id).and_then(|m| m.event(event)) {
                                 pane.horizontal_wrapped(|ui| {
-                                    if ui.button("查看事件起始年").clicked() {
+                                    if ui.button(crate::i18n::tr("查看事件起始年")).clicked() {
                                         actions
                                             .push(Action::Open(Node::Map(id), Some(Some(e.year))));
                                     }
-                                    if ui.button("在当前地图标记事件…").clicked() {
+                                    if ui.button(crate::i18n::tr("在当前地图标记事件…")).clicked() {
                                         state.pick = Some(Pick::Event(node));
                                     }
                                 });
@@ -755,17 +774,17 @@ impl App {
                     if book.label(doc, node).is_some()
                         && matches!(node, Node::Map(1..) | Node::Article(_))
                     {
-                        if pane.small_button("删除此项…").clicked() {
+                        if pane.small_button(crate::i18n::tr("删除此项…")).clicked() {
                             state.delete = Some(node);
                         }
                         if state.delete == Some(node) {
-                            pane.label("确认删除此项？关联资料与其它画板会保留。可撤销。");
+                            pane.label(crate::i18n::tr("确认删除此项？关联资料与其它画板会保留。可撤销。"));
                             pane.horizontal(|ui| {
-                                if ui.button("确认删除").clicked() {
+                                if ui.button(crate::i18n::tr("确认删除")).clicked() {
                                     actions.push(Action::Delete(node));
                                     state.delete = None;
                                 }
-                                if ui.button("取消").clicked() {
+                                if ui.button(crate::i18n::tr("取消")).clicked() {
                                     state.delete = None;
                                 }
                             });
@@ -794,23 +813,23 @@ fn map_panel(
     let mut title = doc.meta.name.clone();
     let mut changed = ui.text_edit_singleline(&mut title).changed();
     ui.horizontal_wrapped(|ui| {
-        if ui.button("进入画板").clicked() {
+        if ui.button(crate::i18n::tr("进入画板")).clicked() {
             actions.push(Action::Open(Node::Map(id), None));
         }
-        if ui.button("复制画板").clicked() {
+        if ui.button(crate::i18n::tr("复制画板")).clicked() {
             actions.push(Action::NewMap(BoardKind::Copy, false));
         }
-        if ui.button("另存画板").clicked() {
+        if ui.button(crate::i18n::tr("另存画板")).clicked() {
             actions.push(Action::SaveMap(id));
         }
     });
     if let Some(paper) = doc.paper {
-        ui.weak(format!("平面画布 · {} × {} px", paper.width, paper.height));
+        ui.weak(crate::trf!("平面画布 · {} × {} px", paper.width, paper.height));
     } else {
-        ui.weak("地理地图");
+        ui.weak(crate::i18n::tr("地理地图"));
     }
     let children = book.descendants(id).len().saturating_sub(1);
-    ui.label(format!(
+    ui.label(crate::trf!(
         "下属画板 {children} 张 · {}",
         doc.year.map_or("所有年份".into(), |v| v.to_string())
     ));
@@ -819,16 +838,16 @@ fn map_panel(
             .selected_text(MAP_FORMATS[state.map_format].1)
             .show_ui(ui, |ui| {
                 for (i, (_, label)) in MAP_FORMATS.iter().enumerate() {
-                    ui.selectable_value(&mut state.map_format, i, *label);
+                    ui.selectable_value(&mut state.map_format, i, crate::i18n::tr(label));
                 }
             });
-        if ui.button("导出画板").clicked() {
+        if ui.button(crate::i18n::tr("导出画板")).clicked() {
             actions.push(Action::ExportMaps(id, false));
         }
-        if ui.button("导出下属画板").clicked() {
+        if ui.button(crate::i18n::tr("导出下属画板")).clicked() {
             actions.push(Action::ExportMaps(id, true));
         }
-        if ui.button("画板和资料一起导出").clicked() {
+        if ui.button(crate::i18n::tr("画板和资料一起导出")).clicked() {
             actions.push(Action::Bundle(id));
         }
     });
@@ -847,13 +866,13 @@ fn event_panel(
     let mut event = source.clone();
     let mut changed = ui.text_edit_singleline(&mut event.name).changed();
     ui.horizontal(|ui| {
-        ui.label("开始年");
+        ui.label(crate::i18n::tr("开始年"));
         changed |= ui
             .add(egui::DragValue::new(&mut event.year).range(-1_000_000..=1_000_000))
             .changed();
         changed |= optional_year(ui, &mut event.end, "结束年");
     });
-    ui.label("事件记述");
+    ui.label(crate::i18n::tr("事件记述"));
     changed |= ui.text_edit_multiline(&mut event.note).changed();
     changed |= metadata(ui, &mut meta);
     if changed {
@@ -869,28 +888,28 @@ fn connections(
     actions: &mut Vec<Action>,
 ) {
     ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new("关联").strong());
-        if ui.button("新建关联文档").clicked() {
+        ui.label(RichText::new(crate::i18n::tr("关联")).strong());
+        if ui.button(crate::i18n::tr("新建关联文档")).clicked() {
             actions.push(Action::NewArticle(true));
         }
-        if ui.button("新建关联画板").clicked() {
+        if ui.button(crate::i18n::tr("新建关联画板")).clicked() {
             actions.push(Action::NewMap(BoardKind::Paper, true));
         }
         if ui
-            .small_button("关联地理地图")
-            .on_hover_text("新建带地理投影和球体视图的画板")
+            .small_button(crate::i18n::tr("关联地理地图"))
+            .on_hover_text(crate::i18n::tr("新建带地理投影和球体视图的画板"))
             .clicked()
         {
             actions.push(Action::NewMap(BoardKind::Geographic, true));
         }
-        ui.menu_button("地图取点", |ui| {
+        ui.menu_button(crate::i18n::tr("地图取点"), |ui| {
             for (pick, label) in [
                 (Pick::Object, "实体或要素"),
                 (Pick::Face, "地块"),
                 (Pick::Edge, "边界"),
                 (Pick::Place, "放置资料地点"),
             ] {
-                if ui.button(label).clicked() {
+                if ui.button(crate::i18n::tr(label)).clicked() {
                     state.pick = Some(pick);
                     ui.close();
                 }
@@ -925,7 +944,7 @@ fn connections(
                     "上层"
                 }
             } else {
-                "交叉"
+                crate::i18n::tr("交叉")
             });
             if ui.link(name(book, doc, other)).clicked() {
                 actions.push(Action::Open(
@@ -936,10 +955,10 @@ fn connections(
             if !l.label.is_empty() {
                 ui.weak(&l.label);
             }
-            if ui.small_button("修改").clicked() {
+            if ui.small_button(crate::i18n::tr("修改")).clicked() {
                 state.link_editor = Some((Some(id), l.clone()));
             }
-            if ui.small_button("解除").clicked() {
+            if ui.small_button(crate::i18n::tr("解除")).clicked() {
                 actions.push(Action::RemoveLink(id));
             }
         });
@@ -958,7 +977,7 @@ fn connections(
                 }
             });
         if let Some(target) = state.target {
-            if ui.button("添加链接").clicked() {
+            if ui.button(crate::i18n::tr("添加链接")).clicked() {
                 state.link_editor = Some((None, Link::new(node, target, false)));
             }
         }
@@ -966,22 +985,22 @@ fn connections(
     if let Some((id, link)) = state.link_editor.as_mut() {
         ui.group(|ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label("起点");
+                ui.label(crate::i18n::tr("起点"));
                 node_menu(ui, "book-link-from", &mut link.from, &all, book, doc);
-                ui.label("终点");
+                ui.label(crate::i18n::tr("终点"));
                 node_menu(ui, "book-link-to", &mut link.to, &all, book, doc);
             });
-            ui.checkbox(&mut link.child, "层级链接");
+            ui.checkbox(&mut link.child, crate::i18n::tr("层级链接"));
             ui.horizontal_wrapped(|ui| {
-                ui.label("链接说明");
+                ui.label(crate::i18n::tr("链接说明"));
                 ui.text_edit_singleline(&mut link.label);
             });
             ui.horizontal_wrapped(|ui| {
-                ui.label("进入目标画板的年份");
-                ui.selectable_value(&mut link.time, TimeLink::Keep, "保留画板年份");
-                ui.selectable_value(&mut link.time, TimeLink::Inherit, "继承当前年份");
+                ui.label(crate::i18n::tr("进入目标画板的年份"));
+                ui.selectable_value(&mut link.time, TimeLink::Keep, crate::i18n::tr("保留画板年份"));
+                ui.selectable_value(&mut link.time, TimeLink::Inherit, crate::i18n::tr("继承当前年份"));
                 if ui
-                    .selectable_label(matches!(link.time, TimeLink::Fixed(_)), "固定年")
+                    .selectable_label(matches!(link.time, TimeLink::Fixed(_)), crate::i18n::tr("固定年"))
                     .clicked()
                 {
                     link.time = TimeLink::Fixed(source_year.unwrap_or(0));
@@ -994,7 +1013,7 @@ fn connections(
                 optional_year(ui, &mut link.from_year, "显示起年份");
                 optional_year(ui, &mut link.until_year, "显示止年份");
             });
-            if ui.button("保存链接").clicked() {
+            if ui.button(crate::i18n::tr("保存链接")).clicked() {
                 actions.push(Action::SaveLink(*id, link.clone()));
             }
         });
@@ -1018,6 +1037,10 @@ fn node_menu(
 }
 
 impl App {
+    pub(crate) fn open_book_node(&mut self, node: Node, year: Option<Option<i32>>) {
+        self.book_action(Action::Open(node, year));
+    }
+
     fn book_action(&mut self, action: Action) {
         let selected = self
             .book_ui
@@ -1026,6 +1049,11 @@ impl App {
         match action {
             Action::Select(node) => self.book_context(node),
             Action::Open(node, year) => {
+                if let Node::Record(id) = node {
+                    self.book_ui.open = false;
+                    self.open_worldview(Some(id));
+                    return;
+                }
                 if let Some(id) = node.board() {
                     if let Err(e) = self.enter_book_map(id, year, true) {
                         self.set_status(e, true);
@@ -1033,6 +1061,9 @@ impl App {
                     }
                 }
                 self.book_context(node);
+                if let Node::Asset(id) = node {
+                    self.open_model_asset(id);
+                }
                 if let Node::Map(_) = node {
                     self.book_ui.open = false;
                 }
@@ -1209,6 +1240,8 @@ impl App {
                     }
                 }
             }
+            Action::ImportModel(node) => self.import_model_asset(node),
+            Action::ViewModel(id) => self.open_model_asset(id),
             Action::Snapshot(id) => {
                 let (width, height) = self.doc.paper.map_or((1100, 680), |p| (p.width, p.height));
                 let opts = map_io::scene::ExportOptions {
@@ -1233,7 +1266,7 @@ impl App {
             Action::ExportAssets(ids) => {
                 if let Some(dir) = self.file_dialog().pick_folder() {
                     match dossier::export_attachments(&self.doc, &ids, &dir) {
-                        Ok(n) => self.set_status(format!("已导出 {n} 个附件"), false),
+                        Ok(n) => self.set_status(crate::trf!("已导出 {n} 个附件"), false),
                         Err(e) => self.set_status(e, true),
                     }
                 }
@@ -1252,12 +1285,12 @@ impl App {
                         .save_file()
                     {
                         if same_project(&self.path, &path) {
-                            self.set_status("请为附件指定其他路径", true);
+                            self.set_status(crate::i18n::tr("请为附件指定其他路径"), true);
                         } else {
                             self.book_result(
                                 map_io::recovery::write_atomic(&path, &asset.bytes.0)
                                     .map_err(|e| e.to_string()),
-                                "已导出附件",
+                                crate::i18n::tr("已导出附件"),
                             );
                         }
                     }
@@ -1265,11 +1298,17 @@ impl App {
             }
             Action::RenameAsset(id, title) => {
                 self.edit("重命名资料附件", |d| {
-                    WorldBook::edit(d)
+                    let asset = WorldBook::edit(d)
                         .assets
                         .get_mut(&id)
-                        .ok_or("附件已不存在")?
-                        .name = title;
+                        .ok_or("附件已不存在")?;
+                    let old_ext = std::path::Path::new(&asset.name).extension().and_then(|s| s.to_str());
+                    let new_ext = std::path::Path::new(&title).extension().and_then(|s| s.to_str());
+                    asset.name = if map_io::model::is_model(asset) && old_ext != new_ext {
+                        old_ext.map_or(title.clone(), |ext| format!("{title}.{ext}"))
+                    } else {
+                        title
+                    };
                     Ok(())
                 });
             }
@@ -1306,7 +1345,7 @@ impl App {
                     flat.book = None;
                     if let Some(path) = self
                         .file_dialog()
-                        .add_filter("Atlas 画板", &["atlas"])
+                        .add_filter(crate::i18n::tr("Atlas 画板"), &["atlas"])
                         .set_file_name(format!(
                             "{}.atlas",
                             dossier::unique_name(&flat.meta.name, id)
@@ -1314,9 +1353,9 @@ impl App {
                         .save_file()
                     {
                         if same_project(&self.path, &path) {
-                            self.set_status("请选择不同于当前工程的画板文件", true);
+                            self.set_status(crate::i18n::tr("请选择不同于当前工程的画板文件"), true);
                         } else {
-                            self.book_result(map_io::project::save(&path, &flat), "已另存独立画板");
+                            self.book_result(map_io::project::save(&path, &flat), crate::i18n::tr("已另存独立画板"));
                         }
                     }
                 }
@@ -1346,7 +1385,7 @@ impl App {
     fn book_result(&mut self, result: Result<(), String>, ok: &str) {
         match result {
             Ok(()) => self.set_status(ok, false),
-            Err(e) => self.set_status(format!("导出失败：{e}"), true),
+            Err(e) => self.set_status(crate::trf!("导出失败：{e}"), true),
         }
     }
     fn export_book_articles(&mut self, ids: &[BookId], batch: bool) {
@@ -1369,7 +1408,7 @@ impl App {
                         )),
                     )
                 });
-                self.book_result(result, "已批量导出文档");
+                self.book_result(result, crate::i18n::tr("已批量导出文档"));
             }
         } else {
             let stem = if ids.len() == 1 {
@@ -1382,17 +1421,17 @@ impl App {
             };
             if let Some(path) = self
                 .file_dialog()
-                .add_filter("资料文档", &[format.extension()])
+                .add_filter(crate::i18n::tr("资料文档"), &[format.extension()])
                 .set_file_name(format!("{stem}.{}", format.extension()))
                 .save_file()
             {
                 if same_project(&self.path, &path) {
-                    self.set_status("请为资料文档指定其他路径", true);
+                    self.set_status(crate::i18n::tr("请为资料文档指定其他路径"), true);
                     return;
                 }
                 self.book_result(
                     dossier::export(&self.doc, ids, format, opts, &path),
-                    "已导出资料",
+                    crate::i18n::tr("已导出资料"),
                 );
             }
         }
@@ -1448,9 +1487,9 @@ impl App {
         self.book_result(
             result,
             if bundle {
-                "已导出地图和资料"
+                crate::i18n::tr("已导出地图和资料")
             } else {
-                "已导出画板"
+                crate::i18n::tr("已导出画板")
             },
         );
     }

@@ -63,17 +63,17 @@ impl App {
         let mut save = false;
         let mut book_open = None;
         let cal = self.doc.calendar.clone();
-        egui::Window::new("事件时间线").open(&mut open).default_width(340.0).show(ctx, |ui| {
+        egui::Window::new(crate::i18n::tr("事件时间线")).open(&mut open).default_width(340.0).show(ctx, |ui| {
             ui.horizontal(|ui| {
-                if ui.button("+ 在当前年份新建事件").clicked() {
+                if ui.button(crate::i18n::tr("+ 在当前年份新建事件")).clicked() {
                     add = true;
                 }
-                if ui.add_enabled(!self.doc.events.is_empty(), egui::Button::new("导出编年表…")).on_hover_text("按年份列出事件、说明与期间的领土变化（Markdown 文件）").clicked() {
+                if ui.add_enabled(!self.doc.events.is_empty(), egui::Button::new(crate::i18n::tr("导出编年表…"))).on_hover_text(crate::i18n::tr("按年份列出事件、说明与期间的领土变化（Markdown 文件）")).clicked() {
                     save = true;
                 }
             });
             if self.doc.events.is_empty() {
-                ui.weak("还没有事件。事件给一年或一段年份起名（战争、条约、继承），可附说明并关联局部视图；在时间轴上显示为标记，单击即跳到那一年。");
+                ui.weak(crate::i18n::tr("还没有事件。事件给一年或一段年份起名（战争、条约、继承），可附说明并关联局部视图；在时间轴上显示为标记，单击即跳到那一年。"));
                 return;
             }
             egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
@@ -91,15 +91,15 @@ impl App {
             });
             let Some(e) = self.event_sel.and_then(|id| self.doc.event(id)).cloned() else { return };
             ui.separator();
-            if ui.button("事件资料与画板…").clicked(){book_open=Some(e.id);}
+            if ui.button(crate::i18n::tr("事件资料与画板…")).clicked(){book_open=Some(e.id);}
             let (mut name, mut note) = self.event_text.clone().filter(|t| t.0 == e.id).map(|t| (t.1, t.2)).unwrap_or((e.name.clone(), e.note.clone()));
-            let rn = ui.add(egui::TextEdit::singleline(&mut name).hint_text("名称").desired_width(300.0));
+            let rn = ui.add(egui::TextEdit::singleline(&mut name).hint_text(crate::i18n::tr("名称")).desired_width(300.0));
             ui.horizontal(|ui| {
                 let (mut y, mut last) = (e.year, e.last());
                 let mut ranged = e.end.is_some();
-                ui.label("年份");
+                ui.label(crate::i18n::tr("年份"));
                 let ry = ui.add(egui::DragValue::new(&mut y).speed(0.2));
-                if ui.checkbox(&mut ranged, "至").changed() {
+                if ui.checkbox(&mut ranged, crate::i18n::tr("至")).changed() {
                     change = Some(Event { end: ranged.then_some(y + 1), ..e.clone() });
                 }
                 if ranged {
@@ -116,10 +116,10 @@ impl App {
                 }
             });
             ui.horizontal(|ui| {
-                ui.label("地区");
+                ui.label(crate::i18n::tr("地区"));
                 let shown = e.focus.and_then(|f| self.doc.focus(f)).map_or("（整个地图）".to_string(), |f| f.name.clone());
                 egui::ComboBox::from_id_salt("event-focus").selected_text(shown).show_ui(ui, |ui| {
-                    if ui.selectable_label(e.focus.is_none(), "（整个地图）").clicked() {
+                    if ui.selectable_label(e.focus.is_none(), crate::i18n::tr("（整个地图）")).clicked() {
                         change = Some(Event { focus: None, ..e.clone() });
                     }
                     for f in &self.doc.focuses {
@@ -129,7 +129,7 @@ impl App {
                     }
                 });
             });
-            let rt = ui.add(egui::TextEdit::multiline(&mut note).hint_text("说明（可选）").desired_rows(3).desired_width(300.0));
+            let rt = ui.add(egui::TextEdit::multiline(&mut note).hint_text(crate::i18n::tr("说明（可选）")).desired_rows(3).desired_width(300.0));
             self.event_text = Some((e.id, name.clone(), note.clone()));
             if (rn.lost_focus() || rt.lost_focus()) && (name.trim() != e.name || note != e.note) && !name.trim().is_empty() {
                 change = Some(Event { name: name.trim().to_string(), note: note.clone(), ..e.clone() });
@@ -143,23 +143,23 @@ impl App {
             let rep = self.doc.change_report(&faces, e.year - 1, e.last());
             let moved: f64 = rep.transfers.iter().map(|t| t.2).sum();
             if rep.transfers.is_empty() {
-                ui.weak("期间领土没有变化");
+                ui.weak(crate::i18n::tr("期间领土没有变化"));
             } else {
-                ui.label(RichText::new(format!("期间易手 {:.0} km²", moved)).weak());
+                ui.label(RichText::new(crate::trf!("期间易手 {:.0} km²", moved)).weak());
                 for (a, b, k) in rep.transfers.iter().take(4) {
                     ui.weak(format!("{} → {}：{:.0} km²", self.entity_name(*a), self.entity_name(*b), k));
                 }
             }
             ui.horizontal(|ui| {
-                if ui.button("跳到这一年").clicked() {
+                if ui.button(crate::i18n::tr("跳到这一年")).clicked() {
                     self.set_year(Some(e.year));
                 }
                 if let Some(f) = e.focus.filter(|f| self.doc.focus(*f).is_some()) {
-                    if ui.button("进入局部视图").clicked() {
+                    if ui.button(crate::i18n::tr("进入局部视图")).clicked() {
                         self.enter_focus(f, true);
                     }
                 }
-                if ui.button("删除").clicked() {
+                if ui.button(crate::i18n::tr("删除")).clicked() {
                     remove = Some(e.id);
                 }
             });
@@ -193,8 +193,8 @@ impl App {
         if save {
             if let Some(path) = self.file_dialog().add_filter("Markdown", &["md"]).set_file_name(format!("{} 编年表.md", self.doc.meta.name)).save_file() {
                 match std::fs::write(&path, self.doc.chronicle_markdown()) {
-                    Ok(()) => self.set_status(format!("已导出编年表 {}", path.display()), false),
-                    Err(e) => self.set_status(format!("导出编年表失败：{e}"), true),
+                    Ok(()) => self.set_status(crate::trf!("已导出编年表 {}", path.display()), false),
+                    Err(e) => self.set_status(crate::trf!("导出编年表失败：{e}"), true),
                 }
             }
         }

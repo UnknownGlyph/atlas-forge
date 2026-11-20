@@ -1,36 +1,91 @@
-//! The interface's language: Chinese (the source text) or English. Texts
-//! are written in Chinese where they are used; `tr` gives the English of a
-//! text in the catalogue below (generated for the commands, menus and tools
-//! first), or the text itself when there is none yet — so parts not yet
-//! translated stay in Chinese. The language comes from the preferences.
+//! Stable interface strings keyed by their Simplified Chinese source.
+//! Document content and user-entered names remain in the author's language.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
 pub enum Lang {
     Zh,
     En,
+    ZhTw,
+    Ja,
+    Ru,
+    De,
+    Fr,
+    It,
+    Es,
+    Pt,
 }
 
 impl Lang {
-    pub const ALL: [Lang; 2] = [Lang::Zh, Lang::En];
+    pub const ALL: [Lang; 10] = [
+        Lang::Zh,
+        Lang::En,
+        Lang::ZhTw,
+        Lang::Ja,
+        Lang::Ru,
+        Lang::De,
+        Lang::Fr,
+        Lang::It,
+        Lang::Es,
+        Lang::Pt,
+    ];
     /// As stored in the preferences.
     pub fn code(self) -> &'static str {
         match self {
             Lang::Zh => "zh",
             Lang::En => "en",
+            Lang::ZhTw => "zh-TW",
+            Lang::Ja => "ja",
+            Lang::Ru => "ru",
+            Lang::De => "de",
+            Lang::Fr => "fr",
+            Lang::It => "it",
+            Lang::Es => "es",
+            Lang::Pt => "pt",
         }
     }
     pub fn from_code(c: &str) -> Lang {
-        if c == "en" { Lang::En } else { Lang::Zh }
+        Self::ALL
+            .into_iter()
+            .find(|l| l.code().eq_ignore_ascii_case(c))
+            .unwrap_or(Lang::Zh)
     }
     /// Its own name, as shown in the language picker.
     pub fn name(self) -> &'static str {
         match self {
-            Lang::Zh => "中文",
+            Lang::Zh => "简体中文",
             Lang::En => "English",
+            Lang::ZhTw => "繁體中文",
+            Lang::Ja => "日本語",
+            Lang::Ru => "Русский",
+            Lang::De => "Deutsch",
+            Lang::Fr => "Français",
+            Lang::It => "Italiano",
+            Lang::Es => "Español",
+            Lang::Pt => "Português",
+        }
+    }
+    fn messages(self) -> &'static str {
+        macro_rules! include_language {
+            ($code:literal) => {
+                include_str!(concat!("../../../assets/i18n/", $code, ".json"))
+            };
+        }
+        match self {
+            Self::Zh => "{}",
+            Self::En => include_language!("en"),
+            Self::ZhTw => include_language!("zh-TW"),
+            Self::Ja => include_language!("ja"),
+            Self::Ru => include_language!("ru"),
+            Self::De => include_language!("de"),
+            Self::Fr => include_language!("fr"),
+            Self::It => include_language!("it"),
+            Self::Es => include_language!("es"),
+            Self::Pt => include_language!("pt"),
         }
     }
 }
@@ -42,7 +97,7 @@ pub fn set(l: Lang) {
 }
 
 pub fn get() -> Lang {
-    if LANG.load(Ordering::Relaxed) == 1 { Lang::En } else { Lang::Zh }
+    Lang::ALL[usize::from(LANG.load(Ordering::Relaxed))]
 }
 
 fn catalogue() -> &'static HashMap<&'static str, &'static str> {
@@ -52,10 +107,131 @@ fn catalogue() -> &'static HashMap<&'static str, &'static str> {
 
 /// The text in the interface's language.
 pub fn tr(zh: &'static str) -> &'static str {
-    match get() {
-        Lang::Zh => zh,
-        Lang::En => catalogue().get(zh).copied().unwrap_or(zh),
+    lookup(get(), zh).unwrap_or(zh)
+}
+
+fn messages(lang: Lang) -> &'static HashMap<String, String> {
+    static CATALOGS: [OnceLock<HashMap<String, String>>; Lang::ALL.len()] =
+        [const { OnceLock::new() }; Lang::ALL.len()];
+    CATALOGS[lang as usize].get_or_init(|| {
+        serde_json::from_str(lang.messages()).expect("valid bundled interface catalogue")
+    })
+}
+
+pub(crate) fn lookup(lang: Lang, zh: &str) -> Option<&'static str> {
+    if lang == Lang::Zh {
+        return None;
     }
+    (lang == Lang::En)
+        .then(|| catalogue().get(zh).copied())
+        .flatten()
+        .or_else(|| messages(lang).get(zh).map(String::as_str))
+        .or_else(|| catalogue().get(zh).copied())
+        .or_else(|| messages(Lang::En).get(zh).map(String::as_str))
+}
+
+pub(crate) fn message(text: String) -> String {
+    let lang = get();
+    if lang == Lang::Zh {
+        return text;
+    }
+    if let Some(translated) = lookup(lang, &text) {
+        return translated.to_owned();
+    }
+    // Domain errors originate in map_core. Their leading authored phrase
+    // identifies the message, while the target names and values stay intact.
+    let match_template = messages(lang)
+        .keys()
+        .filter(|key| {
+            key.find('{').is_some_and(|i| {
+                let prefix = &key[..i];
+                prefix.chars().filter(|c| !c.is_whitespace()).count() >= 4
+                    && text.starts_with(prefix)
+            })
+        })
+        .max_by_key(|key| key.find('{').unwrap_or_default());
+    match_template
+        .and_then(|key| lookup(lang, key).and_then(|local| interpolate(key, local, &text)))
+        .unwrap_or(text)
+}
+
+pub(crate) fn text(source: &str) -> &str {
+    lookup(get(), source).unwrap_or(source)
+}
+
+// Rust has already formatted the arguments with the authored precision. A
+// translation can reorder the captured values while retaining those formats.
+pub(crate) fn formatted(source: &'static str, rendered: String) -> String {
+    let Some(translated) = lookup(get(), source) else {
+        return rendered;
+    };
+    interpolate(source, translated, &rendered).unwrap_or(rendered)
+}
+
+fn interpolate(source: &str, translated: &str, rendered: &str) -> Option<String> {
+    if source.contains("{{") || source.contains("}}") {
+        return None;
+    }
+    let fields = |text: &str| {
+        let mut rest = text;
+        let mut positions = Vec::new();
+        let mut offset = 0;
+        while let Some(open) = rest.find('{') {
+            let close = rest[open..].find('}')? + open + 1;
+            positions.push((offset + open, offset + close));
+            rest = &rest[close..];
+            offset += close;
+        }
+        Some(positions)
+    };
+    let original = fields(source)?;
+    let local = fields(translated)?;
+    if original.len() != local.len() {
+        return None;
+    }
+    if original.is_empty() {
+        return Some(translated.into());
+    }
+    let mut inputs = Vec::with_capacity(original.len());
+    let mut rest = rendered.strip_prefix(&source[..original[0].0])?;
+    for (i, &(a, b)) in original.iter().enumerate() {
+        let before_next = &source[b..original.get(i + 1).map_or(source.len(), |p| p.0)];
+        let token = &source[a..b];
+        if i + 1 == original.len() {
+            inputs.push((token, rest.strip_suffix(before_next)?, false));
+        } else {
+            if before_next.is_empty() {
+                return None;
+            }
+            let (capture, following) = rest.split_once(before_next)?;
+            inputs.push((token, capture, false));
+            rest = following;
+        }
+    }
+    let mut out = String::new();
+    let mut written = 0;
+    for (a, b) in local {
+        out.push_str(&translated[written..a]);
+        let token = &translated[a..b];
+        let slot = inputs
+            .iter_mut()
+            .find(|(key, _, used)| !*used && *key == token)?;
+        out.push_str(slot.1);
+        slot.2 = true;
+        written = b;
+    }
+    out.push_str(&translated[written..]);
+    Some(out)
+}
+
+#[macro_export]
+macro_rules! trf {
+    ($template:literal $(,)?) => {
+        $crate::i18n::formatted($template, format!($template))
+    };
+    ($template:literal, $($args:tt)*) => {
+        $crate::i18n::formatted($template, format!($template, $($args)*))
+    };
 }
 
 /// English for each Chinese text (commands, menus, tools first).
@@ -183,6 +359,43 @@ pub const EN: &[(&str, &str)] = &[
     ("先用选择工具选中要修改的线路、区域、文字或符号，再用吸管单击作样板的要素：所选的同类要素换成它的外观；样板使用某个样式时，它们也使用这个样式。", "Select the routes, areas, text or symbols to change with the select tool, then click a feature with the eyedropper: the selected features of the same kind take its look; when it uses a style, they use it too."),
     ("双击空白处添加地图文字；拖动国家标注到想要的位置（所有年份相同，始终显示，导出同样生效）；单击标注选中国家，在国家属性中旋转、缩放、隐藏或恢复自动。此工具下显示全部标注（含被避让和隐藏的）。", "Double-click empty space to add map text; drag a country label where you want it (the same in every year, always shown, exported too); click a label to select its country and rotate, scale, hide or restore it in the country's properties. This tool shows every label, the ones hidden or crowded out included."),
     ("AI 助手…", "AI assistant…"),
+    ("Atlas Forge · AI 助手", "Atlas Forge · AI Assistant"),
+    ("导入 3D 模型", "Import 3D model"),
+    ("打开 3D 查看器", "Open 3D viewer"),
+    ("3D 模型", "3D model"),
+    ("附件已不存在", "The attachment is missing"),
+    ("未能载入模型。", "The model could not be loaded."),
+    ("重置视角", "Reset view"),
+    ("线框", "Wireframe"),
+    ("左键旋转 · 右键平移 · 滚轮缩放", "Left drag to orbit · Right drag to pan · Wheel to zoom"),
+    ("整体移动陆块", "Move land block"),
+    ("整体缩放陆块", "Scale land block"),
+    ("围绕选中陆块的中心等比缩放海岸、共享边界和附属要素，并检查冲突。", "Scale the coastline, shared borders and attached features around the selected land block's center and check for conflicts."),
+    ("选中独立陆块。拖动或输入比例可围绕中心等比缩放。", "Select a separate land block. Drag or enter a percentage to scale it around its center."),
+    ("地图在选取后发生了变化，请重新选择陆块。", "The map changed after selection. Select the land block again."),
+    ("松手点不在当前地图的可见范围内，操作已取消。", "The pointer was released outside the visible map. The operation was canceled."),
+    ("应用缩放", "Apply scale"),
+    ("世界观设定…", "Worldbuilding…"),
+    ("管理自定义实体类型、关系、数值规则和模板。", "Define entity types, relationships, numeric rules, and templates."),
+    ("环境生成与图层…", "Environment generation and layers…"),
+    ("生成地形、水文、气候、生态及自定义资源图层。", "Generate terrain, drainage, climate, ecosystems, and custom resource layers."),
+    ("数据可视化…", "Data visualization…"),
+    ("从地图、世界观和表格数据创建曲线、关系网络、剖面和专题图。", "Create curves, relationship networks, profiles, and thematic maps from atlas data."),
+    ("时间播放与视频", "Timeline playback and video"),
+    ("切换创作工作室", "Switch to Creative Studio"),
+    ("在专业界面与创作工作室窗口之间切换，继续编辑同一份工程。", "Switch windows between the professional editor and the Creative Studio while editing the same project."),
+    ("创作工作室", "Creative Studio"),
+    ("切回专业界面", "Return to professional editor"),
+    ("所有命令", "All commands"),
+    ("设置", "Settings"),
+    ("设置年份间隔、总时长与速度，播放全局或局部视图并导出 MP4。", "Set year intervals, duration and speed. Play a world or local view and export to MP4."),
+    ("银河系中心", "Galactic center"),
+    ("太阳系中心", "Solar system center"),
+    ("导出当前星表坐标", "Export catalog coordinates"),
+    ("已导出 8000 颗观测恒星的坐标。", "Exported coordinates of 8,000 observed stars."),
+    ("地理参考线…", "Geographic guides…"),
+    ("添加固定的经线和纬线，控制辅助吸附与导出。", "Add fixed meridians and parallels, with optional snapping and export."),
+    ("用鼠标移动相连的陆地、城市和共享边界；可输入精确经纬度偏移。", "Drag connected land, cities and shared boundaries, or enter an exact geographic offset."),
     ("行星环境与气候…", "Planetary environment and climate…"),
     ("本地插件…", "Local plugins…"),
     ("世界资料库…", "World library…"),
@@ -272,20 +485,44 @@ mod tests {
         for (zh, en) in EN {
             assert!(seen.insert(*zh), "{zh} twice");
             // English, with no Chinese left in it
-            assert!(!en.is_empty() && !en.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c) || ('\u{3000}'..='\u{303f}').contains(&c)), "{zh}: {en}");
+            assert!(
+                !en.is_empty()
+                    && !en.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)
+                        || ('\u{3000}'..='\u{303f}').contains(&c)),
+                "{zh}: {en}"
+            );
         }
         let c = catalogue();
         let mut missing: Vec<&str> = Vec::new();
         for a in crate::actions::table_source() {
-            missing.extend([a.0, a.1].into_iter().filter(|s| !s.is_empty() && !c.contains_key(s)));
+            missing.extend(
+                [a.0, a.1]
+                    .into_iter()
+                    .filter(|s| !s.is_empty() && !c.contains_key(s)),
+            );
         }
-        missing.extend(crate::actions::Menu::ALL.map(|m| m.source_name()).into_iter().filter(|s| !c.contains_key(s)));
+        missing.extend(
+            crate::actions::Menu::ALL
+                .map(|m| m.source_name())
+                .into_iter()
+                .filter(|s| !c.contains_key(s)),
+        );
         for t in crate::view::Tool::ALL {
-            missing.extend([t.source_label(), t.source_help()].into_iter().filter(|s| !c.contains_key(s)));
+            missing.extend(
+                [t.source_label(), t.source_help()]
+                    .into_iter()
+                    .filter(|s| !c.contains_key(s)),
+            );
         }
-        assert!(missing.is_empty(), "no English for:
-{}", missing.join("
-"));
+        assert!(
+            missing.is_empty(),
+            "no English for:
+{}",
+            missing.join(
+                "
+"
+            )
+        );
     }
 
     #[test]
@@ -295,5 +532,50 @@ mod tests {
         assert_eq!(tr("没有译文的文字"), "没有译文的文字");
         set(Lang::Zh);
         assert_eq!(tr("保存"), "保存");
+    }
+
+    #[test]
+    fn each_language_has_a_complete_catalogue_and_known_tools() {
+        for lang in Lang::ALL.into_iter().filter(|l| *l != Lang::Zh) {
+            let table = messages(lang);
+            assert!(table.len() >= 3000, "{:?}", lang);
+            for key in [
+                "文件",
+                "整体缩放陆块",
+                "AI 助手…",
+                "导入 3D 模型",
+                "相互引力",
+                "添加伴星",
+                "添加卫星",
+                "添加自定义恒星",
+                "太阳邻域",
+            ] {
+                assert!(
+                    table.get(key).is_some_and(
+                        |translation| !translation.is_empty() && !translation.contains('▁')
+                    ),
+                    "{lang:?}: {key}"
+                );
+            }
+        }
+        assert_eq!(lookup(Lang::Ja, "文件"), Some("ファイル"));
+        assert_eq!(
+            lookup(Lang::De, "打开 3D 查看器"),
+            Some("3D-Ansicht öffnen")
+        );
+        assert_eq!(lookup(Lang::ZhTw, "保存"), Some("儲存"));
+    }
+
+    #[test]
+    fn formatted_values_keep_precision_when_reordered() {
+        assert_eq!(
+            interpolate(
+                "经度 {lon:.2}，纬度 {lat:.2}",
+                "Latitude {lat:.2} · Longitude {lon:.2}",
+                "经度 31.20，纬度 -9.80"
+            ),
+            Some("Latitude -9.80 · Longitude 31.20".into())
+        );
+        assert_eq!(interpolate("{a} 个点", "Points", "2 个点"), None);
     }
 }

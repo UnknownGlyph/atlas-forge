@@ -64,6 +64,19 @@ fn centre(pts: &[LonLat]) -> Option<LonLat> {
 }
 
 impl Document {
+    pub fn feature_position(&self, feature: FeatureRef) -> Option<LonLat> {
+        match feature {
+            FeatureRef::Text(id) => Some(self.annotations.get(&id)?.at),
+            FeatureRef::Symbol(id) => Some(self.symbols.get(&id)?.at),
+            FeatureRef::Route(id) | FeatureRef::River(id) => {
+                let r = self.rivers.get(&id)?;
+                (r.pts.len() >= 2).then(|| crate::doc::path_middle(&r.pts))
+            }
+            FeatureRef::Area(id) => centre(&self.areas.get(&id)?.ring),
+        }
+    }
+
+
     /// Every drawn feature, by kind (text, symbols, routes, rivers, areas)
     /// and then by name.
     pub fn features(&self) -> Vec<FeatureInfo> {

@@ -158,12 +158,12 @@ impl App {
         match brush {
             Some(e) => {
                 ui.painter().rect_filled(sw, 3.0, Color32::from_rgba_unmultiplied(e.color[0], e.color[1], e.color[2], 255));
-                resp.on_hover_text(format!("当前画笔国家：{}（绘制陆地与领土画笔使用；在国家列表中更换）", e.name));
+                resp.on_hover_text(crate::trf!("当前画笔国家：{}（绘制陆地与领土画笔使用；在国家列表中更换）", e.name));
             }
             None => {
                 ui.painter().rect_stroke(sw, 3.0, Stroke::new(1.0, ui.visuals().weak_text_color()), egui::StrokeKind::Inside);
                 ui.painter().line_segment([sw.left_bottom(), sw.right_top()], Stroke::new(1.0, ui.visuals().weak_text_color()));
-                resp.on_hover_text("还没有画笔国家：在国家列表中选择一个国家并“设为画笔”，绘制陆地与领土画笔会用到它。");
+                resp.on_hover_text(crate::i18n::tr("还没有画笔国家：在国家列表中选择一个国家并“设为画笔”，绘制陆地与领土画笔会用到它。"));
             }
         }
     }
@@ -179,18 +179,18 @@ impl App {
             ui.separator();
             let drawing = matches!(tool, Tool::DrawLand | Tool::DrawLake | Tool::Split | Tool::Redraw | Tool::River | Tool::Hatch);
             if tool == Tool::EditVertex {
-                ui.checkbox(&mut self.vertex_dated, "选定年份时作为领土变化").on_hover_text("开启：时间轴选定年份时，拖动或删除国界顶点等于从该年起移交土地，更早的地图不变。关闭：修改所有年份共用的边界形状。未选年份时总是直接修改形状。");
+                ui.checkbox(&mut self.vertex_dated, crate::i18n::tr("选定年份时作为领土变化")).on_hover_text(crate::i18n::tr("开启：时间轴选定年份时，拖动或删除国界顶点等于从该年起移交土地，更早的地图不变。关闭：修改所有年份共用的边界形状。未选年份时总是直接修改形状。"));
             }
             if matches!(tool, Tool::DrawLand | Tool::DrawLake) {
-                ui.selectable_value(&mut self.brush_paint, false, "轮廓").on_hover_text("单击加点或按住拖动手绘出轮廓");
-                ui.selectable_value(&mut self.brush_paint, true, "涂抹").on_hover_text(if tool == Tool::DrawLand {
-                    "按住拖动涂抹，松开即应用（重叠方式与年份同样生效）；单击点一笔；[ ] 调整大小。笔画围成的圈内会一并涂上。"
+                ui.selectable_value(&mut self.brush_paint, false, crate::i18n::tr("轮廓")).on_hover_text(crate::i18n::tr("单击加点或按住拖动手绘出轮廓"));
+                ui.selectable_value(&mut self.brush_paint, true, crate::i18n::tr("涂抹")).on_hover_text(if tool == Tool::DrawLand {
+                    crate::i18n::tr("按住拖动涂抹，松开即应用（重叠方式与年份同样生效）；单击点一笔；[ ] 调整大小。笔画围成的圈内会一并涂上。")
                 } else {
-                    "按住拖动把陆地涂成水域（橡皮），松开即应用；单击点一笔；[ ] 调整大小。"
+                    crate::i18n::tr("按住拖动把陆地涂成水域（橡皮），松开即应用；单击点一笔；[ ] 调整大小。")
                 });
                 if self.brush_paint {
                     ui.spacing_mut().slider_width = 90.0;
-                    ui.add(egui::Slider::new(&mut self.brush_px, 3.0..=150.0).suffix(" px")).on_hover_text("画笔半径；[ 与 ] 调整");
+                    ui.add(egui::Slider::new(&mut self.brush_px, 3.0..=150.0).suffix(" px")).on_hover_text(crate::i18n::tr("画笔半径；[ 与 ] 调整"));
                 }
                 ui.separator();
             }
@@ -215,10 +215,10 @@ impl App {
                 self.draw_style_picker(ui, k);
             }
             if tool == Tool::River {
-                ui.selectable_value(&mut self.route_mode, false, "河流");
-                ui.selectable_value(&mut self.route_mode, true, "线路").on_hover_text("道路、商路、航线、行军路线等；所有年份相同。画好后可在所选线路面板中修改。");
+                ui.selectable_value(&mut self.route_mode, false, crate::i18n::tr("河流"));
+                ui.selectable_value(&mut self.route_mode, true, crate::i18n::tr("线路")).on_hover_text(crate::i18n::tr("道路、商路、航线、行军路线等；所有年份相同。画好后可在所选线路面板中修改。"));
                 if self.route_mode {
-                    ui.menu_button("线路样式…", |ui| {
+                    ui.menu_button(crate::i18n::tr("线路样式…"), |ui| {
                         let mut st = self.route_style;
                         crate::river_ui::route_style_ui(ui, &mut st);
                         self.route_style = st;
@@ -227,13 +227,13 @@ impl App {
                 ui.separator();
             }
             if tool == Tool::Select {
-                ui.checkbox(&mut self.smart_snap, "智能吸附").on_hover_text("拖动要素时，关键点（符号与文字的位置、线的两端与中点、区域中心）吸附到其他要素的关键点，或与它们的纬度、经度对齐；显示经纬网时也对齐经纬线。按住 Alt 临时关闭");
+                ui.checkbox(&mut self.smart_snap, crate::i18n::tr("智能吸附")).on_hover_text(crate::i18n::tr("拖动要素时，关键点（符号与文字的位置、线的两端与中点、区域中心）吸附到其他要素的关键点，或与它们的纬度、经度对齐；显示经纬网时也对齐经纬线。按住 Alt 临时关闭"));
             }
             if matches!(tool, Tool::DrawLand | Tool::DrawLake | Tool::Split | Tool::Redraw | Tool::Hatch) {
-                ui.checkbox(&mut self.trace, "沿边界描线").on_hover_text("两个草稿点都吸附在边界上时，沿已有边界连接（都在海岸上时只沿海岸）；按住 Ctrl 临时关闭");
+                ui.checkbox(&mut self.trace, crate::i18n::tr("沿边界描线")).on_hover_text(crate::i18n::tr("两个草稿点都吸附在边界上时，沿已有边界连接（都在海岸上时只沿海岸）；按住 Ctrl 临时关闭"));
             }
             if drawing {
-                ui.label("线条");
+                ui.label(crate::i18n::tr("线条"));
                 egui::ComboBox::from_id_salt("line-style").selected_text(self.line_style.name()).width(96.0).show_ui(ui, |ui| {
                     for s in map_core::shape::LineStyle::ALL {
                         ui.selectable_value(&mut self.line_style, s, s.name());
@@ -241,15 +241,15 @@ impl App {
                 });
                 if self.line_style == map_core::shape::LineStyle::Natural {
                     ui.spacing_mut().slider_width = 70.0;
-                    ui.add(egui::Slider::new(&mut self.roughness, 0.05..=1.0).show_value(false)).on_hover_text("粗糙度");
+                    ui.add(egui::Slider::new(&mut self.roughness, 0.05..=1.0).show_value(false)).on_hover_text(crate::i18n::tr("粗糙度"));
                 }
                 if self.line_style != map_core::shape::LineStyle::Plain && tool != Tool::River {
-                    ui.checkbox(&mut self.keep_area, "保持面积").on_hover_text("修正风格化后的线条，使围出的面积与所点的形状相同。沿边界描出的部分保持原样；预览即最终形状。");
+                    ui.checkbox(&mut self.keep_area, crate::i18n::tr("保持面积")).on_hover_text(crate::i18n::tr("修正风格化后的线条，使围出的面积与所点的形状相同。沿边界描出的部分保持原样；预览即最终形状。"));
                 }
             }
             if tool == Tool::DrawLand {
                 ui.separator();
-                ui.label("重叠时");
+                ui.label(crate::i18n::tr("重叠时"));
                 let name = |m: DrawMode| match m {
                     DrawMode::AddLand => "只添加陆地",
                     DrawMode::Expand => "扩张画笔国家",
@@ -266,7 +266,7 @@ impl App {
                 };
                 if let DrawMode::Province(parent) = self.draw_mode {
                     if let Some(unit) = self.doc.entities.get(&parent) {
-                        ui.strong(format!("上级 · {}", unit.name));
+                        ui.strong(crate::trf!("上级 · {}", unit.name));
                     }
                 }
                 egui::ComboBox::from_id_salt("draw-mode").selected_text(name(self.draw_mode)).width(110.0).show_ui(ui, |ui| {
@@ -276,29 +276,29 @@ impl App {
                 });
             }
             if tool == Tool::DrawLake {
-                ui.weak("跨越边界时，覆盖的陆地都变为水域");
+                ui.weak(crate::i18n::tr("跨越边界时，覆盖的陆地都变为水域"));
             }
             if tool == Tool::Assign {
-                ui.checkbox(&mut self.assign_fill, "填充").on_hover_text("单击即把与之相连、归属相同（或同为无主）的一整片陆地分配给画笔国家；右键取消这一片的归属。按住 Shift 单击也是填充。");
+                ui.checkbox(&mut self.assign_fill, crate::i18n::tr("填充")).on_hover_text(crate::i18n::tr("单击即把与之相连、归属相同（或同为无主）的一整片陆地分配给画笔国家；右键取消这一片的归属。按住 Shift 单击也是填充。"));
             }
             if matches!(tool, Tool::DrawLand | Tool::Assign) {
                 ui.separator();
                 match self.brush.and_then(|b| self.doc.entities.get(&b)) {
                     Some(e) => {
                         crate::panels::swatch(ui, e.color);
-                        ui.label(&e.name).on_hover_text("当前画笔国家");
+                        ui.label(&e.name).on_hover_text(crate::i18n::tr("当前画笔国家"));
                     }
                     None => {
-                        ui.weak("未设画笔国家").on_hover_text("在国家列表中选择一个国家并设为画笔");
+                        ui.weak(crate::i18n::tr("未设画笔国家")).on_hover_text(crate::i18n::tr("在国家列表中选择一个国家并设为画笔"));
                     }
                 }
             }
             if !self.draft.is_empty() {
                 ui.separator();
-                if ui.button("完成").on_hover_text("回车").clicked() {
+                if ui.button(crate::i18n::tr("完成")).on_hover_text(crate::i18n::tr("回车")).clicked() {
                     self.finish_draft();
                 }
-                if ui.button("取消").on_hover_text("Esc").clicked() {
+                if ui.button(crate::i18n::tr("取消")).on_hover_text("Esc").clicked() {
                     self.clear_draft();
                 }
             }

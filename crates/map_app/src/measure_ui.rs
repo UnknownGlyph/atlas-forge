@@ -121,22 +121,22 @@ impl App {
 
     pub fn measure_panel(&mut self, ui: &mut egui::Ui) {
         ui.separator();
-        ui.label(RichText::new("测量").strong());
+        ui.label(RichText::new(crate::i18n::tr("测量")).strong());
         if self.measure_pts.len() < 2 {
             ui.weak(if self.doc.paper.is_some() {
-                "在画布上依次点击各点测量像素距离。点击起点闭合后计算像素面积。"
-            } else { "在地图上单击各点：沿大圆测量距离；单击第一个点闭合后同时给出面积。右键撤回一个点，Esc 清除。按本星球半径计算，测量不会保存。" });
+                crate::i18n::tr("在画布上依次点击各点测量像素距离。点击起点闭合后计算像素面积。")
+            } else { crate::i18n::tr("在地图上单击各点：沿大圆测量距离；单击第一个点闭合后同时给出面积。右键撤回一个点，Esc 清除。按本星球半径计算，测量不会保存。") });
             return;
         }
         let label = if self.measure_closed { "周长" } else { "长度" };
         ui.label(format!("{label}：{}", self.measure_text().replace("　面积", "\n面积：")));
         if self.doc.paper.is_none() {
-            ui.weak(format!("{} 个点 · 星球半径 {} km", self.measure_pts.len(), format_num(self.doc.radius().round())));
+            ui.weak(crate::trf!("{} 个点 · 星球半径 {} km", self.measure_pts.len(), format_num(self.doc.radius().round())));
             if !self.measure_closed {
-                ui.label(crate::roads_ui::travel_lines(self.doc.path_length_km(&self.measure_pts))).on_hover_text("按每日行程估算：步行 30 km、车队 25 km、骑马 60 km、驿马换马 200 km；一天按十小时计");
+                ui.label(crate::roads_ui::travel_lines(self.doc.path_length_km(&self.measure_pts))).on_hover_text(crate::i18n::tr("按每日行程估算：步行 30 km、车队 25 km、骑马 60 km、驿马换马 200 km；一天按十小时计"));
             }
         }
-        if ui.button("清除").clicked() {
+        if ui.button(crate::i18n::tr("清除")).clicked() {
             self.measure_pts.clear();
             self.measure_closed = false;
         }

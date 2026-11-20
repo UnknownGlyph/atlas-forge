@@ -24,6 +24,7 @@ pub enum Node {
     Edge(BookId, u64),
     Feature(BookId, u8, u64),
     Place(BookId, BookId),
+    Record(crate::worldview::Id),
 }
 
 impl Node {
@@ -36,7 +37,7 @@ impl Node {
             | Self::Edge(id, _)
             | Self::Feature(id, _, _)
             | Self::Place(id, _) => Some(id),
-            Self::Article(_) | Self::Asset(_) => None,
+            Self::Article(_) | Self::Asset(_) | Self::Record(_) => None,
         }
     }
     pub fn uri(self) -> String {
@@ -44,6 +45,7 @@ impl Node {
             Self::Map(id) => format!("atlas-map:{id}"),
             Self::Article(id) => format!("atlas-doc:{id}"),
             Self::Asset(id) => format!("atlas-media:{id}"),
+            Self::Record(id) => format!("atlas-record:{id}"),
             Self::Event(map, id) => format!("atlas-event:{map}/{id}"),
             Self::Entity(map, id) => format!("atlas-entity:{map}/{id}"),
             Self::Face(map, id) => format!("atlas-face:{map}/{id}"),
@@ -58,6 +60,7 @@ impl Node {
             "atlas-map" => Self::Map(key.parse().ok()?),
             "atlas-doc" => Self::Article(key.parse().ok()?),
             "atlas-media" => Self::Asset(key.parse().ok()?),
+            "atlas-record" => Self::Record(key.parse().ok()?),
             _ => {
                 let (map, rest) = key.split_once('/')?;
                 let map = map.parse().ok()?;
@@ -197,6 +200,8 @@ pub struct WorldBook {
     pub places: OrdMap<BookId, Place>,
     pub links: OrdMap<BookId, Link>,
     pub event_meta: OrdMap<(BookId, u32), Meta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worldview: Option<Arc<crate::worldview::Catalog>>,
     #[serde(default, skip_serializing_if = "OrdMap::is_empty")]
     pub anchors: OrdMap<Node, LonLat>,
 }
@@ -212,6 +217,7 @@ impl Default for WorldBook {
             places: OrdMap::new(),
             links: OrdMap::new(),
             event_meta: OrdMap::new(),
+            worldview: None,
             anchors: OrdMap::new(),
         }
     }
@@ -352,6 +358,7 @@ impl WorldBook {
             Node::Map(id) => self.map(doc, id)?.meta.name.clone(),
             Node::Article(id) => self.articles.get(&id)?.name.clone(),
             Node::Asset(id) => self.assets.get(&id)?.name.clone(),
+            Node::Record(id) => self.worldview.as_ref()?.records.get(&id)?.name.clone(),
             Node::Event(id, event) => self.map(doc, id)?.event(event)?.name.clone(),
             Node::Entity(id, e) => self.map(doc, id)?.entities.get(&EntityId(e))?.name.clone(),
             Node::Face(id, f) => {
@@ -411,6 +418,28 @@ impl WorldBook {
             _ => None,
         }
     }
+    /// Geographic location of a book item, including labels and selected places.
+    pub fn position(&self, doc: &Document, node: Node) -> Option<LonLat> {
+        let node = self.resolve(doc, node);
+        let map = self.map(doc, node.board()?)?;
+        match node {
+            Node::Place(board, id) => self.places.get(&id).filter(|p| p.board == board).map(|p| p.point),
+            Node::Entity(_, id) => {
+                let id = EntityId(id);
+                let entity = map.entities.get(&id)?;
+                if let Some(p) = entity.pos { return Some(p); }
+                let face = map.faces_of_tree(id).into_iter().max_by(|a, b| {
+                    let area = |id| map.topo.face_area(id, map.radius());
+                    area(*a).total_cmp(&area(*b))
+                })?;
+                Self::anchor(doc, Node::Face(node.board()?, face.0))
+            }
+            Node::Event(_, id) => map.focus(map.event(id)?.focus?).map(|f| f.center()),
+            Node::Feature(_, kind, id) => map.feature_position(unpack_feature(kind, id)?),
+            _ => Self::anchor(doc, node),
+        }
+    }
+
     pub fn resolve(&self, doc: &Document, node: Node) -> Node {
         let Some(point) = self.anchors.get(&node) else {
             return node;
@@ -542,6 +571,9 @@ impl WorldBook {
             .copied()
             .max()
             .unwrap_or(0);
+        if let Some(catalog) = &self.worldview {
+            catalog.validate()?;
+        }
         if self.next <= max {
             return Err("资料工程标识序列无效".into());
         }

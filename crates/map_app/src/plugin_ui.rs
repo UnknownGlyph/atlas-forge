@@ -84,7 +84,7 @@ impl App {
             .show(ctx, |ui| {
                 let busy = ui_state.job.is_some();
                 choose = ui
-                    .add_enabled(!busy, egui::Button::new("打开插件清单…"))
+                    .add_enabled(!busy, egui::Button::new(crate::i18n::tr("打开插件清单…")))
                     .clicked();
                 if let Some(plugin) = &ui_state.plugin {
                     ui.label(format!("{}  ·  {}", plugin.name, plugin.version));
@@ -112,14 +112,14 @@ impl App {
                                     }
                                 });
                             }
-                            run = ui.button("生成草稿并检查结果").clicked();
+                            run = ui.button(crate::i18n::tr("生成草稿并检查结果")).clicked();
                         }
                     });
                     if prev != ui_state.selected {
                         ui_state.reset_fields();
                     }
                 } else {
-                    ui.weak("打开 JSON 插件清单，选择要运行的命令。");
+                    ui.weak(crate::i18n::tr("打开 JSON 插件清单，选择要运行的命令。"));
                 }
                 if busy {
                     ui.spinner();
@@ -132,13 +132,13 @@ impl App {
                     if let Some(index) = preview.report.failed_at {
                         ui.colored_label(
                             egui::Color32::LIGHT_RED,
-                            format!("第 {index} 步失败，草稿已回滚。"),
+                            crate::trf!("第 {index} 步失败，草稿已回滚。"),
                         );
                     }
                     for change in &preview.changes {
                         ui.label(change);
                     }
-                    egui::CollapsingHeader::new("请求结果")
+                    egui::CollapsingHeader::new(crate::i18n::tr("请求结果"))
                         .default_open(!preview.report.ok || preview.draft.is_none())
                         .show(ui, |ui| {
                             let json =
@@ -153,10 +153,10 @@ impl App {
                     if preview.draft.is_some() {
                         let current = generation == preview.generation;
                         if !current {
-                            ui.weak("地图已变动，请重新生成草稿。");
+                            ui.weak(crate::i18n::tr("地图已变动，请重新生成草稿。"));
                         }
                         apply = ui
-                            .add_enabled(current, egui::Button::new("应用到地图（可撤销）"))
+                            .add_enabled(current, egui::Button::new(crate::i18n::tr("应用到地图（可撤销）")))
                             .clicked();
                     }
                 }
@@ -166,7 +166,7 @@ impl App {
         if choose {
             if let Some(path) = self
                 .file_dialog()
-                .add_filter("Atlas Forge 插件", &["json"])
+                .add_filter(crate::i18n::tr("Atlas Forge 插件"), &["json"])
                 .pick_file()
             {
                 match Plugin::load(&path) {

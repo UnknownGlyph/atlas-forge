@@ -94,7 +94,10 @@ fn hash(x: i64, y: i64, z: i64, seed: u64) -> f64 {
 /// Smooth value noise in three dimensions (-1 – 1).
 fn noise(p: [f64; 3], seed: u64) -> f64 {
     let f = [p[0].floor(), p[1].floor(), p[2].floor()];
-    let t: Vec<f64> = (0..3).map(|k| p[k] - f[k]).map(|t| t * t * (3.0 - 2.0 * t)).collect();
+    let t: [f64; 3] = std::array::from_fn(|k| {
+        let x = p[k] - f[k];
+        x * x * (3.0 - 2.0 * x)
+    });
     let (x, y, z) = (f[0] as i64, f[1] as i64, f[2] as i64);
     let mut acc = 0.0;
     for dx in 0..2 {
@@ -109,7 +112,7 @@ fn noise(p: [f64; 3], seed: u64) -> f64 {
 }
 
 /// Fractal noise: octaves of halving weight and doubling detail (-1 – 1).
-fn fbm(p: [f64; 3], octaves: usize, seed: u64) -> f64 {
+pub(crate) fn fbm(p: [f64; 3], octaves: usize, seed: u64) -> f64 {
     let (mut sum, mut amp, mut norm, mut f) = (0.0, 1.0, 0.0, 1.0);
     for k in 0..octaves {
         sum += amp * noise([p[0] * f, p[1] * f, p[2] * f], seed.wrapping_add(k as u64 * 101));
@@ -120,7 +123,7 @@ fn fbm(p: [f64; 3], octaves: usize, seed: u64) -> f64 {
     sum / norm
 }
 
-fn unit(lon: f64, lat: f64) -> [f64; 3] {
+pub(crate) fn unit(lon: f64, lat: f64) -> [f64; 3] {
     let (lo, la) = (lon.to_radians(), lat.to_radians());
     [la.cos() * lo.cos(), la.cos() * lo.sin(), la.sin()]
 }

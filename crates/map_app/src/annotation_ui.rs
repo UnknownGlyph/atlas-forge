@@ -116,13 +116,13 @@ impl App {
     pub fn finish_ann_path(&mut self) {
         let Some((id, pts)) = self.ann_path.take() else { return };
         if pts.len() < 2 {
-            return self.set_status("曲线至少需要两个点", true);
+            return self.set_status(crate::i18n::tr("曲线至少需要两个点"), true);
         }
         if self.edit("文字沿曲线排列", |d| {
             d.annotations.get_mut(&id).ok_or("文字不存在")?.set_path(pts);
             Ok(())
         }).is_some() {
-            self.set_status("文字已沿曲线排列：拖动文字整体移动；曲线在屏幕上太短时按原角度显示", false);
+            self.set_status(crate::i18n::tr("文字已沿曲线排列：拖动文字整体移动；曲线在屏幕上太短时按原角度显示"), false);
         }
     }
 
@@ -197,7 +197,7 @@ impl App {
                     self.style_new(map_core::features::FeatureRef::Text(id));
                     self.selected_ann = Some(id);
                     self.ann_focus = true;
-                    self.set_status("已添加文字：在左侧面板输入内容，拖动可移动", false);
+                    self.set_status(crate::i18n::tr("已添加文字：在左侧面板输入内容，拖动可移动"), false);
                 }
                 return true;
             }
@@ -212,7 +212,7 @@ impl App {
     pub fn delete_selected_annotation(&mut self) {
         if let Some(id) = self.selected_ann.take() {
             if self.edit("删除文字", |d| d.annotations.remove(&id).map(|_| ()).ok_or_else(|| "文字不存在".to_string())).is_some() {
-                self.set_status("已删除文字（Ctrl+Z 撤销）", false);
+                self.set_status(crate::i18n::tr("已删除文字（Ctrl+Z 撤销）"), false);
             }
         }
     }
@@ -220,10 +220,10 @@ impl App {
     /// Tool panel for the label tool: the selected annotation's settings.
     pub fn annotation_panel(&mut self, ui: &mut egui::Ui) {
         ui.separator();
-        ui.label(RichText::new("地图文字").strong());
+        ui.label(RichText::new(crate::i18n::tr("地图文字")).strong());
         let Some(id) = self.selected_ann.filter(|id| self.doc.annotations.contains_key(id)) else {
             self.selected_ann = None;
-            ui.weak("双击地图空白处添加文字（海洋、山脉、地区名等）；单击文字选中，拖动移动，右键删除。");
+            ui.weak(crate::i18n::tr("双击地图空白处添加文字（海洋、山脉、地区名等）；单击文字选中，拖动移动，右键删除。"));
             return;
         };
         let a = self.doc.annotations[&id].clone();
@@ -231,7 +231,7 @@ impl App {
             self.ann_text = Some((id, a.text.clone()));
         }
         let buf = &mut self.ann_text.as_mut().unwrap().1;
-        let r = ui.add(egui::TextEdit::singleline(buf).hint_text("文字内容"));
+        let r = ui.add(egui::TextEdit::singleline(buf).hint_text(crate::i18n::tr("文字内容")));
         if std::mem::take(&mut self.ann_focus) {
             r.request_focus();
         }
@@ -246,27 +246,27 @@ impl App {
         let (mut size, mut angle, mut spacing, mut italic, mut color, mut bend) = (a.size, a.angle, a.spacing, a.italic, a.color, a.bend);
         let mut sliders = vec![ui.add(egui::Slider::new(&mut size, 2.0..=400.0).logarithmic(true).text("字号"))];
         if !a.on_path() {
-            sliders.push(ui.add(egui::Slider::new(&mut angle, -90.0..=90.0).suffix("°").text("角度")));
+            sliders.push(ui.add(egui::Slider::new(&mut angle, -90.0..=90.0).suffix("°").text(crate::i18n::tr("角度"))));
         }
-        sliders.push(ui.add(egui::Slider::new(&mut spacing, 0.0..=3.0).text("字距")));
+        sliders.push(ui.add(egui::Slider::new(&mut spacing, 0.0..=3.0).text(crate::i18n::tr("字距"))));
         if !a.on_path() {
-            sliders.push(ui.add(egui::Slider::new(&mut bend, -180.0..=180.0).suffix("°").text("弯曲")).on_hover_text("让文字沿弧线排列：正值向上拱起，负值向下弯；0 为直线"));
+            sliders.push(ui.add(egui::Slider::new(&mut bend, -180.0..=180.0).suffix("°").text(crate::i18n::tr("弯曲"))).on_hover_text(crate::i18n::tr("让文字沿弧线排列：正值向上拱起，负值向下弯；0 为直线")));
         }
         // following a drawn curve
         let drawing = self.ann_path.as_ref().map(|(_, p)| p.len());
         let (mut finish, mut cancel, mut start, mut straight) = (false, false, false, false);
         ui.horizontal(|ui| match drawing {
             Some(n) => {
-                ui.label(format!("正在画曲线：{n} 个点"));
-                finish = ui.button("完成").clicked();
-                cancel = ui.button("取消").clicked();
+                ui.label(crate::trf!("正在画曲线：{n} 个点"));
+                finish = ui.button(crate::i18n::tr("完成")).clicked();
+                cancel = ui.button(crate::i18n::tr("取消")).clicked();
             }
             None => {
                 start = ui
-                    .button(if a.on_path() { "重新画曲线" } else { "沿曲线排列…" })
-                    .on_hover_text("在地图上单击各点画一条曲线（如山脊、海岸），双击或回车完成，右键撤回一点；文字将沿它排列")
+                    .button(if a.on_path() { crate::i18n::tr("重新画曲线") } else { crate::i18n::tr("沿曲线排列…") })
+                    .on_hover_text(crate::i18n::tr("在地图上单击各点画一条曲线（如山脊、海岸），双击或回车完成，右键撤回一点；文字将沿它排列"))
                     .clicked();
-                straight = a.on_path() && ui.button("改回直线").clicked();
+                straight = a.on_path() && ui.button(crate::i18n::tr("改回直线")).clicked();
             }
         });
         if finish {
@@ -277,7 +277,7 @@ impl App {
         }
         if start {
             self.ann_path = Some((id, Vec::new()));
-            self.set_status("单击各点画出文字要沿的曲线，双击或回车完成，右键撤回一点，Esc 取消", false);
+            self.set_status(crate::i18n::tr("单击各点画出文字要沿的曲线，双击或回车完成，右键撤回一点，Esc 取消"), false);
         }
         if straight {
             self.edit("文字改回直线", |d| {
@@ -289,21 +289,21 @@ impl App {
         let started = sliders.iter().any(|r| r.drag_started());
         let stopped = sliders.iter().any(|r| r.drag_stopped());
         ui.horizontal(|ui| {
-            changed |= ui.checkbox(&mut italic, "斜体").changed();
+            changed |= ui.checkbox(&mut italic, crate::i18n::tr("斜体")).changed();
             let mut c = Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]);
             if ui.color_edit_button_srgba(&mut c).changed() {
                 color = c.to_array();
                 changed = true;
             }
-            ui.label("颜色");
-            if ui.button("删除").clicked() {
+            ui.label(crate::i18n::tr("颜色"));
+            if ui.button(crate::i18n::tr("删除")).clicked() {
                 self.selected_ann = Some(id);
                 self.delete_selected_annotation();
             }
         });
         let (mut font, mut bold) = (a.font.clone(), a.bold);
         ui.horizontal(|ui| {
-            ui.label("字体");
+            ui.label(crate::i18n::tr("字体"));
             changed |= crate::fonts_ui::font_picker(ui, "annotation", &mut font, &mut bold);
         });
         if started {
@@ -328,6 +328,6 @@ impl App {
         if stopped {
             self.end_pending();
         }
-        ui.weak("字号按地图比例：全图宽 1600 像素时的大小，随缩放与导出一起变化。");
+        ui.weak(crate::i18n::tr("字号按地图比例：全图宽 1600 像素时的大小，随缩放与导出一起变化。"));
     }
 }

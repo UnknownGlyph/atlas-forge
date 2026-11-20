@@ -20,13 +20,14 @@ struct Conversation<'a> {
     headers: Vec<(String, String)>,
     tools: Vec<Value>,
     history: Vec<Value>,
+    instructions: &'a str,
 }
 
 impl<'a> Conversation<'a> {
-    fn new(config: &'a Config, prompt: String) -> Self {
+    fn new(config: &'a Config, prompt: String, instructions: &'a str, drawing: bool) -> Self {
         let specs = map_api::mcp::tool_specs()
             .into_iter()
-            .filter(|t| t["name"] != "draft_save");
+            .filter(|t| drawing && t["name"] != "draft_save");
         let tools = specs.map(|mut t| {
             // Files are written by the host when asked by the user. The
             // model can request a preview without giving it a filename.
@@ -48,7 +49,7 @@ impl<'a> Conversation<'a> {
         };
         let mut history = Vec::new();
         if config.api == Api::OpenAi {
-            history.push(json!({"role":"system","content":SYSTEM}));
+            history.push(json!({"role":"system","content":instructions}));
         }
         history.push(initial);
         let endpoint = match config.api {
@@ -66,6 +67,7 @@ impl<'a> Conversation<'a> {
             headers: config.headers(),
             tools,
             history,
+            instructions,
         }
     }
 
@@ -73,16 +75,19 @@ impl<'a> Conversation<'a> {
         let model = &self.config.model;
         let mut body = match self.config.api {
             Api::Gemini => {
-                json!({"systemInstruction":{"parts":[{"text":SYSTEM}]},"contents":self.history,"tools":[{"functionDeclarations":self.tools}]})
+                json!({"systemInstruction":{"parts":[{"text":self.instructions}]},"contents":self.history,"tools":[{"functionDeclarations":self.tools}]})
             }
             Api::OpenAi => json!({"model":model,"messages":self.history,"tools":self.tools}),
             Api::Responses => {
-                json!({"model":model,"instructions":SYSTEM,"input":self.history,"tools":self.tools,"store":false,"include":["reasoning.encrypted_content"]})
+                json!({"model":model,"instructions":self.instructions,"input":self.history,"tools":self.tools,"store":false,"include":["reasoning.encrypted_content"]})
             }
             Api::Anthropic => {
-                json!({"model":model,"system":SYSTEM,"messages":self.history,"tools":self.tools,"max_tokens":4096})
+                json!({"model":model,"system":self.instructions,"messages":self.history,"tools":self.tools,"max_tokens":4096})
             }
         };
+        if self.tools.is_empty() {
+            body.as_object_mut().unwrap().remove("tools");
+        }
         if let Some(effort) = &self.config.effort {
             match self.config.api {
                 Api::Gemini => {
@@ -308,7 +313,7 @@ pub(crate) fn run(
         "当前世界：{}；年份范围与分区层请用 world_summary 查看。\n\n任务：{task}",
         session.doc().meta.name
     );
-    let mut convo = Conversation::new(config, prompt);
+    let mut convo = Conversation::new(config, prompt, SYSTEM, true);
     let mut outcome = Outcome {
         summary: String::new(),
         turns: 0,
@@ -362,4 +367,51 @@ pub(crate) fn run(
         outcome.summary, config.max_turns
     );
     Ok(outcome)
+}
+
+pub(crate) fn answer_help(
+    prompt: String,
+    config: &Config,
+    net: &dyn Transport,
+) -> Result<String, String> {
+    const HELP: &str = "你是 Atlas Forge 的使用助手。依据给出的实际菜单、工具和检查结果回答当前问题。说明操作入口、具体步骤和检查方法。区分已确认的项目状态与可能原因。避免编造没有列出的工具或检查结果。你没有修改项目的权限，也不能代替用户执行命令。";
+    config.validate()?;
+    let convo = Conversation::new(config, prompt, HELP, false);
+    let (status, answer) = net.post(&convo.url, &convo.headers, &convo.request(), config.timeout_s)?;
+    if !(200..300).contains(&status) {
+        let message = answer["error"]["message"].as_str().unwrap_or("服务端没有返回可读的错误信息");
+        let masked = if config.key.is_empty() { message.to_owned() } else { message.replace(&config.key, "***") };
+        return Err(format!("接口返回 HTTP {status}：{}", shorten(&masked, 280)));
+    }
+    let answer = turn(config.api, &answer)?;
+    if !answer.calls.is_empty() {
+        return Err("通用助手仅接收文字答复。".into());
+    }
+    let text = answer.text.join("\n\n");
+    if text.trim().is_empty() {
+        return Err("模型没有返回文字。".into());
+    }
+    Ok(text)
+}
+
+#[cfg(test)]
+mod help_tests {
+    use super::*;
+
+    struct AnswerOnly;
+
+    impl Transport for AnswerOnly {
+        fn post(&self, url: &str, _: &[(String, String)], body: &Value, _: u64) -> Result<(u16, Value), String> {
+            assert!(url.ends_with("/chat/completions"));
+            assert!(body.get("tools").is_none(), "the guide must send no callable tools");
+            assert!(body["messages"][0]["content"].as_str().unwrap().contains("使用助手"));
+            Ok((200, json!({"choices":[{"message":{"role":"assistant","content":"使用整体移动陆块。"}}]})))
+        }
+    }
+
+    #[test]
+    fn general_assistant_uses_the_provider_without_edit_tools() {
+        let cfg = crate::Provider::Compatible.configure("example", "http://127.0.0.1:8999/v1", "", None);
+        assert_eq!(answer_help("怎样移动陆块？".into(), &cfg, &AnswerOnly).unwrap(), "使用整体移动陆块。");
+    }
 }

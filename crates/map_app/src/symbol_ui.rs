@@ -63,22 +63,22 @@ pub fn years_ui(ui: &mut egui::Ui, from: &mut Option<i32>, to: &mut Option<i32>,
     let (mut has_from, mut has_to) = (from.is_some(), to.is_some());
     let (mut f, mut t) = (from.unwrap_or(near), to.unwrap_or(near));
     let rf = ui.horizontal(|ui| {
-        ui.checkbox(&mut has_from, "起始年");
+        ui.checkbox(&mut has_from, crate::i18n::tr("起始年"));
         ui.add_enabled(has_from, egui::DragValue::new(&mut f).speed(0.5))
     });
     let rt = ui.horizontal(|ui| {
-        ui.checkbox(&mut has_to, "终止年");
+        ui.checkbox(&mut has_to, crate::i18n::tr("终止年"));
         ui.add_enabled(has_to, egui::DragValue::new(&mut t).speed(0.5))
     });
     *from = has_from.then_some(f);
     *to = has_to.then_some(t.max(if has_from { f } else { i32::MIN }));
     if let Some(y) = viewing {
-        if ui.small_button(format!("只在 {y} 年显示")).clicked() {
+        if ui.small_button(crate::trf!("只在 {y} 年显示")).clicked() {
             (*from, *to) = (Some(y), Some(y));
         }
     }
     let years = map_core::symbol::years_text(*from, *to);
-    ui.weak(if years.is_empty() { "所有年份都显示。".to_string() } else { format!("显示于 {years}；未选定年份时全部显示。") });
+    ui.weak(if years.is_empty() { "所有年份都显示。".to_string() } else { crate::trf!("显示于 {years}；未选定年份时全部显示。") });
     vec![rf.inner, rt.inner]
 }
 
@@ -88,10 +88,16 @@ impl App {
     /// collects their boxes so labels drawn after keep clear.
     pub fn draw_symbols(&self, painter: &egui::Painter, vg: &ViewGeom, taken: &mut Vec<Rect>, pass: map_core::stack::DrawPass) {
         let editing = self.tool == Tool::Symbol;
+        let detail = self.map_detail(vg);
         let mut rects = Vec::new();
         for (id, s) in self.doc.symbols.iter().filter(|(id, _)| self.doc.group_of_id(**id) == pass.group) {
             let shown = s.shown_in(self.doc.year);
             if !shown && !editing {
+                continue;
+            }
+            if !editing && self.selected_sym != Some(*id) && !detail.visible(1)
+                && matches!(s.kind, SymbolKind::Peak | SymbolKind::Volcano | SymbolKind::Pass)
+            {
                 continue;
             }
             let Some(pos) = vg.to_screen(s.at) else { continue };
@@ -190,7 +196,7 @@ impl App {
             }).is_some() {
                 self.style_new(map_core::features::FeatureRef::Symbol(id));
                 self.selected_sym = Some(id);
-                self.set_status(format!("已添加{}符号：可在左侧面板命名、设置年份范围", kind.name()), false);
+                self.set_status(crate::trf!("已添加{}符号：可在左侧面板命名、设置年份范围", kind.name()), false);
             }
         }
     }
@@ -198,7 +204,7 @@ impl App {
     pub fn delete_selected_symbol(&mut self) {
         if let Some(id) = self.selected_sym.take() {
             if self.edit("删除符号", |d| d.symbols.remove(&id).map(|_| ()).ok_or_else(|| "符号不存在".to_string())).is_some() {
-                self.set_status("已删除符号（Ctrl+Z 撤销）", false);
+                self.set_status(crate::i18n::tr("已删除符号（Ctrl+Z 撤销）"), false);
             }
         }
     }
@@ -207,19 +213,19 @@ impl App {
     /// selected symbol's name, kind, look and years.
     pub fn symbol_panel(&mut self, ui: &mut egui::Ui) {
         ui.separator();
-        ui.label(RichText::new("新符号").strong());
+        ui.label(RichText::new(crate::i18n::tr("新符号")).strong());
         ui.horizontal_wrapped(|ui| {
             for k in SymbolKind::ALL {
                 ui.radio_value(&mut self.symbol_kind, k, k.name());
             }
         });
-        ui.weak("单击地图空白处放置；单击符号选中，拖动移动，右键或 Delete 删除。");
+        ui.weak(crate::i18n::tr("单击地图空白处放置；单击符号选中，拖动移动，右键或 Delete 删除。"));
         let Some(id) = self.selected_sym.filter(|id| self.doc.symbols.contains_key(id)) else {
             self.selected_sym = None;
             return;
         };
         ui.separator();
-        ui.label(RichText::new("所选符号").strong());
+        ui.label(RichText::new(crate::i18n::tr("所选符号")).strong());
         self.style_row(ui, &[map_core::features::FeatureRef::Symbol(id)]);
         let old = self.doc.symbols[&id].clone();
         let mut v = old.clone();
@@ -227,7 +233,7 @@ impl App {
             self.sym_name = Some((id, old.name.clone()));
         }
         let buf = &mut self.sym_name.as_mut().unwrap().1;
-        let r = ui.add(egui::TextEdit::singleline(buf).hint_text("名称（可留空）"));
+        let r = ui.add(egui::TextEdit::singleline(buf).hint_text(crate::i18n::tr("名称（可留空）")));
         let mut label = "修改符号";
         if r.lost_focus() && *buf != old.name {
             v.name = buf.trim().to_string();
@@ -252,11 +258,11 @@ impl App {
             let (_, buf, typing) = self.sym_glyph.as_mut().unwrap();
             let r = ui
                 .horizontal(|ui| {
-                    ui.label("字符");
+                    ui.label(crate::i18n::tr("字符"));
                     ui.add(egui::TextEdit::singleline(buf).desired_width(60.0))
                 })
                 .inner
-                .on_hover_text("任意字符：字母、汉字（如“寺”“关”）或符号（如 ★ ◆ ✠）");
+                .on_hover_text(crate::i18n::tr("任意字符：字母、汉字（如“寺”“关”）或符号（如 ★ ◆ ✠）"));
             *typing = r.has_focus();
             if r.lost_focus() && !buf.trim().is_empty() && buf.trim() != old.glyph {
                 v.glyph = buf.trim().to_string();
@@ -268,20 +274,20 @@ impl App {
         if !v.name.is_empty() {
             // wraps: the tool panel is narrow
             ui.horizontal_wrapped(|ui| {
-                ui.label("名称位置");
+                ui.label(crate::i18n::tr("名称位置"));
                 for p in map_core::symbol::NamePlace::ALL {
                     ui.radio_value(&mut v.name_place, p, p.name());
                 }
             });
         }
-        let rs = ui.add(egui::Slider::new(&mut v.size, 3.0..=30.0).suffix(" px").text("大小"));
+        let rs = ui.add(egui::Slider::new(&mut v.size, 3.0..=30.0).suffix(" px").text(crate::i18n::tr("大小")));
         ui.horizontal(|ui| {
             let mut c = c32(v.color);
             if ui.color_edit_button_srgba(&mut c).changed() {
                 v.color = c.to_array();
             }
-            ui.label("颜色");
-            if ui.button("删除").clicked() {
+            ui.label(crate::i18n::tr("颜色"));
+            if ui.button(crate::i18n::tr("删除")).clicked() {
                 self.selected_sym = Some(id);
                 self.delete_selected_symbol();
             }

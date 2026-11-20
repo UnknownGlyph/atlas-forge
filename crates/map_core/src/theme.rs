@@ -96,6 +96,7 @@ pub struct ThemeResult {
     pub entity_colors: HashMap<EntityId, [u8; 4]>,
     pub entity_values: HashMap<EntityId, f64>,
     pub legend: Vec<LegendItem>,
+    pub data_icons: Vec<crate::visualization::MapIcon>,
 }
 
 /// Class break values (upper bounds excluding the last = max).
@@ -365,6 +366,7 @@ pub fn evaluate_with(doc: &Document, fixed: Option<&FixedScale>) -> ThemeResult 
         };
         res.face_colors.insert(*fid, c);
     }
+    crate::visualization::apply_to_map(doc, &mut res);
     res
 }
 

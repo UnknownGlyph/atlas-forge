@@ -124,11 +124,21 @@ impl App {
                 out.push(UnderlayFrame { key, image, uniform, above_land: true });
             }
         }
+        if let Some(project) = self.doc.environment.as_deref().filter(|p| p.visible && p.opacity > 0.0) {
+            if let Some((key, image, georef)) = self.environment_ui.raster() {
+                let size = [image.w, image.h];
+                let uniform = match kind {
+                    ViewKind::Flat => UnderlayUniform::for_2d(&georef, size, project.opacity, cam, w, h),
+                    ViewKind::Globe => UnderlayUniform::for_globe(&georef, size, project.opacity, globe, w, h),
+                };
+                out.push(UnderlayFrame { key, image, uniform, above_land: true });
+            }
+        }
         out
     }
 
     pub fn import_underlay(&mut self) {
-        let Some(p) = self.file_dialog().add_filter("图片", &["png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp"]).pick_file() else { return };
+        let Some(p) = self.file_dialog().add_filter(crate::i18n::tr("图片"), &["png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp"]).pick_file() else { return };
         match map_io::underlay::import(&p) {
             Ok(u) => {
                 let (name, [w, h]) = (u.name.clone(), u.size);
@@ -140,10 +150,10 @@ impl App {
                 {
                     self.ul.sel = Some(self.doc.underlays.len() - 1);
                     self.tab = crate::panels::Tab::Underlay;
-                    self.set_status(format!("已导入参考图片 {name}（{w}×{h}），先按全球等距圆柱图放置。用“配准参考图”工具把图上地物拖到真实位置。"), false);
+                    self.set_status(crate::trf!("已导入参考图片 {name}（{w}×{h}），先按全球等距圆柱图放置。用“配准参考图”工具把图上地物拖到真实位置。"), false);
                 }
             }
-            Err(e) => self.set_status(format!("导入参考图片失败：{e}"), true),
+            Err(e) => self.set_status(crate::trf!("导入参考图片失败：{e}"), true),
         }
     }
 
@@ -159,7 +169,7 @@ impl App {
                 .is_some()
                 {
                     let f = self.doc.underlays[i].fit();
-                    self.set_status(format!("已添加配准点 {}：{}，残差均方根 {:.1} 像素", self.doc.underlays[i].points.len(), f.kind.name(), f.rms_px), false);
+                    self.set_status(crate::trf!("已添加配准点 {}：{}，残差均方根 {:.1} 像素", self.doc.underlays[i].points.len(), f.kind.name(), f.rms_px), false);
                 }
             }
             self.ul.drag = None;
@@ -168,7 +178,7 @@ impl App {
         }
         let Some(i) = self.ul.sel.filter(|i| *i < self.doc.underlays.len()) else {
             if resp.clicked() || resp.drag_started() {
-                self.set_status("请先在“参考图”面板导入或选择一张图片", true);
+                self.set_status(crate::i18n::tr("请先在“参考图”面板导入或选择一张图片"), true);
             }
             return;
         };
@@ -178,9 +188,9 @@ impl App {
             let Some(o) = origin else { return };
             let px = u.fit().georef.pixel_of(o);
             if !u.visible {
-                self.set_status("这张参考图已隐藏", true);
+                self.set_status(crate::i18n::tr("这张参考图已隐藏"), true);
             } else if !(0.0..=u.size[0] as f64).contains(&px[0]) || !(0.0..=u.size[1] as f64).contains(&px[1]) {
-                self.set_status("这里没有图片：从图片上的地物开始拖动", true);
+                self.set_status(crate::i18n::tr("这里没有图片：从图片上的地物开始拖动"), true);
             } else {
                 self.ul.drag = Some((i, px));
             }
@@ -233,10 +243,10 @@ impl App {
     }
 
     pub fn underlay_tab(&mut self, ui: &mut egui::Ui) {
-        if ui.button("导入参考图片…").clicked() {
+        if ui.button(crate::i18n::tr("导入参考图片…")).clicked() {
             self.import_underlay();
         }
-        ui.weak("参考图片只用于描绘，不进入导出结果；图片原文件保存在工程中。");
+        ui.weak(crate::i18n::tr("参考图片只用于描绘，不进入导出结果；图片原文件保存在工程中。"));
         if self.doc.underlays.is_empty() {
             return;
         }
@@ -247,7 +257,7 @@ impl App {
                 if ui.selectable_label(self.ul.sel == Some(i), &u.name).clicked() {
                     self.ul.sel = Some(i);
                 }
-                if ui.small_button("删除").clicked() {
+                if ui.small_button(crate::i18n::tr("删除")).clicked() {
                     remove = Some(i);
                 }
             });
@@ -273,31 +283,31 @@ impl App {
         let mut del_point = None;
         let u = &mut self.doc.underlays[i];
         ui.horizontal(|ui| {
-            ui.label("名称");
+            ui.label(crate::i18n::tr("名称"));
             ui.text_edit_singleline(&mut u.name);
         });
-        ui.label(format!("{}×{} 像素，{:.1} MB", u.size[0], u.size[1], u.image.0.len() as f64 / 1048576.0));
+        ui.label(crate::trf!("{}×{} 像素，{:.1} MB", u.size[0], u.size[1], u.image.0.len() as f64 / 1048576.0));
         if let Some((s, err)) = status {
             if !s.is_empty() {
                 ui.colored_label(if err { Color32::from_rgb(200, 60, 60) } else { ui.visuals().weak_text_color() }, s);
             }
         }
-        ui.checkbox(&mut u.visible, "显示");
-        ui.add(egui::Slider::new(&mut u.opacity, 0.0..=1.0).text("不透明度"));
-        ui.radio_value(&mut u.above_land, true, "盖在陆地上（边界线之下）");
-        ui.radio_value(&mut u.above_land, false, "只在陆地下层（透过海洋可见）");
+        ui.checkbox(&mut u.visible, crate::i18n::tr("显示"));
+        ui.add(egui::Slider::new(&mut u.opacity, 0.0..=1.0).text(crate::i18n::tr("不透明度")));
+        ui.radio_value(&mut u.above_land, true, crate::i18n::tr("盖在陆地上（边界线之下）"));
+        ui.radio_value(&mut u.above_land, false, crate::i18n::tr("只在陆地下层（透过海洋可见）"));
         ui.separator();
-        ui.label(egui::RichText::new("图片的投影").strong());
+        ui.label(egui::RichText::new(crate::i18n::tr("图片的投影")).strong());
         egui::ComboBox::from_id_salt("ul_proj").selected_text(u.proj.name()).show_ui(ui, |ui| {
             for p in Projection::ALL {
                 ui.selectable_value(&mut u.proj, p, p.name());
             }
         });
         ui.horizontal(|ui| {
-            ui.label("中央经线");
+            ui.label(crate::i18n::tr("中央经线"));
             ui.add(egui::DragValue::new(&mut u.lon0).range(-180.0..=180.0).speed(0.5).suffix("°"));
         });
-        ui.label(egui::RichText::new("初始范围（没有配准点时使用）").strong());
+        ui.label(egui::RichText::new(crate::i18n::tr("初始范围（没有配准点时使用）")).strong());
         ui.horizontal(|ui| {
             for (k, l) in ["西", "南", "东", "北"].iter().enumerate() {
                 ui.label(*l);
@@ -306,14 +316,14 @@ impl App {
             }
         });
         ui.separator();
-        ui.label(egui::RichText::new("配准点").strong());
-        ui.weak("选择“配准参考图”工具 (A)，在地图上把图片中的地物拖到它的真实位置。1 个点平移，2 个点平移+缩放+旋转，3 个点以上仿射。右键单击点的位置删除。");
-        ui.label(format!("当前：{}{}", fit.kind.name(), if u.points.is_empty() { String::new() } else { format!("，残差均方根 {:.1} 像素", fit.rms_px) }));
+        ui.label(egui::RichText::new(crate::i18n::tr("配准点")).strong());
+        ui.weak(crate::i18n::tr("选择“配准参考图”工具 (A)，在地图上把图片中的地物拖到它的真实位置。1 个点平移，2 个点平移+缩放+旋转，3 个点以上仿射。右键单击点的位置删除。"));
+        ui.label(crate::trf!("当前：{}{}", fit.kind.name(), if u.points.is_empty() { String::new() } else { format!("，残差均方根 {:.1} 像素", fit.rms_px) }));
         egui::Grid::new("ul_points").striped(true).show(ui, |ui| {
             ui.label("#");
-            ui.label("经度");
-            ui.label("纬度");
-            ui.label("残差 px");
+            ui.label(crate::i18n::tr("经度"));
+            ui.label(crate::i18n::tr("纬度"));
+            ui.label(crate::i18n::tr("残差 px"));
             ui.label("");
             ui.end_row();
             for (k, c) in u.points.iter_mut().enumerate() {
@@ -327,18 +337,18 @@ impl App {
                 ui.end_row();
             }
         });
-        if !u.points.is_empty() && ui.button("清除全部配准点").clicked() {
+        if !u.points.is_empty() && ui.button(crate::i18n::tr("清除全部配准点")).clicked() {
             clear = true;
         }
         if let Some(r) = ranks {
             ui.separator();
-            ui.label(egui::RichText::new("各投影的拟合残差").strong());
+            ui.label(egui::RichText::new(crate::i18n::tr("各投影的拟合残差")).strong());
             let cur = u.proj;
             let mut pick = None;
             for (p, rms) in r {
                 ui.horizontal(|ui| {
                     ui.label(format!("{}：{:.1} px", p.name(), rms));
-                    if p != cur && ui.small_button("改用").clicked() {
+                    if p != cur && ui.small_button(crate::i18n::tr("改用")).clicked() {
                         pick = Some(p);
                     }
                 });

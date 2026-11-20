@@ -45,6 +45,8 @@ pub struct Assistant {
     done: Option<Finished>,
     textures: Vec<egui::TextureHandle>,
     error: Option<String>,
+    guidance: bool,
+    advisor: crate::help_advisor::Advisor,
 }
 
 impl Default for Assistant {
@@ -65,20 +67,43 @@ impl Default for Assistant {
             done: None,
             textures: vec![],
             error: None,
+            guidance: false,
+            advisor: Default::default(),
         }
+    }
+}
+
+impl Assistant {
+    pub(crate) fn document_changed(&mut self) {
+        self.task.clear();
+        self.log.clear();
+        self.job = None;
+        self.done = None;
+        self.textures.clear();
+        self.error = None;
+        self.advisor = Default::default();
+    }
+
+    fn config(&self) -> map_ai::Config {
+        let profile = &self.connections[self.provider as usize];
+        let key = if profile.key.trim().is_empty() {
+            std::env::var(self.provider.key_env()).unwrap_or_default()
+        } else {
+            profile.key.trim().to_owned()
+        };
+        self.provider.configure(
+            &profile.model,
+            &profile.endpoint,
+            &key,
+            Some(&profile.effort),
+        )
     }
 }
 
 impl App {
     fn start_assistant(&mut self) {
         let a = &mut self.ai;
-        let profile = &a.connections[a.provider as usize];
-        let key = if profile.key.trim().is_empty() {
-            std::env::var(a.provider.key_env()).unwrap_or_default()
-        } else {
-            profile.key.trim().to_owned()
-        };
-        let cfg = a.provider.configure(&profile.model, &profile.endpoint, &key, Some(&profile.effort));
+        let cfg = a.config();
         if let Err(error) = cfg.validate() {
             a.error = Some(error);
             return;
@@ -98,8 +123,15 @@ impl App {
             let run = map_ai::run(&mut session, &task, &cfg, net.as_ref(), &mut |s| {
                 let line = match s {
                     map_ai::Step::Said(t) => format!("模型：{t}"),
-                    map_ai::Step::Call(n, a) => format!("→ {n} {}", a.to_string().chars().take(160).collect::<String>()),
-                    map_ai::Step::Answer(t, err) => format!("{} {}", if err { "✗" } else { "←" }, t.chars().take(160).collect::<String>().replace('\n', " ")),
+                    map_ai::Step::Call(n, a) => format!(
+                        "→ {n} {}",
+                        a.to_string().chars().take(160).collect::<String>()
+                    ),
+                    map_ai::Step::Answer(t, err) => format!(
+                        "{} {}",
+                        if err { "✗" } else { "←" },
+                        t.chars().take(160).collect::<String>().replace('\n', " ")
+                    ),
                 };
                 let _ = step_tx.send(Msg::Step(line));
             });
@@ -139,7 +171,18 @@ impl App {
                     Ok(Msg::Done(r)) => {
                         match r {
                             Ok(f) => {
-                                self.ai.textures = f.pictures.iter().enumerate().map(|(i, p)| ctx.load_texture(format!("ai-preview-{i}"), p.clone(), egui::TextureOptions::LINEAR)).collect();
+                                self.ai.textures = f
+                                    .pictures
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, p)| {
+                                        ctx.load_texture(
+                                            format!("ai-preview-{i}"),
+                                            p.clone(),
+                                            egui::TextureOptions::LINEAR,
+                                        )
+                                    })
+                                    .collect();
                                 self.ai.done = Some(*f);
                             }
                             Err(e) => self.ai.error = Some(e),
@@ -158,14 +201,31 @@ impl App {
                 }
             }
         }
-        let mut open = true;
         let (mut run, mut apply, mut drop) = (false, false, false);
-        egui::Window::new("AI 助手").open(&mut open).default_size([620.0, 560.0]).resizable(true).show(ctx, |ui| {
+        let (mut advise, mut action) = (false, None);
+        let max_height = (ctx.content_rect().height() - 110.0).clamp(140.0, 580.0);
+        let mut open = self.ai.open;
+        egui::Window::new(crate::i18n::tr("Atlas Forge · AI 助手"))
+            .id(egui::Id::unique("atlas-assistant-dock"))
+            .open(&mut open)
+            .anchor(egui::Align2::RIGHT_BOTTOM, [-12.0, -42.0])
+            .default_width(402.0)
+            .max_height(max_height)
+            .show(ctx, |ui| {
+            egui::ScrollArea::vertical().id_salt("assistant-window-content").max_height(max_height).show(ui, |ui| {
             let a = &mut self.ai;
             let busy = a.job.is_some();
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut a.guidance, false, crate::i18n::tr("绘图助手"));
+                ui.selectable_value(&mut a.guidance, true, crate::i18n::tr("通用助手"));
+            });
+            ui.separator();
             ui.add_enabled_ui(!busy, |ui| {
+                if a.guidance && !a.advisor.online {
+                    return;
+                }
                 ui.horizontal(|ui| {
-                    ui.label("提供方");
+                    ui.label(crate::i18n::tr("提供方"));
                     egui::ComboBox::from_id_salt("atlas-ai-provider").selected_text(a.provider.name()).show_ui(ui, |ui| {
                         for provider in map_ai::Provider::ALL {
                             ui.selectable_value(&mut a.provider, provider, provider.name());
@@ -174,38 +234,45 @@ impl App {
                 });
                 let profile = &mut a.connections[a.provider as usize];
                 ui.horizontal(|ui| {
-                    ui.label("API 地址");
+                    ui.label(crate::i18n::tr("API 地址"));
                     ui.add(egui::TextEdit::singleline(&mut profile.endpoint).desired_width(375.0)
-                        .hint_text("https://服务地址/v1"));
+                        .hint_text(crate::i18n::tr("https://服务地址/v1")));
                 });
                 ui.horizontal(|ui| {
-                    ui.label("模型");
+                    ui.label(crate::i18n::tr("模型"));
                     ui.add(egui::TextEdit::singleline(&mut profile.model).desired_width(240.0)
-                        .hint_text("填写支持工具调用的模型"));
+                        .hint_text(crate::i18n::tr("填写支持工具调用的模型")));
                     if a.provider.api() != map_ai::Api::Anthropic {
-                        ui.label("思考强度");
-                        ui.add(egui::TextEdit::singleline(&mut profile.effort).desired_width(60.0).hint_text("默认"));
+                        ui.label(crate::i18n::tr("思考强度"));
+                        ui.add(egui::TextEdit::singleline(&mut profile.effort).desired_width(60.0).hint_text(crate::i18n::tr("默认")));
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label("密钥");
+                    ui.label(crate::i18n::tr("密钥"));
                     ui.add(egui::TextEdit::singleline(&mut profile.key).password(true).desired_width(300.0)
-                        .hint_text(format!("留空读取 {}", a.provider.key_env())))
-                        .on_hover_text("密钥保存在内存中。本机回环服务可以留空。");
+                        .hint_text(crate::trf!("留空读取 {}", a.provider.key_env())))
+                        .on_hover_text(crate::i18n::tr("密钥保存在内存中。本机回环服务可以留空。"));
                 });
-                ui.label("任务");
-                ui.add(egui::TextEdit::multiline(&mut a.task).desired_rows(3).desired_width(f32::INFINITY).hint_text("例如：从 1500 年起，把甲国东半部划给东边的邻国，并在时间轴上记一笔"));
+                if a.guidance {
+                    return;
+                }
+                ui.label(crate::i18n::tr("任务"));
+                ui.add(egui::TextEdit::multiline(&mut a.task).desired_rows(3).desired_width(f32::INFINITY).hint_text(crate::i18n::tr("例如：从 1500 年起，把甲国东半部划给东边的邻国，并在时间轴上记一笔")));
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(!a.task.trim().is_empty(), egui::Button::new("开始")).clicked() {
+                    if ui.add_enabled(!a.task.trim().is_empty(), egui::Button::new(crate::i18n::tr("开始"))).clicked() {
                         run = true;
                     }
-                    ui.weak("AI 只修改一份草稿；看过前后对比后再决定是否采用。地图里的文字只作为数据交给模型。");
+                    ui.weak(crate::i18n::tr("AI 只修改一份草稿；看过前后对比后再决定是否采用。地图里的文字只作为数据交给模型。"));
                 });
             });
+            if a.guidance {
+                (advise, action) = a.advisor.body(ui);
+                return;
+            }
             if busy {
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new());
-                    ui.label(format!("进行中…（{} 步）", a.log.len().saturating_sub(1)));
+                    ui.label(crate::trf!("进行中…（{} 步）", a.log.len().saturating_sub(1)));
                 });
             }
             if let Some(e) = &a.error {
@@ -224,10 +291,10 @@ impl App {
                 }
                 match &f.draft {
                     None => {
-                        ui.weak("没有修改。");
+                        ui.weak(crate::i18n::tr("没有修改。"));
                     }
                     Some(_) => {
-                        ui.label(format!("草稿中的 {} 处修改：", f.edits.len()));
+                        ui.label(crate::trf!("草稿中的 {} 处修改：", f.edits.len()));
                         for e in &f.edits {
                             ui.label(format!("· {e}"));
                         }
@@ -236,38 +303,58 @@ impl App {
                                 for (t, name) in a.textures.iter().zip(["之前", "之后"]) {
                                     ui.vertical(|ui| {
                                         ui.weak(name);
-                                        ui.image((t.id(), egui::vec2(290.0, 154.0)));
+                                        ui.image((t.id(), egui::vec2(175.0, 93.0)));
                                     });
                                 }
                             });
                         }
                         ui.horizontal(|ui| {
-                            if ui.button("应用到地图").on_hover_text("作为一步撤销；Ctrl+Z 可撤回").clicked() {
+                            if ui.button(crate::i18n::tr("应用到地图")).on_hover_text(crate::i18n::tr("作为一步撤销；Ctrl+Z 可撤回")).clicked() {
                                 apply = true;
                             }
-                            if ui.button("放弃").clicked() {
+                            if ui.button(crate::i18n::tr("放弃")).clicked() {
                                 drop = true;
                             }
                         });
                     }
                 }
             }
-        });
+            });
+            });
         if run {
             self.start_assistant();
         }
+        if advise {
+            let cfg = self.ai.advisor.online.then(|| self.ai.config());
+            self.ai.advisor.start(self.doc.clone(), cfg);
+        }
+        if let Some(action) = action {
+            if self.can(action) {
+                self.run(action);
+            } else {
+                self.set_status(crate::i18n::tr("当前视图下不能使用此项工具。"), true);
+            }
+        }
         if apply {
             if self.history.generation() != self.ai.base {
-                self.ai.error = Some("AI 开始之后地图又被修改过，草稿与现在的地图不一致；请重新运行任务。".into());
-            } else if let Some((draft, label)) = self.ai.done.as_mut().and_then(|f| f.draft.take().map(|d| (d, f.label.clone()))) {
+                self.ai.error = Some(
+                    "AI 开始之后地图又被修改过，草稿与现在的地图不一致；请重新运行任务。".into(),
+                );
+            } else if let Some((draft, label)) = self
+                .ai
+                .done
+                .as_mut()
+                .and_then(|f| f.draft.take().map(|d| (d, f.label.clone())))
+            {
                 // the draft keeps the map's year and layer as they were
-                if self.edit(&label, move |d| {
-                    *d = draft;
-                    Ok(())
-                })
-                .is_some()
+                if self
+                    .edit(&label, move |d| {
+                        *d = draft;
+                        Ok(())
+                    })
+                    .is_some()
                 {
-                    self.set_status(format!("已采用 AI 的修改：{label}"), false);
+                    self.set_status(crate::trf!("已采用 AI 的修改：{label}"), false);
                     self.ai.done = None;
                     self.ai.textures.clear();
                 }

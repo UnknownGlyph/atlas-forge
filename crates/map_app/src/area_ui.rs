@@ -203,7 +203,7 @@ impl App {
                 self.selected_face = None;
                 self.selected_river = None;
                 self.tab = crate::panels::Tab::Countries;
-                self.set_status("已选择斜线区域（Delete 删除）", false);
+                self.set_status(crate::i18n::tr("已选择斜线区域（Delete 删除）"), false);
                 true
             }
             None => false,
@@ -213,7 +213,7 @@ impl App {
     pub fn delete_selected_area(&mut self) {
         if let Some(id) = self.selected_area.take() {
             if self.edit("删除斜线区域", |d| d.areas.remove(&id).map(|_| ()).ok_or_else(|| "区域不存在".to_string())).is_some() {
-                self.set_status("已删除斜线区域（Ctrl+Z 撤销）", false);
+                self.set_status(crate::i18n::tr("已删除斜线区域（Ctrl+Z 撤销）"), false);
             }
         }
     }
@@ -225,7 +225,7 @@ impl App {
             return;
         };
         ui.separator();
-        ui.label(RichText::new("所选斜线区域").strong());
+        ui.label(RichText::new(crate::i18n::tr("所选斜线区域")).strong());
         self.curve_panel(ui, id);
         self.style_row(ui, &[map_core::features::FeatureRef::Area(id)]);
         let old = self.doc.areas[&id].clone();
@@ -234,26 +234,26 @@ impl App {
             self.area_name = Some((id, old.name.clone()));
         }
         let buf = &mut self.area_name.as_mut().unwrap().1;
-        let r = ui.add(egui::TextEdit::singleline(buf).hint_text("名称（可留空）"));
+        let r = ui.add(egui::TextEdit::singleline(buf).hint_text(crate::i18n::tr("名称（可留空）")));
         if r.lost_focus() && *buf != old.name {
             v.name = buf.trim().to_string();
         }
         ui.horizontal(|ui| {
-            ui.label("图案");
+            ui.label(crate::i18n::tr("图案"));
             for p in Pattern::ALL {
                 ui.radio_value(&mut v.pattern, p, p.name());
             }
         });
-        let rs = ui.add(egui::Slider::new(&mut v.spacing, 3.0..=40.0).suffix(" px").text("间距"));
-        let ra = ui.add(egui::Slider::new(&mut v.angle, -90.0..=90.0).suffix("°").text("角度"));
+        let rs = ui.add(egui::Slider::new(&mut v.spacing, 3.0..=40.0).suffix(" px").text(crate::i18n::tr("间距")));
+        let ra = ui.add(egui::Slider::new(&mut v.angle, -90.0..=90.0).suffix("°").text(crate::i18n::tr("角度")));
         ui.horizontal(|ui| {
             let mut c = c32(v.color);
             if ui.color_edit_button_srgba(&mut c).changed() {
                 v.color = c.to_array();
             }
-            ui.label("颜色");
-            ui.checkbox(&mut v.tint, "底色");
-            ui.checkbox(&mut v.dashed, "虚线边框");
+            ui.label(crate::i18n::tr("颜色"));
+            ui.checkbox(&mut v.tint, crate::i18n::tr("底色"));
+            ui.checkbox(&mut v.dashed, crate::i18n::tr("虚线边框"));
         });
         if let Some(t) = legend_field(ui, &mut self.area_legend, id, &old.legend) {
             v.legend = t;
@@ -261,7 +261,7 @@ impl App {
         let mut drags = vec![rs, ra];
         drags.extend(crate::symbol_ui::years_ui(ui, &mut v.from, &mut v.to, self.doc.year));
         ui.horizontal(|ui| {
-            if ui.small_button("删除区域").clicked() {
+            if ui.small_button(crate::i18n::tr("删除区域")).clicked() {
                 self.selected_area = Some(id);
                 self.delete_selected_area();
             }
@@ -281,7 +281,7 @@ impl App {
             }
             let mut op = None;
             ui.horizontal_wrapped(|ui| {
-                ui.label("与区域");
+                ui.label(crate::i18n::tr("与区域"));
                 let current = others.iter().find(|o| Some(o.0) == self.area_partner).map_or(String::new(), |o| o.1.clone());
                 egui::ComboBox::from_id_salt("area_partner").selected_text(current).show_ui(ui, |ui| {
                     for (o, name) in &others {
@@ -289,7 +289,7 @@ impl App {
                     }
                 });
                 for k in [map_core::area::AreaOp::Union, map_core::area::AreaOp::Difference, map_core::area::AreaOp::Intersection] {
-                    if ui.small_button(k.name()).on_hover_text("结果保留在本区域（名称、样式、年份不变），另一个区域被用掉；可撤销").clicked() {
+                    if ui.small_button(k.name()).on_hover_text(crate::i18n::tr("结果保留在本区域（名称、样式、年份不变），另一个区域被用掉；可撤销")).clicked() {
                         op = Some(k);
                     }
                 }
@@ -297,11 +297,11 @@ impl App {
             if let (Some(k), Some(other)) = (op, self.area_partner) {
                 if self.edit(&format!("区域{}", k.name()), |d| d.combine_areas(id, other, k)).is_some() {
                     self.area_partner = None;
-                    self.set_status(format!("已{}区域（Ctrl+Z 撤销）", k.name()), false);
+                    self.set_status(crate::trf!("已{}区域（Ctrl+Z 撤销）", k.name()), false);
                 }
             }
         }
-        ui.weak("斜线区域只是标记（争议、占领、势力范围等），不改变领土归属。编辑顶点工具（E）：拖动边线上的点，拖动边线任意处插入点，右键删除点。选择工具下拖动边线可整体移动，Ctrl+D 复制。");
+        ui.weak(crate::i18n::tr("斜线区域只是标记（争议、占领、势力范围等），不改变领土归属。编辑顶点工具（E）：拖动边线上的点，拖动边线任意处插入点，右键删除点。选择工具下拖动边线可整体移动，Ctrl+D 复制。"));
         if drags.iter().any(|r| r.drag_started()) {
             self.begin_pending("调整斜线区域");
         }
@@ -334,11 +334,11 @@ pub fn legend_field(ui: &mut egui::Ui, buf: &mut Option<(map_core::doc::LineId, 
     let text = &mut buf.as_mut().unwrap().1;
     let r = ui
         .horizontal(|ui| {
-            ui.label("图例说明");
-            ui.add(egui::TextEdit::singleline(text).hint_text("留空则不进图例"))
+            ui.label(crate::i18n::tr("图例说明"));
+            ui.add(egui::TextEdit::singleline(text).hint_text(crate::i18n::tr("留空则不进图例")))
         })
         .inner
-        .on_hover_text("导出时在图例中显示这一项；说明与样式都相同的会合并为一行");
+        .on_hover_text(crate::i18n::tr("导出时在图例中显示这一项；说明与样式都相同的会合并为一行"));
     (r.lost_focus() && text.trim() != current).then(|| text.trim().to_string())
 }
 

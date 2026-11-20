@@ -136,7 +136,7 @@ impl Document {
     }
 
     /// Put every point of a feature through `m`.
-    fn map_feature(&mut self, f: FeatureRef, m: &dyn Fn(LonLat) -> LonLat) -> TResult<()> {
+    pub(crate) fn map_feature(&mut self, f: FeatureRef, m: &dyn Fn(LonLat) -> LonLat) -> TResult<()> {
         let fix = |p: LonLat| {
             let q = m(p);
             LonLat::new(wrap_lon(q.lon), q.lat.clamp(-89.999, 89.999))

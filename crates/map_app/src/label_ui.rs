@@ -404,7 +404,7 @@ impl App {
             if resp.drag_stopped() {
                 self.drag_label = None;
                 self.end_pending();
-                self.set_status("标注已放置：所有年份相同，始终显示；国家属性中可旋转、缩放、隐藏或恢复自动", false);
+                self.set_status(crate::i18n::tr("标注已放置：所有年份相同，始终显示；国家属性中可旋转、缩放、隐藏或恢复自动"), false);
             }
             return;
         }
@@ -428,16 +428,16 @@ impl App {
         let Some(ent) = self.doc.entities.get(&sel) else { return };
         let (place, hidden) = (ent.label, ent.label_hidden);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("标注").strong());
-            ui.weak(if place.is_some() { "手动放置" } else { "自动位置" });
+            ui.label(RichText::new(crate::i18n::tr("标注")).strong());
+            ui.weak(if place.is_some() { crate::i18n::tr("手动放置") } else { crate::i18n::tr("自动位置") });
             let mut h = hidden;
-            if ui.checkbox(&mut h, "隐藏").changed() {
+            if ui.checkbox(&mut h, crate::i18n::tr("隐藏")).changed() {
                 self.edit(if h { "隐藏标注" } else { "显示标注" }, |d| {
                     d.entities.get_mut(&sel).ok_or("国家不存在")?.label_hidden = h;
                     Ok(())
                 });
             }
-            if place.is_some() && ui.small_button("恢复自动").clicked() {
+            if place.is_some() && ui.small_button(crate::i18n::tr("恢复自动")).clicked() {
                 self.edit("恢复自动标注", |d| {
                     d.entities.get_mut(&sel).ok_or("国家不存在")?.label = None;
                     Ok(())
@@ -445,12 +445,12 @@ impl App {
             }
         });
         let Some(pl) = place else {
-            ui.weak("用“标注 T”工具拖动标注即可手动放置。");
+            ui.weak(crate::i18n::tr("用“标注 T”工具拖动标注即可手动放置。"));
             return;
         };
         let (mut angle, mut scale) = (pl.angle, pl.scale);
-        let ra = ui.add(egui::Slider::new(&mut angle, -90.0..=90.0).suffix("°").text("角度"));
-        let rs = ui.add(egui::Slider::new(&mut scale, 0.4..=3.0).text("大小"));
+        let ra = ui.add(egui::Slider::new(&mut angle, -90.0..=90.0).suffix("°").text(crate::i18n::tr("角度")));
+        let rs = ui.add(egui::Slider::new(&mut scale, 0.4..=3.0).text(crate::i18n::tr("大小")));
         for r in [&ra, &rs] {
             if r.drag_started() {
                 self.begin_pending("调整标注");

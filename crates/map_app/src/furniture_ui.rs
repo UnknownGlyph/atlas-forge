@@ -47,7 +47,7 @@ impl App {
         painter.text(base + vec2(len_px, -8.0), Align2::CENTER_BOTTOM, label, FontId::proportional(11.0), ink);
         // on a map of much of the world the scale holds near the middle only
         if r.width() as f64 * km_per_px > 8000.0 {
-            painter.text(base + vec2(len_px + 40.0, -2.0), Align2::RIGHT_BOTTOM, "图中心", FontId::proportional(9.5), Color32::from_gray(90));
+            painter.text(base + vec2(len_px + 40.0, -2.0), Align2::RIGHT_BOTTOM, crate::i18n::tr("图中心"), FontId::proportional(9.5), Color32::from_gray(90));
         }
         // north: from the middle of the view towards the pole
         let north = LonLat::new(here.lon, (here.lat + 0.5).min(89.9));
@@ -63,7 +63,7 @@ impl App {
         painter.add(egui::Shape::convex_polygon(vec![tip, c + side * 5.0, c], ink, Stroke::NONE));
         painter.add(egui::Shape::convex_polygon(vec![tip, c, c - side * 5.0], Color32::from_gray(150), Stroke::NONE));
         painter.add(egui::Shape::convex_polygon(vec![tail, c - side * 5.0, c, c + side * 5.0], Color32::from_gray(210), Stroke::new(0.6, ink)));
-        painter.text(tip + dir * 7.0, Align2::CENTER_CENTER, "北", FontId::proportional(10.0), ink);
+        painter.text(tip + dir * 7.0, Align2::CENTER_CENTER, crate::i18n::tr("北"), FontId::proportional(10.0), ink);
     }
 
     /// While the export window is open: the frame of the picture on the

@@ -317,7 +317,7 @@ impl App {
         let mut clear = false;
         let mut external = None;
         let state = &mut self.climate_ui;
-        egui::Window::new("行星环境与气候")
+        egui::Window::new(crate::i18n::tr("行星环境与气候"))
             .open(&mut open)
             .default_width(465.)
             .default_height(560.)
@@ -325,16 +325,16 @@ impl App {
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     changed |= ui
-                        .selectable_value(&mut p.live, false, "手动模拟")
+                        .selectable_value(&mut p.live, false, crate::i18n::tr("手动模拟"))
                         .changed();
-                    changed |= ui.selectable_value(&mut p.live, true, "实时更新").changed();
+                    changed |= ui.selectable_value(&mut p.live, true, crate::i18n::tr("实时更新")).changed();
                     if ui
-                        .add_enabled(state.job.is_none(), egui::Button::new("运行模拟"))
+                        .add_enabled(state.job.is_none(), egui::Button::new(crate::i18n::tr("运行模拟")))
                         .clicked()
                     {
                         run = Some(Run::Manual);
                     }
-                    changed |= ui.checkbox(&mut p.visible, "显示图层").changed();
+                    changed |= ui.checkbox(&mut p.visible, crate::i18n::tr("显示图层")).changed();
                 });
                 ui.horizontal_wrapped(|ui| {
                     for (tab, label) in [
@@ -343,7 +343,7 @@ impl App {
                         (Tab::Ground, "地表与修订"),
                         (Tab::Records, "方案与导出"),
                     ] {
-                        ui.selectable_value(&mut state.tab, tab, label);
+                        ui.selectable_value(&mut state.tab, tab, crate::i18n::tr(label));
                     }
                 });
                 ui.separator();
@@ -439,11 +439,11 @@ fn period_menu(ui: &mut egui::Ui, value: &mut Period) -> bool {
 impl ClimateUi {
     fn position(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.label("经度");
+            ui.label(crate::i18n::tr("经度"));
             numeric(ui, &mut self.point.lon, -180.0..=180., 0.5);
-            ui.label("纬度");
+            ui.label(crate::i18n::tr("纬度"));
             numeric(ui, &mut self.point.lat, -90.0..=90., 0.5);
-            if ui.selectable_label(self.picking, "从地图取点").clicked() {
+            if ui.selectable_label(self.picking, crate::i18n::tr("从地图取点")).clicked() {
                 self.picking = !self.picking;
                 self.pick_corner = None;
             }
@@ -463,7 +463,7 @@ impl ClimateUi {
             changed |= ui
                 .add(
                     egui::Slider::new(&mut p.opacity, 0.0..=1.)
-                        .text("透明叠加")
+                        .text(crate::i18n::tr("透明叠加"))
                         .show_value(false),
                 )
                 .changed();
@@ -497,12 +497,12 @@ impl ClimateUi {
             ui.horizontal(|ui| {
                 for (first, label) in [(true, "地图取西南角"), (false, "地图取东北角")]
                 {
-                    if ui.button(label).clicked() {
+                    if ui.button(crate::i18n::tr(label)).clicked() {
                         self.pick_corner = Some(first);
                         self.picking = true;
                     }
                 }
-                if ui.button("全球").clicked() {
+                if ui.button(crate::i18n::tr("全球")).clicked() {
                     p.region = Region::default();
                     changed = true;
                 }
@@ -513,31 +513,31 @@ impl ClimateUi {
         });
         self.position(ui);
         let Some(s) = p.shown() else {
-            ui.label("运行一次模拟，即可查看全球概览和取点数据。");
+            ui.label(crate::i18n::tr("运行一次模拟，即可查看全球概览和取点数据。"));
             return changed;
         };
         if let Some(d) = &self.display {
             let [temp, rain, ice, dry, range] = d.stats;
-            ui.label(format!(
+            ui.label(crate::trf!(
                 "区域面积加权平均　{temp:.1} °C　{rain:.0} mm / 公转年　年温差 {range:.1} °C"
             ));
-            ui.label(format!(
+            ui.label(crate::trf!(
                 "冰雪覆盖 {:.0}%　干旱 / 半干旱 {:.0}%",
                 100. * ice,
                 100. * dry
             ));
         }
-        ui.label(format!(
+        ui.label(crate::trf!(
             "结果对应地图年份　{}",
             s.year.map_or("最新".into(), |y| y.to_string())
         ));
         let i = index(self.point);
         if !s.region.contains(center(i)) {
-            ui.label("该位置在此结果的范围外。");
+            ui.label(crate::i18n::tr("该位置在此结果的范围外。"));
             return changed;
         }
         let g = s.cells[i].ground;
-        ui.label(format!(
+        ui.label(crate::trf!(
             "取点地表　{}　海拔 {:.0} m{}{}",
             g.surface.name(),
             g.height,
@@ -548,7 +548,7 @@ impl ClimateUi {
         let east = s.cells[i / W * W + (i % W + 1) % W].ground.height;
         let mut natural = (**s).clone();
         natural.edits.clear();
-        ui.weak(format!(
+        ui.weak(crate::trf!(
             "{}　{}　邻近东西地形高差 {:.0} m",
             if s.settings.planet.locked_rotation {
                 "同步自转日照"
@@ -569,7 +569,7 @@ impl ClimateUi {
                 ui.label(f.name());
                 ui.label(f.format(s.value(i, f, p.period)));
                 if let Some(e) = s.edits.get(&(i, f)) {
-                    ui.label(format!(
+                    ui.label(crate::trf!(
                         "{} · 本次模拟 {}",
                         if e.authored {
                             "人工修订"
@@ -579,7 +579,7 @@ impl ClimateUi {
                         f.format(natural.value(i, f, p.period))
                     ));
                     if e.locked {
-                        ui.label("已固定");
+                        ui.label(crate::i18n::tr("已固定"));
                     }
                 }
                 ui.end_row();

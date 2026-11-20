@@ -54,33 +54,33 @@ impl App {
         let done = self.roads.applied.as_ref().is_some_and(|(s, n)| *s == self.roads.spec && *n == self.doc.rivers.len());
         let mut open = true;
         let mut apply = false;
-        egui::Window::new("道路与旅行").open(&mut open).resizable(false).default_width(340.0).show(ctx, |ui| {
-            ui.label(egui::RichText::new("道路网").strong());
+        egui::Window::new(crate::i18n::tr("道路与旅行")).open(&mut open).resizable(false).default_width(340.0).show(ctx, |ui| {
+            ui.label(egui::RichText::new(crate::i18n::tr("道路网")).strong());
             let s = &mut self.roads.spec;
             egui::Grid::new("roads-grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                ui.label("相邻城市");
-                ui.add(egui::Slider::new(&mut s.neighbours, 1..=8)).on_hover_text("每座城市最多与几座最近的城市考虑相连");
+                ui.label(crate::i18n::tr("相邻城市"));
+                ui.add(egui::Slider::new(&mut s.neighbours, 1..=8)).on_hover_text(crate::i18n::tr("每座城市最多与几座最近的城市考虑相连"));
                 ui.end_row();
-                ui.label("捷径");
-                ui.add(egui::Slider::new(&mut s.detour, 1.0..=4.0).step_by(0.1)).on_hover_text("沿已有道路比直接相连远出这个倍数时，加一条捷径；1.0 只要能连通的最少道路");
+                ui.label(crate::i18n::tr("捷径"));
+                ui.add(egui::Slider::new(&mut s.detour, 1.0..=4.0).step_by(0.1)).on_hover_text(crate::i18n::tr("沿已有道路比直接相连远出这个倍数时，加一条捷径；1.0 只要能连通的最少道路"));
                 ui.end_row();
-                ui.label("地形");
-                ui.add_enabled(self.doc.terrain.is_some(), egui::Checkbox::new(&mut s.terrain, "陡坡代价更高")).on_disabled_hover_text("这张地图没有地形（新世界向导会生成地形）");
+                ui.label(crate::i18n::tr("地形"));
+                ui.add_enabled(self.doc.terrain.is_some(), egui::Checkbox::new(&mut s.terrain, "陡坡代价更高")).on_disabled_hover_text(crate::i18n::tr("这张地图没有地形（新世界向导会生成地形）"));
                 ui.end_row();
             });
             match self.roads.plan.as_ref().map(|p| &p.1) {
                 _ if done => {
-                    ui.weak("已应用这组道路。改变设置可得到新的方案（已有的道路不计入，应用会再画一组）。");
+                    ui.weak(crate::i18n::tr("已应用这组道路。改变设置可得到新的方案（已有的道路不计入，应用会再画一组）。"));
                 }
                 Some(Ok(plan)) => {
                     let km: f64 = plan.roads.iter().map(|r| r.km).sum();
-                    ui.label(format!("{} 座城市，{} 条道路，共 {} km", plan.cities, plan.roads.len(), format_num(km.round())));
+                    ui.label(crate::trf!("{} 座城市，{} 条道路，共 {} km", plan.cities, plan.roads.len(), format_num(km.round())));
                     if !plan.alone.is_empty() {
                         let names: Vec<String> = plan.alone.iter().filter_map(|e| self.doc.entities.get(e)).map(|x| x.name.clone()).take(6).collect();
-                        ui.weak(format!("无法经陆路连通：{}{}", names.join("、"), if plan.alone.len() > 6 { "……" } else { "" }));
+                        ui.weak(crate::trf!("无法经陆路连通：{}{}", names.join("、"), if plan.alone.len() > 6 { "……" } else { "" }));
                     }
-                    ui.weak("地图上棕色虚线为预览；应用后成为普通线路（所有年份相同，可逐条修改或删除）。");
-                    if ui.add_enabled(!plan.roads.is_empty(), egui::Button::new("应用")).clicked() {
+                    ui.weak(crate::i18n::tr("地图上棕色虚线为预览；应用后成为普通线路（所有年份相同，可逐条修改或删除）。"));
+                    if ui.add_enabled(!plan.roads.is_empty(), egui::Button::new(crate::i18n::tr("应用"))).clicked() {
                         apply = true;
                     }
                 }
@@ -90,7 +90,7 @@ impl App {
                 None => {}
             }
             ui.separator();
-            ui.label(egui::RichText::new("旅行").strong());
+            ui.label(egui::RichText::new(crate::i18n::tr("旅行")).strong());
             ui.horizontal(|ui| {
                 for (k, slot) in [(0, &mut self.roads.from), (1, &mut self.roads.to)] {
                     egui::ComboBox::from_id_salt(("travel", k)).width(130.0).selected_text(name(*slot)).show_ui(ui, |ui| {
@@ -109,15 +109,15 @@ impl App {
                 let straight = pos(a).zip(pos(b)).map(|(p, q)| map_core::measure::great_circle(p, q, self.doc.radius())).unwrap_or(0.0);
                 match self.doc.travel_way(a, b) {
                     Some((lines, km)) if a != b => {
-                        ui.label(format!("沿线路 {} km（{} 段；直线 {} km）", format_num(km.round()), lines.len(), format_num(straight.round())));
+                        ui.label(crate::trf!("沿线路 {} km（{} 段；直线 {} km）", format_num(km.round()), lines.len(), format_num(straight.round())));
                         ui.label(travel_lines(km));
                         self.roads.way = lines;
                     }
                     _ if a != b => {
-                        ui.weak("两城之间没有相连的线路（线路的两端要在城市上）。按直线：");
+                        ui.weak(crate::i18n::tr("两城之间没有相连的线路（线路的两端要在城市上）。按直线："));
                         ui.label(format!("{} km　{}", format_num(straight.round()), travel_lines(straight)));
                         let sea = MODES.iter().find(|m| m.by_sea).unwrap();
-                        ui.weak(format!("{}（直线，仅供参考）：{}", sea.name, roads::format_days(roads::days(straight, sea))));
+                        ui.weak(crate::trf!("{}（直线，仅供参考）：{}", sea.name, roads::format_days(roads::days(straight, sea))));
                     }
                     _ => {}
                 }
@@ -127,7 +127,7 @@ impl App {
             if let Some((_, Ok(plan))) = self.roads.plan.take() {
                 let n = plan.roads.len();
                 if self.edit("生成道路", |d| d.apply_roads(&plan)).is_some() {
-                    self.set_status(format!("已生成 {n} 条道路"), false);
+                    self.set_status(crate::trf!("已生成 {n} 条道路"), false);
                     self.roads.applied = Some((self.roads.spec.clone(), self.doc.rivers.len()));
                 }
             }

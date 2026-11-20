@@ -10,6 +10,7 @@ imbl.workspace = true
 serde = { workspace = true, features = ["rc"] }
 earcutr.workspace = true
 geo = "0.33"
+glam.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

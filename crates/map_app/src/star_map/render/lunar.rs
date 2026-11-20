@@ -1,10 +1,12 @@
 //! Local planet and satellite. Sky directions have no local depth or
 //! scale; shadow geometry uses the actual dimensions in kilometres.
-use super::{dot, label, sphere, stellar_color, Camera, Random, SphereStyle, View};
+use super::{dot, label, paint_model, sphere, stellar_color, Camera, Random, SphereStyle, View};
 use crate::star_map::StarMap;
 use eframe::egui::{self, epaint::Mesh, Align2, Color32, FontId, Painter, Pos2, Rect, Stroke};
 use glam::{DVec3, Quat, Vec3};
-use map_core::star_chart::{disc_light, Body, Moon, Star, AU_KM, EARTH_RADIUS_KM, SUN_RADIUS_KM};
+use map_core::star_chart::{
+    disc_light, Body, BodyKey, Moon, Star, AU_KM, EARTH_RADIUS_KM, SUN_RADIUS_KM,
+};
 use std::f32::consts::TAU;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -12,6 +14,17 @@ pub(in crate::star_map) enum LunarTarget {
     #[default]
     Home,
     Moon,
+    Satellite(usize),
+}
+
+impl LunarTarget {
+    pub(in crate::star_map) fn key(self) -> BodyKey {
+        match self {
+            Self::Home => BodyKey::Home,
+            Self::Moon => BodyKey::Moon,
+            Self::Satellite(i) => BodyKey::Satellite(i),
+        }
+    }
 }
 
 struct LocalState {
@@ -36,7 +49,9 @@ impl LocalState {
     fn shadow(&self, target: LunarTarget) -> Shadow {
         let (center, radius, occ, occ_r) = match target {
             LunarTarget::Home => (DVec3::ZERO, self.planet_r, self.moon, self.moon_r),
-            LunarTarget::Moon => (self.moon, self.moon_r, DVec3::ZERO, self.planet_r),
+            LunarTarget::Moon | LunarTarget::Satellite(_) => {
+                (self.moon, self.moon_r, DVec3::ZERO, self.planet_r)
+            }
         };
         Shadow {
             center,
@@ -127,8 +142,26 @@ pub(in crate::star_map) fn aim_eclipse(
 
 pub(in crate::star_map) fn moon_phase(home: &Body, moon: &Moon, days: f64) -> f64 {
     let moon_at = DVec3::from_array(moon.position_km(home, days));
-    let to_star = (star_position(home, days) - moon_at).normalize();
-    (1.0 - moon_at.normalize().dot(to_star)) * 0.5
+    phase(moon_at, star_position(home, days))
+}
+
+fn phase(moon_at: DVec3, star_at: DVec3) -> f64 {
+    let to_star = (star_at - moon_at).normalize_or_zero();
+    (1.0 - moon_at.normalize_or_zero().dot(to_star)) * 0.5
+}
+
+pub(in crate::star_map) fn displayed_phase(state: &StarMap, home: &Body, moon: &Moon) -> f64 {
+    if let Some(driver) = &state.driver {
+        let sim = &driver.simulation;
+        if let (Some(h), Some(m), Some(s)) = (
+            sim.position(BodyKey::Home),
+            sim.position(BodyKey::Moon),
+            sim.position(BodyKey::Star),
+        ) {
+            return phase(m - h, s - h);
+        }
+    }
+    moon_phase(home, moon, state.days)
 }
 
 /// The next eclipse of the requested body along the current authored orbit.
@@ -141,6 +174,9 @@ pub(in crate::star_map) fn event_time(
     start: f64,
     target: LunarTarget,
 ) -> Option<f64> {
+    if matches!(target, LunarTarget::Satellite(_)) {
+        return None;
+    }
     let period = moon.orbit.days.min(home.orbit.days);
     let step = period / 54.0;
     let limit = (home.orbit.days * 2.0)
@@ -284,6 +320,17 @@ fn displayed_moon(physical: DVec3, moon: &Moon) -> Vec3 {
     (physical * (5.6 / moon.distance_km())).as_vec3()
 }
 
+fn satellite_display(physical: DVec3, planet_r: f64, moon: &Moon, baseline: bool) -> Vec3 {
+    if baseline {
+        return displayed_moon(physical, moon);
+    }
+    let unit = (planet_r * 0.45).max(250.0);
+    let height = (physical.length() - planet_r).max(0.0);
+    let horizon = (moon.distance_km() - planet_r).max(1.0);
+    let distance = 1.34 + 4.26 * (height / unit).ln_1p() / (horizon / unit).ln_1p();
+    (physical.normalize_or_zero() * distance).as_vec3()
+}
+
 fn spin(tilt: f64, turns: f64, locked_to: Option<Vec3>) -> Quat {
     let tilt = Quat::from_rotation_x((tilt as f32).to_radians());
     let heading = if let Some(direction) = locked_to {
@@ -303,80 +350,149 @@ pub(in crate::star_map) fn local_system(
     star: &Star,
     home: &Body,
     moon: &Moon,
+    satellites: &[Moon],
 ) -> Option<LunarTarget> {
     let p = ui.painter_at(rect);
-    let local = LocalState::new(star, home, moon, state.days);
-    let moon_pos = displayed_moon(local.moon, moon);
-    let camera_center = if state.lunar_follow && state.lunar_target == LunarTarget::Moon {
-        moon_pos
+    let mut local = LocalState::new(star, home, moon, state.days);
+    let home_at = state.position(BodyKey::Home, || {
+        DVec3::from(home.orbit.position(state.days))
+    });
+    local.light = (state.position(BodyKey::Star, || DVec3::ZERO) - home_at) * AU_KM;
+    let satellite_km = |target: LunarTarget, moon: &Moon| {
+        (state.position(target.key(), || {
+            home_at + DVec3::from(moon.position_km(home, state.days)) / AU_KM
+        }) - home_at)
+            * AU_KM
+    };
+    local.moon = satellite_km(LunarTarget::Moon, moon);
+    let natural_only = satellites.is_empty();
+    let moons: Vec<_> = std::iter::once((LunarTarget::Moon, moon))
+        .chain(
+            satellites
+                .iter()
+                .enumerate()
+                .map(|(i, m)| (LunarTarget::Satellite(i), m)),
+        )
+        .map(|(target, m)| {
+            let physical = satellite_km(target, m);
+            (
+                target,
+                m,
+                physical,
+                satellite_display(physical, local.planet_r, moon, natural_only),
+            )
+        })
+        .collect();
+    let camera_center = if state.lunar_follow {
+        moons
+            .iter()
+            .find(|(t, _, _, _)| *t == state.lunar_target)
+            .map_or(Vec3::ZERO, |m| m.3)
     } else {
         Vec3::ZERO
     };
     let view = state.lunar_camera.view(rect, camera_center);
-    let sun_direction = local.light.normalize().as_vec3();
+    let sun_direction = local.light.normalize_or_zero().as_vec3();
     sky(&p, rect, &view, star, sun_direction, state.labels);
-    if state.orbits {
-        let stroke = Stroke::new(0.9, Color32::from_rgb(66, 96, 139));
-        let mut path = Vec::new();
-        for i in 0..=144 {
-            let moon_km =
-                DVec3::from_array(moon.position_km(home, f64::from(i) * moon.orbit.days / 144.0));
-            if let Some((at, _)) = view.project(displayed_moon(moon_km, moon)) {
-                path.push(at);
-            } else if path.len() > 1 {
-                p.add(egui::Shape::line(std::mem::take(&mut path), stroke));
-            } else {
-                path.clear();
+    if state.orbits && state.driver.is_none() {
+        for (_, satellite, _, _) in &moons {
+            let stroke = Stroke::new(0.9, Color32::from_rgb(66, 96, 139));
+            let mut path = Vec::new();
+            for i in 0..=144 {
+                let moon_km = DVec3::from_array(
+                    satellite.position_km(home, f64::from(i) * satellite.orbit.days / 144.0),
+                );
+                if let Some((at, _)) = view.project(satellite_display(
+                    moon_km,
+                    local.planet_r,
+                    moon,
+                    natural_only,
+                )) {
+                    path.push(at);
+                } else if path.len() > 1 {
+                    p.add(egui::Shape::line(std::mem::take(&mut path), stroke));
+                } else {
+                    path.clear();
+                }
             }
-        }
-        if path.len() > 1 {
-            p.add(egui::Shape::line(path, stroke));
+            if path.len() > 1 {
+                p.add(egui::Shape::line(path, stroke));
+            }
         }
     }
     let home_r = (local.planet_r / EARTH_RADIUS_KM).powf(0.40) as f32 * 1.28;
-    let moon_r = (local.moon_r / local.planet_r).powf(0.78) as f32 * home_r;
     let texture = state.surface.as_ref().map(|s| s.image.id());
-    let mut objects = [
+    let mut objects = std::iter::once((
+        LunarTarget::Home,
+        &home.name,
+        Vec3::ZERO,
+        home_r.clamp(0.25, 3.2),
+        home.color,
+        texture,
+        home.model,
+        None,
+    ))
+    .chain(moons.iter().map(|&(target, satellite, _, pos)| {
+        let radius = (satellite.radius_km / local.planet_r).powf(0.78) as f32 * home_r;
+        let artificial = satellite.mass_kg.is_some_and(|m| m < 1e10);
         (
-            LunarTarget::Home,
-            &home.name,
-            Vec3::ZERO,
-            home_r.clamp(0.25, 3.2),
-            home.color,
-            texture,
-        ),
-        (
-            LunarTarget::Moon,
-            &moon.name,
-            moon_pos,
-            moon_r.clamp(0.14, 2.1),
-            [197, 197, 197],
+            target,
+            &satellite.name,
+            pos,
+            radius.clamp(0.063, 2.1),
+            if artificial {
+                [169, 192, 229]
+            } else {
+                [197, 197, 197]
+            },
             None,
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(target, name, pos, display_radius, color, texture)| {
-        let (center, depth) = view.project(pos)?;
-        let radius =
-            (view.focal * display_radius / depth).min(rect.width().max(rect.height()) * 1.8);
-        Some((target, name, center, depth, radius, color, texture))
-    })
+            satellite.model,
+            Some(satellite),
+        )
+    }))
+    .filter_map(
+        |(target, name, pos, display_radius, color, texture, model, satellite)| {
+            let (center, depth) = view.project(pos)?;
+            let radius =
+                (view.focal * display_radius / depth).min(rect.width().max(rect.height()) * 1.8);
+            Some((
+                target, name, center, depth, radius, color, texture, model, satellite, pos,
+            ))
+        },
+    )
     .collect::<Vec<_>>();
     objects.sort_by(|a, b| b.3.total_cmp(&a.3));
     let mut occupied = objects
         .iter()
         .map(|o| Rect::from_center_size(o.2, egui::Vec2::splat(1.8 * o.4)))
         .collect();
-    for (target, name, center, _, radius, color, texture) in &objects {
-        let shadow = local.shadow(*target);
-        let light = (shadow.light - shadow.center).normalize().as_vec3();
+    for (target, name, center, depth, radius, color, texture, model, satellite, pos) in &objects {
+        let physical = moons
+            .iter()
+            .find(|(t, _, _, _)| t == target)
+            .map_or(DVec3::ZERO, |m| m.2);
+        let radius_km = satellite.map_or(local.planet_r, |s| s.radius_km);
+        let shadow = std::iter::once((LunarTarget::Home, DVec3::ZERO, local.planet_r))
+            .chain(moons.iter().map(|&(t, m, p, _)| (t, p, m.radius_km)))
+            .filter(|(t, _, _)| t != target)
+            .map(|(_, occ, occ_r)| Shadow {
+                center: physical,
+                radius: radius_km,
+                occ,
+                occ_r,
+                light: local.light,
+                light_r: local.star_r,
+            })
+            .min_by(|a, b| a.margin().total_cmp(&b.margin()))
+            .unwrap_or_else(|| local.shadow(*target));
+        let light = (shadow.light - shadow.center).normalize_or_zero().as_vec3();
         let eclipse = (state.lighting && shadow.margin() < 0.0).then_some(shadow);
-        let is_moon = *target == LunarTarget::Moon;
-        let rotation = if is_moon {
+        let is_moon = satellite.is_some();
+        let rotation = if let Some(satellite) = satellite {
             spin(
                 0.0,
-                state.days / moon.spin_days,
-                moon.synchronous.then_some(-moon_pos.normalize()),
+                state.days / satellite.spin_days,
+                satellite.synchronous.then_some(-pos.normalize_or_zero()),
             )
         } else {
             let dir = if home.retrograde { -1.0 } else { 1.0 };
@@ -386,21 +502,32 @@ pub(in crate::star_map) fn local_system(
                 home.synchronous.then_some(sun_direction),
             )
         };
-        sphere(
+        if !paint_model(
+            state,
             &p,
             &view,
-            *center,
-            *radius,
-            SphereStyle {
-                rotation,
-                light,
-                texture: *texture,
-                lighting: state.lighting,
-                color: *color,
-                eclipse,
-                rocky: is_moon,
-            },
-        );
+            *model,
+            *pos,
+            *radius * *depth / view.focal,
+            rotation,
+            state.playing || response.dragged(),
+        ) {
+            sphere(
+                &p,
+                &view,
+                *center,
+                *radius,
+                SphereStyle {
+                    rotation,
+                    light,
+                    texture: *texture,
+                    lighting: state.lighting,
+                    color: *color,
+                    eclipse,
+                    rocky: is_moon,
+                },
+            );
+        }
         let stroke = if *target == state.lunar_target {
             Stroke::new(1.25, Color32::from_rgb(122, 203, 243))
         } else {

@@ -6,7 +6,7 @@ use crate::actions::Act;
 use crate::app::{App, Layout};
 use eframe::egui::{self, RichText};
 use map_io::prefs::{self, Prefs};
-use std::path::Path;
+use std::path::{Path,PathBuf};
 
 impl App {
     pub fn about_window(&mut self, ctx: &egui::Context) {
@@ -75,13 +75,13 @@ impl App {
         }
         self.history.limit = self.prefs.undo_limit;
         if let Some(e) = self.autosave.configure(&self.prefs) {
-            self.set_status(format!("整理自动保存历史失败：{e}"),true);
+            self.set_status(crate::trf!("整理自动保存历史失败：{e}"),true);
         }
         if (ctx.zoom_factor() - self.prefs.ui_scale).abs() > 1e-3 {
             ctx.set_zoom_factor(self.prefs.ui_scale);
         }
         if let Err(e) = prefs::save(&self.prefs_path, &self.prefs) {
-            self.set_status(format!("偏好设置未能保存：{e}"), true);
+            self.set_status(crate::trf!("偏好设置未能保存：{e}"), true);
         }
         self.prefs_saved = self.prefs.clone();
     }
@@ -95,9 +95,9 @@ impl App {
 
     /// File menu: the files opened lately.
     pub fn recent_menu(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button("最近打开", |ui| {
+        ui.menu_button(crate::i18n::tr("最近打开"), |ui| {
             if self.prefs.recent.is_empty() {
-                ui.weak("（还没有打开或保存过文件）");
+                ui.weak(crate::i18n::tr("（还没有打开或保存过文件）"));
                 return;
             }
             let mut open = None;
@@ -108,7 +108,7 @@ impl App {
                 }
             }
             ui.separator();
-            if ui.button("清空列表").clicked() {
+            if ui.button(crate::i18n::tr("清空列表")).clicked() {
                 self.prefs.recent.clear();
             }
             if let Some(i) = open {
@@ -118,78 +118,130 @@ impl App {
     }
 
     pub fn prefs_window(&mut self, ctx: &egui::Context) {
-        if !self.prefs_open {
-            return;
-        }
+        use crate::i18n::tr;
+        use map_io::cloud::Provider;
+        if !self.prefs_open { return; }
         let mut open = true;
-        egui::Window::new(crate::i18n::tr("偏好设置")).open(&mut open).collapsible(false).resizable(false).pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()).show(ctx, |ui| {
-            let p = &mut self.prefs;
-            egui::Grid::new("prefs").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                ui.label(crate::i18n::tr("界面语言"));
-                {
-                    let mut lang = crate::i18n::Lang::from_code(&p.language);
-                    egui::ComboBox::from_id_salt("pref-lang").selected_text(lang.name()).show_ui(ui, |ui| {
-                        for l in crate::i18n::Lang::ALL {
-                            ui.selectable_value(&mut lang, l, l.name());
-                        }
-                    })
-                    .response
-                    .on_hover_text("命令、菜单与工具已有英文；其余部分暂为中文。Commands, menus and tools are translated; the rest is in Chinese for now.");
-                    if lang.code() != p.language {
-                        p.language = lang.code().to_string();
-                        crate::i18n::set(lang);
-                    }
-                }
-                ui.end_row();
-                ui.label("界面缩放");
-                ui.add(egui::Slider::new(&mut p.ui_scale, 0.75..=2.0).step_by(0.05).custom_formatter(|v, _| format!("{:.0}%", v * 100.0))).on_hover_text("文字、按钮与面板的大小；松开鼠标后生效。地图本身用滚轮或 Ctrl + 加减号缩放。");
-                ui.end_row();
-                ui.label("自动保存");
-                ui.checkbox(&mut p.autosave_on,"后台保存版本");
-                ui.end_row();
-                ui.label("自动保存间隔");
-                ui.add_enabled(p.autosave_on,egui::DragValue::new(&mut p.autosave_secs).range(5..=3600).suffix(" 秒"));
-                ui.end_row();
-                ui.label("每编辑多少步也保存");
-                ui.add_enabled(p.autosave_on,egui::DragValue::new(&mut p.autosave_steps).range(0..=1000).suffix(" 步")).on_hover_text("0 表示只按时间触发。撤销和重做也计入编辑历史。");
-                ui.end_row();
-                ui.label("保留多少份自动版本");
-                ui.add_enabled(p.autosave_on,egui::DragValue::new(&mut p.autosave_keep).range(1..=1000).suffix(" 份")).on_hover_text("只整理自动版本，命名保存点独立保留。");
-                ui.end_row();
-                ui.label("撤销步数上限");
-                ui.add(egui::DragValue::new(&mut p.undo_limit).range(20..=5000).suffix(" 步")).on_hover_text("超出后最早的步骤被丢弃。撤销记录另有 512 MB 的内存上限。");
-                ui.end_row();
-                ui.label("启动时");
-                ui.vertical(|ui| {
-                    ui.checkbox(&mut p.welcome, "显示开始窗口");
-                    ui.checkbox(&mut p.reopen_last, "打开上次的文件");
+        let mut pick = None;
+        let mut jump = None;
+        let id = egui::Id::unique("settings-section");
+        let mut section = ctx.data(|data| data.get_temp::<u8>(id)).unwrap_or(0);
+        egui::Window::new(tr("设置")).id(egui::Id::unique("atlas-settings"))
+            .open(&mut open).collapsible(false).default_width(530.0)
+            .show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.selectable_value(&mut section, 0, tr("界面与启动"));
+                    ui.selectable_value(&mut section, 1, tr("保存与云同步"));
+                    ui.selectable_value(&mut section, 2, tr("工作流程"));
                 });
-                ui.end_row();
-                ui.label("状态栏");
-                ui.checkbox(&mut p.perf_in_status, "显示性能数据（帧时间、三角形数、内存）");
-                ui.end_row();
-                #[cfg(windows)]
-                {
-                    ui.label("文件关联");
-                    if ui.button("关联 .atlas 文件（当前用户）").on_hover_text("双击 .atlas 文件时用这个程序打开（写入当前用户的注册表，不需要管理员权限；移动程序后再点一次）").clicked() {
-                        let msg = match associate_atlas_files() {
-                            Ok(()) => "已关联 .atlas 文件".to_string(),
-                            Err(e) => format!("关联失败：{e}"),
-                        };
-                        self.status = msg;
+                ui.separator();
+                let p = &mut self.prefs;
+                match section {
+                    1 => {
+                        ui.checkbox(&mut p.autosave_on,tr("保存本地自动版本"));
+                        let any = p.autosave_on || !p.cloud_backup.is_empty();
+                        ui.add_enabled_ui(any, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(tr("自动保存间隔"));
+                                ui.add(egui::DragValue::new(&mut p.autosave_secs).range(5..=3600).suffix(tr(" 秒")));
+                                ui.label(tr("每编辑多少步也保存"));
+                                ui.add(egui::DragValue::new(&mut p.autosave_steps).range(0..=1000).suffix(tr(" 步")));
+                            });
+                        });
+                        ui.add_enabled_ui(p.autosave_on, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(tr("保留多少份自动版本"));
+                                ui.add(egui::DragValue::new(&mut p.autosave_keep).range(1..=1000).suffix(tr(" 份")));
+                            });
+                        });
+                        ui.separator();
+                        ui.label(tr("将版本写入已由桌面客户端同步的文件夹。重连后由客户端继续上传。"));
+                        for (i, provider) in Provider::ALL.into_iter().enumerate() {
+                            ui.group(|ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.strong(tr(provider.label()));
+                                    if ui.button(tr("选择同步目录…")).clicked() { pick=Some(provider); }
+                                    if p.cloud_backup.folder(provider).is_some()
+                                        && ui.button(tr("停用")).clicked() { *p.cloud_backup.folder_mut(provider)=None; }
+                                });
+                                if let Some(folder)=p.cloud_backup.folder(provider) {
+                                    ui.weak(folder.display().to_string());
+                                    match &self.autosave.cloud_result[i] {
+                                        Some(Ok(path))=>{ui.label(tr("已写入本地同步副本"));ui.weak(path.display().to_string());}
+                                        Some(Err(error))=>{ui.colored_label(egui::Color32::LIGHT_RED,error);}
+                                        None=>{ui.weak(tr("等待自动保存或下一次手动保存。"));}
+                                    }
+                                } else {
+                                    ui.weak(tr("未启用"));
+                                }
+                            });
+                        }
+                        if ui.button(tr("保存点与自动保存…")).clicked() { jump=Some(Act::Checkpoints); }
                     }
-                    ui.end_row();
+                    2 => {
+                        ui.horizontal(|ui| {
+                            ui.label(tr("撤销步数上限"));
+                            ui.add(egui::DragValue::new(&mut p.undo_limit).range(20..=5000).suffix(tr(" 步")));
+                        });
+                        ui.checkbox(&mut p.perf_in_status,tr("显示性能数据（帧时间、三角形数、内存）"));
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button(tr("时间播放与视频")).clicked() {jump=Some(Act::TimelinePlayback);}
+                            if ui.button(tr("快捷键一览")).clicked() {jump=Some(Act::Shortcuts);}
+                            if ui.button(tr("AI 助手…")).clicked() {jump=Some(Act::Assistant);}
+                        });
+                        #[cfg(windows)]
+                        if ui.button(tr("关联 .atlas 文件（当前用户）")).clicked() {
+                            self.status=match associate_atlas_files() {
+                                Ok(())=>tr("已关联 .atlas 文件").into(),
+                                Err(e)=>format!("关联失败：{e}"),
+                            };
+                        }
+                    }
+                    _ => {
+                        ui.horizontal(|ui| {
+                            ui.label(tr("界面语言"));
+                            let mut lang=crate::i18n::Lang::from_code(&p.language);
+                            egui::ComboBox::from_id_salt("pref-lang").selected_text(lang.name()).show_ui(ui, |ui| {
+                                for l in crate::i18n::Lang::ALL { ui.selectable_value(&mut lang,l,l.name()); }
+                            });
+                            if lang.code()!=p.language {
+                                p.language=lang.code().to_string();
+                                crate::i18n::set(lang);
+                                crate::install_fonts(ui.ctx(),self.font.clone(),lang);
+                                self.fonts_loaded.clear();
+                                self.fonts_missing.clear();
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(tr("界面缩放"));
+                            ui.add(egui::Slider::new(&mut p.ui_scale,0.75..=2.0).step_by(0.05)
+                                .custom_formatter(|v,_|format!("{:.0}%",v*100.0)));
+                        });
+                        ui.checkbox(&mut p.welcome,tr("显示开始窗口"));
+                        ui.checkbox(&mut p.reopen_last,tr("打开上次的文件"));
+                    }
                 }
+                ui.separator();
+                ui.horizontal_wrapped(|ui|{
+                    if ui.button(tr("恢复默认")).clicked() {
+                        *p=Prefs {recent:std::mem::take(&mut p.recent),..Default::default()};
+                    }
+                    ui.weak(crate::trf!("保存在 {}",self.prefs_path.display()));
+                });
             });
-            ui.separator();
-            ui.horizontal(|ui| {
-                if ui.button("恢复默认").clicked() {
-                    *p = Prefs { recent: std::mem::take(&mut p.recent), ..Default::default() };
-                }
-                ui.weak(format!("保存在 {}", self.prefs_path.display()));
-            });
-        });
-        self.prefs_open = open;
+        ctx.data_mut(|data|data.insert_temp(id,section));
+        self.prefs_open=open;
+        if let Some(provider)=pick {
+            let mut dialog=self.file_dialog().set_title(tr("选择云客户端的本地同步目录"));
+            let directory=self.prefs.cloud_backup.folder(provider).map(PathBuf::from)
+                .or_else(||(provider==Provider::OneDrive).then(map_io::cloud::suggested_onedrive).flatten());
+            if let Some(directory)=directory {dialog=dialog.set_directory(directory);}
+            if let Some(folder)=dialog.pick_folder() {*self.prefs.cloud_backup.folder_mut(provider)=Some(folder);}
+        }
+        if let Some(action)=jump {
+            self.prefs_open=false;
+            self.run(action);
+        }
     }
 
     /// The start window: a new world, a file, or one opened lately.
@@ -200,27 +252,27 @@ impl App {
         let mut open = true;
         let mut run: Option<Act> = None;
         let mut close = false;
-        egui::Window::new("开始").open(&mut open).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0]).min_width(420.0).show(ctx, |ui| {
+        egui::Window::new(crate::i18n::tr("开始")).open(&mut open).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0]).min_width(420.0).show(ctx, |ui| {
             ui.label(RichText::new("Atlas Forge").heading());
-            ui.weak("绘制架空世界的地图：海岸与国界、城市与河流、逐年变化的历史、数据与专题图。");
+            ui.weak(crate::i18n::tr("绘制架空世界的地图：海岸与国界、城市与河流、逐年变化的历史、数据与专题图。"));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("新建空白世界").clicked() {
+                if ui.button(crate::i18n::tr("新建空白世界")).clicked() {
                     run = Some(Act::NewBlank);
                 }
-                if ui.button("打开…").clicked() {
+                if ui.button(crate::i18n::tr("打开…")).clicked() {
                     run = Some(Act::Open);
                 }
-                if ui.button("看看示例世界").on_hover_text("已经载入：关闭此窗口即可。").clicked() {
+                if ui.button(crate::i18n::tr("看看示例世界")).on_hover_text(crate::i18n::tr("已经载入：关闭此窗口即可。")).clicked() {
                     close = true;
                 }
-                if ui.button("创作教程").clicked() {
+                if ui.button(crate::i18n::tr("创作教程")).clicked() {
                     run = Some(Act::Tutorial);
                 }
             });
             if !self.prefs.recent.is_empty() {
                 ui.add_space(8.0);
-                ui.label(RichText::new("最近打开").strong());
+                ui.label(RichText::new(crate::i18n::tr("最近打开")).strong());
                 for (i, p) in self.prefs.recent.iter().enumerate() {
                     let (name, folder) = name_and_folder(p);
                     ui.horizontal(|ui| {
@@ -234,8 +286,8 @@ impl App {
             ui.add_space(8.0);
             ui.separator();
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.prefs.welcome, "启动时显示");
-                ui.weak("F1 快捷键一览 · Ctrl+K 命令面板");
+                ui.checkbox(&mut self.prefs.welcome, crate::i18n::tr("启动时显示"));
+                ui.weak(crate::i18n::tr("F1 快捷键一览 · Ctrl+K 命令面板"));
             });
         });
         if let Some(act) = run {
@@ -265,7 +317,7 @@ impl App {
             self.dirty = true;
             self.keep_book_history_view(board,viewing);
             self.after_history_jump();
-            self.set_status(format!("{} {done} 步", if steps < 0 { "已撤销" } else { "已重做" }), false);
+            self.set_status(crate::trf!("{} {done} 步", if steps < 0 { "已撤销" } else { "已重做" }), false);
         }
     }
 
@@ -282,11 +334,11 @@ impl App {
         self.history_seen = self.history.generation();
         let mut jump: Option<i64> = None;
         let mut open = true;
-        egui::Window::new("历史记录").open(&mut open).default_width(240.0).default_pos(ctx.content_rect().right_bottom() - egui::vec2(640.0, 420.0)).show(ctx, |ui| {
-            ui.weak(format!("{n} 步可撤销，{} 步可重做 · 单击回到那一步之后", redo.len()));
+        egui::Window::new(crate::i18n::tr("历史记录")).open(&mut open).default_width(240.0).default_pos(ctx.content_rect().right_bottom() - egui::vec2(640.0, 420.0)).show(ctx, |ui| {
+            ui.weak(crate::trf!("{n} 步可撤销，{} 步可重做 · 单击回到那一步之后", redo.len()));
             egui::ScrollArea::vertical().max_height(320.0).auto_shrink([false, true]).show(ui, |ui| {
                 ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
-                    if ui.selectable_label(n == 0, RichText::new("（最早可回到的状态）").italics()).clicked() {
+                    if ui.selectable_label(n == 0, RichText::new(crate::i18n::tr("（最早可回到的状态）")).italics()).clicked() {
                         jump = Some(-(n as i64));
                     }
                     for (i, l) in undo.iter().enumerate() {
@@ -299,7 +351,7 @@ impl App {
                         }
                     }
                     for (j, l) in redo.iter().enumerate() {
-                        if ui.selectable_label(false, RichText::new(format!("{}  {l}", n + j + 1)).weak()).on_hover_text("已撤销，可重做").clicked() {
+                        if ui.selectable_label(false, RichText::new(format!("{}  {l}", n + j + 1)).weak()).on_hover_text(crate::i18n::tr("已撤销，可重做")).clicked() {
                             jump = Some(j as i64 + 1);
                         }
                     }
@@ -333,7 +385,7 @@ impl App {
             // the right side first, so a long message is cut short, not the numbers
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if self.doc.paper.is_some() || self.layout != Layout::Globe {
-                    ui.label(format!("缩放 {:.0}%", self.zoom_percent())).on_hover_text("二维地图的缩放：100% 时整个世界正好放进视图。滚轮或 Ctrl + 加减号缩放，Home 或 Ctrl+0 回到全图。");
+                    ui.label(crate::trf!("缩放 {:.0}%", self.zoom_percent())).on_hover_text(crate::i18n::tr("二维地图的缩放：100% 时整个世界正好放进视图。滚轮或 Ctrl + 加减号缩放，Home 或 Ctrl+0 回到全图。"));
                     ui.separator();
                 }
                 if let Some(c) = self.cursor {
@@ -348,7 +400,7 @@ impl App {
                 }
                 if self.prefs.perf_in_status {
                     let mem = crate::process_memory().map(|m| format!(" · 内存 {:.0} MB", m as f64 / 1048576.0)).unwrap_or_default();
-                    ui.label(format!(
+                    ui.label(crate::trf!(
                         "面 {} · 边 {} · 三角形 {} · 帧 {:.1} ms (UI {:.1}) · 更新 {:.2} ms · 撤销 {} 步/{:.1} MB{}",
                         self.doc.topo.faces.len() - 1,
                         self.doc.topo.edges.len(),
@@ -363,7 +415,7 @@ impl App {
                     ui.separator();
                 }
                 if let Some(p) = self.prof {
-                    ui.label(format!("派生 {:.1} · 面板 {:.1} · 视图 {:.1} · 其余 {:.1} ms", p[0], p[1], p[2], p[3]));
+                    ui.label(crate::trf!("派生 {:.1} · 面板 {:.1} · 视图 {:.1} · 其余 {:.1} ms", p[0], p[1], p[2], p[3]));
                     ui.separator();
                 }
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {

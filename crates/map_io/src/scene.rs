@@ -507,7 +507,9 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
             }
             _ => 3,
         };
-        by_rank[rank].push(edge);
+        if rank >= 3 || st.internal_width > 0.0 {
+            by_rank[rank].push(edge);
+        }
     }
     for (class, edges) in by_rank.into_iter().enumerate() {
         for e in edges {
@@ -534,6 +536,18 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
     }
     // the bands: all the widest first, the narrowest last
     s.glow.sort_by(|a, b| b.width.total_cmp(&a.width));
+    for guide in doc.guides.iter().filter(|g| g.visible && g.include_export && g.valid()) {
+        let path = geom::unwrap_path(&guide.path(o.lon0), None);
+        add_line(&mut s, &path, guide.color, 1.0 * k);
+        if o.labels && !guide.name.is_empty() {
+            let at = guide.label_position(o.lon0);
+            let p = m.px([geom::wrap_lon(at.lon - o.lon0), at.lat]);
+            if p[0] >= 0.0 && p[0] <= w as f64 && p[1] >= 0.0 && p[1] <= h as f64 {
+                s.labels.push(SceneLabel { text: guide.name.clone(), pos: [p[0], p[1] - 3.0 * k as f64],
+                    size: 10.0 * k, color: guide.color, angle: 0.0, italic: false, font: None, bold: false });
+            }
+        }
+    }
     // drawn features, layer by layer. Those in no layer go straight into
     // the scene, where they always were; each layer is gathered apart and
     // laid over that, from the bottom of the stack up, as see-through as
@@ -684,6 +698,27 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
     let mut boxes: Vec<[f32; 4]> = Vec::new();
     // where the labels of each feature begin, and the opacity of its layer
     let mut fades: Vec<(usize, f32)> = Vec::new();
+    for icon in &theme.data_icons {
+        let p = m.px([geom::wrap_lon(icon.at.lon - o.lon0), icon.at.lat]);
+        let radius = icon.size * k;
+        let ring: Vec<_> = icon.icon.vertices(radius).into_iter()
+            .map(|[x, y]| [p[0] + f64::from(x), p[1] + f64::from(y)]).collect();
+        s.fills.push((ring, icon.color));
+        if o.labels && !icon.label.is_empty() {
+            let size = (radius * 1.2).max(9.0 * k);
+            let center = p[0] as f32;
+            let y = p[1] as f32 - radius - 2.0;
+            let half = text_width(&icon.label, size) * 0.5;
+            let bounds = [center - half, y - size, center + half, y + 2.0];
+            if !boxes.iter().any(|q| !(bounds[2] < q[0] || q[2] < bounds[0] || bounds[3] < q[1] || q[3] < bounds[1])) {
+                s.labels.push(SceneLabel {
+                    text: icon.label.clone(), pos: [p[0], p[1] - radius as f64 - 2.0],
+                    size, color: icon.color, angle: 0.0, italic: false, font: None, bold: false,
+                });
+                boxes.push(bounds);
+            }
+        }
+    }
     // free text first: always shown, every other label keeps clear of it
     if o.labels {
         // sizes are geographic: as given when the whole world is 1600 px wide
@@ -1109,31 +1144,62 @@ fn surface_shading(doc: &Document, m: &Mapper) -> Option<Vec<u8>> {
     let mut base = doc.terrain.as_ref().filter(|_| k > 0.).map(|t| {
         project_raster(&t.shade(doc.radius(), 1.0), t.w as usize, t.h as usize, k, m)
     });
-    let Some(p) = doc.climate.as_deref().filter(|p| p.visible && p.opacity > 0.0) else {
-        return base;
-    };
-    let Some(s) = p.shown() else { return base };
-    let (w, h, rgba) = s.raster(p.field, p.period);
-    let top = project_raster(&rgba, w, h, p.opacity, m);
-    if let Some(bottom) = &mut base {
-        for (a, b) in bottom.as_chunks_mut::<4>().0.iter_mut().zip(top.as_chunks::<4>().0) {
-            if b[3] == 0 {
-                continue;
-            }
-            let alpha = f32::from(b[3]) / 255.0;
-            let remain = f32::from(a[3]) / 255.0 * (1.0 - alpha);
-            for i in 0..3 {
-                a[i] = ((f32::from(b[i]) * alpha + f32::from(a[i]) * remain) / (alpha + remain)).round() as u8;
-            }
-            a[3] = ((alpha + remain) * 255.0).round() as u8;
+    if let Some(p) = doc.climate.as_deref().filter(|p| p.visible && p.opacity > 0.0) {
+        if let Some(scenario) = p.shown() {
+            let (w, h, rgba) = scenario.raster(p.field, p.period);
+            composite_raster(&mut base, project_raster(&rgba, w, h, p.opacity, m));
         }
-    } else {
-        base = Some(top);
+    }
+    if let Some(p) = doc.environment.as_deref().filter(|p| p.visible && p.opacity > 0.0) {
+        if let Some(result) = p.shown() {
+            let w = usize::from(result.grid.width);
+            let h = usize::from(result.grid.height);
+            let georef = result.grid.georef();
+            let image = result.image(&p.layer);
+            let top = project_georeferenced(
+                &image, w, h, p.opacity, m, result.grid.whole_longitude(),
+                |lon, lat| {
+                    let p = map_core::LonLat::new(lon, lat);
+                    result.grid.index(p)?;
+                    let [x, y] = georef.pixel_of(p);
+                    Some([x - 0.5, y - 0.5])
+                },
+            );
+            composite_raster(&mut base, top);
+        }
     }
     base
 }
 
+fn composite_raster(base: &mut Option<Vec<u8>>, top: Vec<u8>) {
+    let Some(bottom) = base.as_mut() else {
+        *base = Some(top);
+        return;
+    };
+    for (a, b) in bottom.as_chunks_mut::<4>().0.iter_mut().zip(top.as_chunks::<4>().0) {
+        if b[3] == 0 {
+            continue;
+        }
+        let alpha = f32::from(b[3]) / 255.0;
+        let remain = f32::from(a[3]) / 255.0 * (1.0 - alpha);
+        for i in 0..3 {
+            a[i] = ((f32::from(b[i]) * alpha + f32::from(a[i]) * remain) / (alpha + remain)).round() as u8;
+        }
+        a[3] = ((alpha + remain) * 255.0).round() as u8;
+    }
+}
+
 fn project_raster(src: &[u8], tw: usize, th: usize, k: f32, m: &Mapper) -> Vec<u8> {
+    project_georeferenced(src, tw, th, k, m, true, |lon, lat| Some([
+        (lon + 180.0) / 360.0 * tw as f64 - 0.5,
+        (90.0 - lat) / 180.0 * th as f64 - 0.5,
+    ]))
+}
+
+fn project_georeferenced(
+    src: &[u8], tw: usize, th: usize, k: f32, m: &Mapper, wraps: bool,
+    pixel_at: impl Fn(f64, f64) -> Option<[f64; 2]>,
+) -> Vec<u8> {
     let (w, h) = (m.w as usize, m.h as usize);
     let mut out = vec![0u8; w * h * 4];
     for y in 0..h {
@@ -1141,13 +1207,11 @@ fn project_raster(src: &[u8], tw: usize, th: usize, k: f32, m: &Mapper) -> Vec<u
             let p = [(x as f64 + 0.5 - m.w * 0.5) / m.scale + m.cx, (m.h * 0.5 - y as f64 - 0.5) / m.scale + m.cy];
             let Some(ll) = m.proj.inverse_deg(p[0], p[1]) else { continue };
             let lon = geom::wrap_lon(ll[0] + m.lon0);
-            // bilinear between the grid's cells
-            let gx = (lon + 180.0) / 360.0 * tw as f64 - 0.5;
-            let gy = (90.0 - ll[1]) / 180.0 * th as f64 - 0.5;
+            let Some([gx, gy]) = pixel_at(lon, ll[1]) else { continue };
             let (i0, j0) = (gx.floor() as i64, gy.floor() as i64);
             let (fx, fy) = ((gx - gx.floor()) as f32, (gy - gy.floor()) as f32);
             let px = |i: i64, j: i64, c: usize| -> f32 {
-                let i = i.rem_euclid(tw as i64) as usize;
+                let i = if wraps { i.rem_euclid(tw as i64) } else { i.clamp(0, tw as i64 - 1) } as usize;
                 let j = j.clamp(0, th as i64 - 1) as usize;
                 src[(j * tw + i) * 4 + c] as f32
             };

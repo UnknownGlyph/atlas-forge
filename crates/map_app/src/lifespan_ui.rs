@@ -24,20 +24,20 @@ impl App {
     pub fn lifespan_panel(&mut self, ui: &mut egui::Ui, sel: EntityId) {
         let Some(ent) = self.doc.entities.get(&sel).cloned() else { return };
         ui.separator();
-        ui.label(RichText::new("存续").strong());
+        ui.label(RichText::new(crate::i18n::tr("存续")).strong());
         let near = self.doc.year.unwrap_or(1900);
         let (mut has_f, mut has_t) = (ent.founded.is_some(), ent.ended.is_some());
         let (mut f, mut t) = (ent.founded.unwrap_or(near), ent.ended.unwrap_or(near));
         let rf = ui
             .horizontal(|ui| {
-                ui.checkbox(&mut has_f, "成立于");
-                ui.add_enabled(has_f, egui::DragValue::new(&mut f).speed(0.5).suffix(" 年"))
+                ui.checkbox(&mut has_f, crate::i18n::tr("成立于"));
+                ui.add_enabled(has_f, egui::DragValue::new(&mut f).speed(0.5).suffix(crate::i18n::tr(" 年")))
             })
             .inner;
         let rt = ui
             .horizontal(|ui| {
-                ui.checkbox(&mut has_t, "终止于");
-                ui.add_enabled(has_t, egui::DragValue::new(&mut t).speed(0.5).suffix(" 年"))
+                ui.checkbox(&mut has_t, crate::i18n::tr("终止于"));
+                ui.add_enabled(has_t, egui::DragValue::new(&mut t).speed(0.5).suffix(crate::i18n::tr(" 年")))
             })
             .inner;
         let (founded, ended) = (has_f.then_some(f), has_t.then_some(if has_f { t.max(f) } else { t }));
@@ -61,7 +61,7 @@ impl App {
         ui.weak(if text.is_empty() {
             "未填写年份：不受年份限制（视为始终存续）。".to_string()
         } else {
-            format!("存续：{text}（含首尾两年）。选定年份时，不存续的实体没有领土与下属，记录保持不变。")
+            crate::trf!("存续：{text}（含首尾两年）。选定年份时，不存续的实体没有领土与下属，记录保持不变。")
         });
         // what came after it, and before it
         let layer = ent.layer;
@@ -69,9 +69,9 @@ impl App {
         let mut list = ent.successors.clone();
         let mut changed = false;
         ui.horizontal_wrapped(|ui| {
-            ui.label("后继");
+            ui.label(crate::i18n::tr("后继"));
             for s in ent.successors.iter() {
-                if ui.small_button(format!("{} ×", name(&self.doc, *s))).on_hover_text("移除这个后继").clicked() {
+                if ui.small_button(format!("{} ×", name(&self.doc, *s))).on_hover_text(crate::i18n::tr("移除这个后继")).clicked() {
                     list.retain(|x| x != s);
                     changed = true;
                 }
@@ -83,7 +83,7 @@ impl App {
                 .filter(|(id, x)| **id != sel && x.layer == layer && x.kind != EntityKind::City && !ent.successors.contains(id))
                 .map(|(id, x)| (*id, x.name.clone()))
                 .collect();
-            egui::ComboBox::from_id_salt(("successor", sel.0)).selected_text("添加…").show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt(("successor", sel.0)).selected_text(crate::i18n::tr("添加…")).show_ui(ui, |ui| {
                 for (id, n) in options {
                     if ui.selectable_label(false, n).clicked() {
                         list.push(id);
@@ -100,7 +100,7 @@ impl App {
         }
         let pre = self.doc.predecessors(sel);
         if !pre.is_empty() {
-            ui.weak(format!("前身：{}", pre.iter().map(|p| name(&self.doc, *p)).collect::<Vec<_>>().join("、")));
+            ui.weak(crate::trf!("前身：{}", pre.iter().map(|p| name(&self.doc, *p)).collect::<Vec<_>>().join("、")));
         }
     }
 
@@ -113,8 +113,8 @@ impl App {
             return;
         }
         ui.separator();
-        ui.label(RichText::new(format!("需确认（{year} 年）")).strong().color(egui::Color32::from_rgb(220, 150, 40)));
-        ui.weak("下列土地或下属在记录中属于该年不存续的实体，因此显示为未分配或无上级；记录本身没有被改动。");
+        ui.label(RichText::new(crate::trf!("需确认（{year} 年）")).strong().color(egui::Color32::from_rgb(220, 150, 40)));
+        ui.weak(crate::i18n::tr("下列土地或下属在记录中属于该年不存续的实体，因此显示为未分配或无上级；记录本身没有被改动。"));
         let mut action: Option<(EntityId, Option<EntityId>, String)> = None;
         let mut pick: Option<EntityId> = None;
         for c in &conflicts {
@@ -135,23 +135,23 @@ impl App {
                 if ui.selectable_label(self.selected == Some(c.entity), RichText::new(&x.name).strong()).clicked() {
                     pick = Some(c.entity);
                 }
-                ui.label(format!("（{state}）仍记录有 {}", what.join("，")));
+                ui.label(crate::trf!("（{state}）仍记录有 {}", what.join("，")));
             });
             if c.presence == Presence::Ended && !c.faces.is_empty() {
                 let from = x.ended.unwrap_or_default() + 1;
                 ui.horizontal_wrapped(|ui| {
                     for s in &x.successors {
                         let Some(sx) = self.doc.entities.get(s) else { continue };
-                        if sx.exists_in(Some(from)) && ui.small_button(format!("从 {from} 年起转给 {}", sx.name)).clicked() {
+                        if sx.exists_in(Some(from)) && ui.small_button(crate::trf!("从 {from} 年起转给 {}", sx.name)).clicked() {
                             action = Some((c.entity, Some(*s), format!("转给 {}", sx.name)));
                         }
                     }
-                    if ui.small_button(format!("从 {from} 年起设为未分配")).clicked() {
+                    if ui.small_button(crate::trf!("从 {from} 年起设为未分配")).clicked() {
                         action = Some((c.entity, None, "设为未分配".into()));
                     }
                 });
             } else if c.presence == Presence::NotYet {
-                ui.weak("请检查成立年份，或把这些土地在成立之前改给其他国家。");
+                ui.weak(crate::i18n::tr("请检查成立年份，或把这些土地在成立之前改给其他国家。"));
             }
         }
         if let Some(e) = pick {
@@ -160,7 +160,7 @@ impl App {
         }
         if let Some((e, to, what)) = action {
             if let Some(n) = self.edit("处理终止实体的土地", |d| d.reassign_after_end(e, to)) {
-                self.set_status(format!("已把 {n} 块土地{what}（只改变终止之后的年份，可撤销）"), false);
+                self.set_status(crate::trf!("已把 {n} 块土地{what}（只改变终止之后的年份，可撤销）"), false);
             }
         }
     }

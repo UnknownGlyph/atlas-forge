@@ -5,6 +5,10 @@ use crate::Document;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::TAU;
 
+pub mod gaia;
+mod gravity;
+pub use gravity::{BodyKey, Gravity, State, G};
+
 pub const AU_KM: f64 = 149_597_870.7;
 pub const SUN_RADIUS_KM: f64 = 695_700.0;
 pub const EARTH_RADIUS_KM: f64 = 6371.0088;
@@ -16,6 +20,14 @@ pub struct Star {
     pub radius_solar: f64,
     pub luminosity_solar: f64,
     pub temperature: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<crate::world_book::BookId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Companion {
+    pub star: Star,
+    pub orbit: Orbit,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -30,6 +42,10 @@ pub struct Orbit {
 
 impl Orbit {
     pub fn position(&self, days: f64) -> [f64; 3] {
+        self.state(days).0
+    }
+
+    pub fn state(&self, days: f64) -> ([f64; 3], [f64; 3]) {
         let e = self.eccentricity.clamp(0.0, 0.92);
         let mean = (TAU * days.rem_euclid(self.days) / self.days + self.phase.to_radians())
             .rem_euclid(TAU);
@@ -37,10 +53,15 @@ impl Orbit {
         for _ in 0..14 {
             anomaly -= (anomaly - e * anomaly.sin() - mean) / (1.0 - e * anomaly.cos());
         }
-        let x = self.au * (anomaly.cos() - e);
-        let along = self.au * (1.0 - e * e).sqrt() * anomaly.sin();
+        let (sin_e, cos_e) = anomaly.sin_cos();
+        let axis_ratio = (1.0 - e * e).sqrt();
+        let x = self.au * (cos_e - e);
+        let along = self.au * axis_ratio * sin_e;
+        let change = TAU / (self.days * (1.0 - e * cos_e));
+        let vx = -self.au * change * sin_e;
+        let va = self.au * axis_ratio * change * cos_e;
         let (sin, cos) = self.inclination.to_radians().sin_cos();
-        [x, along * sin, along * cos]
+        ([x, along * sin, along * cos], [vx, va * sin, va * cos])
     }
 }
 
@@ -55,6 +76,13 @@ pub struct Body {
     pub synchronous: bool,
     pub color: [u8; 3],
     pub rings: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mass_earth: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<crate::world_book::BookId>,
+    /// A user-defined category such as asteroid, comet or spacecraft.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -65,6 +93,12 @@ pub struct Moon {
     pub orbit: Orbit,
     pub synchronous: bool,
     pub spin_days: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mass_kg: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<crate::world_book::BookId>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
 }
 
 impl Default for Moon {
@@ -81,6 +115,9 @@ impl Default for Moon {
             },
             synchronous: true,
             spin_days: 27.3217,
+            mass_kg: None,
+            model: None,
+            category: String::new(),
         }
     }
 }
@@ -111,6 +148,18 @@ pub struct Galaxy {
     pub barred: bool,
     pub home_kly: f32,
     pub home_angle: f32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stars: Vec<GalaxyStar>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GalaxyStar {
+    pub name: String,
+    pub position_kly: [f32; 3],
+    pub temperature: f64,
+    pub category: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<crate::world_book::BookId>,
 }
 impl Default for Galaxy {
     fn default() -> Self {
@@ -121,6 +170,7 @@ impl Default for Galaxy {
             barred: true,
             home_kly: 26.0,
             home_angle: 210.0,
+            stars: Vec::new(),
         }
     }
 }
@@ -135,6 +185,12 @@ pub struct StarChart {
     pub galaxy: Galaxy,
     #[serde(default, skip_serializing_if = "Moon::is_default")]
     pub moon: Moon,
+    #[serde(default)]
+    pub gravity: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub companions: Vec<Companion>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub satellites: Vec<Moon>,
 }
 
 impl Default for StarChart {
@@ -158,6 +214,9 @@ impl Default for StarChart {
                 synchronous: false,
                 color,
                 rings,
+                mass_earth: None,
+                model: None,
+                category: String::new(),
             }
         };
         Self {
@@ -167,6 +226,7 @@ impl Default for StarChart {
                 radius_solar: 1.0,
                 luminosity_solar: 1.0,
                 temperature: 5772.0,
+                model: None,
             },
             home: body(
                 "",
@@ -229,11 +289,50 @@ impl Default for StarChart {
             use_environment: true,
             galaxy: Galaxy::default(),
             moon: Moon::default(),
+            gravity: false,
+            companions: Vec::new(),
+            satellites: Vec::new(),
         }
     }
 }
 
 impl StarChart {
+    pub fn model_slot(&mut self, key: BodyKey) -> Option<&mut Option<crate::world_book::BookId>> {
+        match key {
+            BodyKey::Star => Some(&mut self.star.model),
+            BodyKey::Home => Some(&mut self.home.model),
+            BodyKey::Planet(i) => self.planets.get_mut(i).map(|p| &mut p.model),
+            BodyKey::Companion(i) => self.companions.get_mut(i).map(|s| &mut s.star.model),
+            BodyKey::Moon => Some(&mut self.moon.model),
+            BodyKey::Satellite(i) => self.satellites.get_mut(i).map(|s| &mut s.model),
+            BodyKey::GalaxyStar(i) => self.galaxy.stars.get_mut(i).map(|s| &mut s.model),
+        }
+    }
+
+    pub fn model_ids(&self) -> impl Iterator<Item = crate::world_book::BookId> + '_ {
+        [self.star.model, self.home.model, self.moon.model]
+            .into_iter()
+            .chain(self.planets.iter().map(|p| p.model))
+            .chain(self.companions.iter().map(|s| s.star.model))
+            .chain(self.satellites.iter().map(|s| s.model))
+            .chain(self.galaxy.stars.iter().map(|s| s.model))
+            .flatten()
+    }
+
+    pub fn requires_extended_format(&self) -> bool {
+        self.gravity
+            || !self.companions.is_empty()
+            || !self.satellites.is_empty()
+            || !self.galaxy.stars.is_empty()
+            || self.star.model.is_some()
+            || self.moon.mass_kg.is_some()
+            || self.moon.model.is_some()
+            || !self.moon.category.is_empty()
+            || std::iter::once(&self.home)
+                .chain(&self.planets)
+                .any(|p| p.model.is_some() || p.mass_earth.is_some() || !p.category.is_empty())
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         let valid =
             |values: &[(f64, f64, f64)]| values.iter().all(|&(v, lo, hi)| (lo..=hi).contains(&v));
@@ -245,6 +344,24 @@ impl StarChart {
         ]) {
             return Err("星图恒星参数超出范围".into());
         }
+        if self.companions.len() > 2
+            || self.companions.iter().any(|c| {
+                let s = &c.star;
+                !valid(&[
+                    (s.mass_solar, 0.06, 100.0),
+                    (s.radius_solar, 0.03, 100.0),
+                    (s.luminosity_solar, 0.00001, 100000.0),
+                    (s.temperature, 2200.0, 50000.0),
+                    (c.orbit.au, 0.02, 200.0),
+                    (c.orbit.eccentricity, 0.0, 0.92),
+                    (c.orbit.inclination, -180.0, 180.0),
+                    (c.orbit.days, 0.1, 100000.0),
+                    (c.orbit.phase, 0.0, 360.0),
+                ])
+            })
+        {
+            return Err("伴星参数无效。一个恒星系最多有三颗恒星。".into());
+        }
         if self.planets.len() > 24
             || std::iter::once(&self.home).chain(&self.planets).any(|p| {
                 !valid(&[
@@ -253,7 +370,8 @@ impl StarChart {
                     (p.orbit.inclination, -180.0, 180.0),
                     (p.orbit.days, 0.1, 100000.0),
                     (p.orbit.phase, 0.0, 360.0),
-                    (p.radii_earth, 0.05, 50.0),
+                    (p.radii_earth, 0.000000001, 50.0),
+                    (p.mass_earth.unwrap_or(0.0), 0.0, 30000.0),
                     (p.spin_hours, 0.1, 2400000.0),
                     (p.tilt, 0.0, 180.0),
                 ])
@@ -271,16 +389,33 @@ impl StarChart {
         {
             return Err("星系参数超出范围".into());
         }
-        let m = &self.moon;
-        if !valid(&[
-            (m.orbit.au, 1_000.0 / AU_KM, 10_000_000.0 / AU_KM),
-            (m.radius_km, 1.0, 30_000.0),
-            (m.orbit.eccentricity, 0.0, 0.92),
-            (m.orbit.inclination, -180.0, 180.0),
-            (m.orbit.days, 0.1, 100_000.0),
-            (m.orbit.phase, 0.0, 360.0),
-            (m.spin_days, 0.01, 100_000.0),
-        ]) {
+        if g.stars.len() > 128
+            || g.stars.iter().any(|star| {
+                !star
+                    .position_kly
+                    .iter()
+                    .all(|&x| (-400.0..=400.0).contains(&x))
+                    || !(2200.0..=50000.0).contains(&star.temperature)
+            })
+        {
+            return Err("自定义星系天体参数无效。".into());
+        }
+        if self.satellites.len() > 16
+            || std::iter::once(&self.moon)
+                .chain(&self.satellites)
+                .any(|m| {
+                    !valid(&[
+                        (m.orbit.au, 1_000.0 / AU_KM, 10_000_000.0 / AU_KM),
+                        (m.radius_km, 0.000001, 30_000.0),
+                        (m.mass_kg.unwrap_or(0.0), 0.0, 6.0e25),
+                        (m.orbit.eccentricity, 0.0, 0.92),
+                        (m.orbit.inclination, -180.0, 180.0),
+                        (m.orbit.days, 0.001, 100_000.0),
+                        (m.orbit.phase, 0.0, 360.0),
+                        (m.spin_days, 0.01, 100_000.0),
+                    ])
+                })
+        {
             return Err("月球参数超出范围".into());
         }
         Ok(())
@@ -344,6 +479,7 @@ fn apply_environment(star: &mut Star, home: &mut Body, env: &Environment) {
     home.orbit.eccentricity = env[Ecc];
     home.orbit.days = env[Period];
     home.radii_earth = env[Radius];
+    home.mass_earth = Some(env[Mass]);
     home.spin_hours = env[Spin];
     home.tilt = env[Tilt];
     home.retrograde = env.retrograde;

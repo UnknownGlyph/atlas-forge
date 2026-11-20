@@ -23,20 +23,20 @@ impl App {
         ui.push_id("area", |ui| self.area_panel(ui));
         ui.separator();
         ui.push_id("layers", |ui| self.layers_section(ui));
-        ui.label(RichText::new("要素").strong());
+        ui.label(RichText::new(crate::i18n::tr("要素")).strong());
         ui.horizontal(|ui| {
-            ui.label("筛选");
-            ui.add(egui::TextEdit::singleline(&mut self.feature_filter).hint_text("名称、种类、年份或图层"));
+            ui.label(crate::i18n::tr("筛选"));
+            ui.add(egui::TextEdit::singleline(&mut self.feature_filter).hint_text(crate::i18n::tr("名称、种类、年份或图层")));
             if self.active_group.is_some() {
-                ui.checkbox(&mut self.layer_only, "只列当前图层");
+                ui.checkbox(&mut self.layer_only, crate::i18n::tr("只列当前图层"));
             }
         });
         let all = self.doc.features();
         if all.is_empty() {
-            ui.weak("还没有绘制要素：地图文字（标注 T）、符号（Y）、河流与线路（R）、斜线区域（H）都会列在这里。");
+            ui.weak(crate::i18n::tr("还没有绘制要素：地图文字（标注 T）、符号（Y）、河流与线路（R）、斜线区域（H）都会列在这里。"));
             return;
         }
-        ui.weak("单击选中；Ctrl 或 Shift 单击多选；右键有更多操作。");
+        ui.weak(crate::i18n::tr("单击选中；Ctrl 或 Shift 单击多选；右键有更多操作。"));
         let groups = self.doc.groups.clone();
         let layer_name = |g: Option<map_core::stack::GroupId>| g.and_then(|g| groups.iter().find(|x| x.id == g)).map(|x| x.name.as_str());
         let only = self.active_group.filter(|_| self.layer_only);
@@ -51,7 +51,7 @@ impl App {
         // a feature moved to a layer (or out of them) from its menu
         let mut regroup: Option<(FeatureRef, Option<map_core::stack::GroupId>)> = None;
         if shown.is_empty() {
-            ui.weak("没有符合筛选的要素。");
+            ui.weak(crate::i18n::tr("没有符合筛选的要素。"));
         }
         let selected: std::collections::BTreeSet<FeatureRef> = self.selection().into_iter().collect();
         let mut heading = "";
@@ -70,14 +70,14 @@ impl App {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{kind}（{}）", of_kind.len())).strong());
-                    if ui.small_button("全部显示").clicked() {
+                    if ui.small_button(crate::i18n::tr("全部显示")).clicked() {
                         visibility.extend(of_kind.iter().map(|w| (*w, false)));
                     }
-                    if ui.small_button("全部隐藏").clicked() {
+                    if ui.small_button(crate::i18n::tr("全部隐藏")).clicked() {
                         visibility.extend(of_kind.iter().map(|w| (*w, true)));
                     }
                     let all_locked = of_kind.iter().all(|w| self.doc.is_locked(*w));
-                    if ui.small_button(if all_locked { "全部解锁" } else { "全部锁定" }).on_hover_text("锁定的要素仍然显示，但在地图上不会被选中或移动").clicked() {
+                    if ui.small_button(if all_locked { crate::i18n::tr("全部解锁") } else { crate::i18n::tr("全部锁定") }).on_hover_text(crate::i18n::tr("锁定的要素仍然显示，但在地图上不会被选中或移动")).clicked() {
                         locks.extend(of_kind.iter().map(|w| (*w, !all_locked)));
                     }
                 });
@@ -85,11 +85,11 @@ impl App {
             let locked = self.doc.is_locked(f.what);
             ui.horizontal(|ui| {
                 let mut on = !f.hidden;
-                if ui.checkbox(&mut on, "").on_hover_text("显示：取消后不绘制、不导出、不进图例，但不删除").changed() {
+                if ui.checkbox(&mut on, "").on_hover_text(crate::i18n::tr("显示：取消后不绘制、不导出、不进图例，但不删除")).changed() {
                     visibility.push((f.what, !on));
                 }
-                let lock_text = if locked { RichText::new("锁") } else { RichText::new("锁").weak() };
-                if ui.selectable_label(locked, lock_text).on_hover_text(if locked { "已锁定：仍然显示，但在地图上不会被选中或移动。单击解锁" } else { "单击锁定：仍然显示，但在地图上不会被选中或移动" }).clicked() {
+                let lock_text = if locked { RichText::new(crate::i18n::tr("锁")) } else { RichText::new(crate::i18n::tr("锁")).weak() };
+                if ui.selectable_label(locked, lock_text).on_hover_text(if locked { crate::i18n::tr("已锁定：仍然显示，但在地图上不会被选中或移动。单击解锁") } else { crate::i18n::tr("单击锁定：仍然显示，但在地图上不会被选中或移动") }).clicked() {
                     locks.push((f.what, !locked));
                 }
                 let name = if f.name.is_empty() { "（未命名）".to_string() } else { f.name.clone() };
@@ -106,18 +106,18 @@ impl App {
                     }
                 }
                 r.context_menu(|ui| {
-                    if ui.button("定位").clicked() {
+                    if ui.button(crate::i18n::tr("定位")).clicked() {
                         chosen = Some((f.what, Some(f.at)));
                     }
-                    if ui.button(if f.hidden { "显示" } else { "隐藏" }).clicked() {
+                    if ui.button(if f.hidden { crate::i18n::tr("显示") } else { crate::i18n::tr("隐藏") }).clicked() {
                         visibility.push((f.what, !f.hidden));
                     }
-                    if ui.button(if locked { "解锁" } else { "锁定" }).clicked() {
+                    if ui.button(if locked { crate::i18n::tr("解锁") } else { crate::i18n::tr("锁定") }).clicked() {
                         locks.push((f.what, !locked));
                     }
                     if !groups.is_empty() {
                         let cur = self.doc.group_of_feature(f.what);
-                        ui.menu_button("移到图层", |ui| {
+                        ui.menu_button(crate::i18n::tr("移到图层"), |ui| {
                             for g in groups.iter().rev() {
                                 if ui.add_enabled(cur != Some(g.id), egui::Button::new(&g.name)).clicked() {
                                     regroup = Some((f.what, Some(g.id)));
@@ -125,14 +125,14 @@ impl App {
                             }
                             if cur.is_some() {
                                 ui.separator();
-                                if ui.button("（移出图层）").clicked() {
+                                if ui.button(crate::i18n::tr("（移出图层）")).clicked() {
                                     regroup = Some((f.what, None));
                                 }
                             }
                         });
                     }
                     ui.separator();
-                    if ui.button("删除").clicked() {
+                    if ui.button(crate::i18n::tr("删除")).clicked() {
                         delete = Some(f.what);
                     }
                 });
@@ -142,7 +142,7 @@ impl App {
                 if let Some(n) = layer_name(self.doc.group_of_feature(f.what)) {
                     ui.weak(format!("〔{n}〕"));
                 }
-                if ui.small_button("定位").on_hover_text("选中并把地图中心移到这里").clicked() {
+                if ui.small_button(crate::i18n::tr("定位")).on_hover_text(crate::i18n::tr("选中并把地图中心移到这里")).clicked() {
                     chosen = Some((f.what, Some(f.at)));
                 }
             });
@@ -194,7 +194,7 @@ impl App {
             self.set_tool(Tool::Select);
             let n = sel.len();
             self.set_selection(sel);
-            self.set_status(format!("已选择 {n} 个要素"), false);
+            self.set_status(crate::trf!("已选择 {n} 个要素"), false);
         }
         if let Some((what, at)) = chosen {
             self.picked.clear();

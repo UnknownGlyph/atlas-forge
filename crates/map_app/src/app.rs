@@ -129,6 +129,11 @@ pub struct App {
     pub focus: Option<u32>,
     pub focus_view: Option<crate::focus_ui::FocusView>,
     pub focus_play: Option<f64>,
+    pub(crate) playback: crate::playback_ui::TimelinePlayback,
+    pub(crate) study_year_cache: std::cell::RefCell<Option<crate::timeline_ui::StudyYearCache>>,
+    pub(crate) studio: crate::studio_ui::Studio,
+    pub(crate) professional_raise: bool,
+    pub(crate) workspace_camera_epoch: u64,
     pub focus_name: Option<String>,
     /// The territory brush fills whole connected patches.
     pub assign_fill: bool,
@@ -143,8 +148,14 @@ pub struct App {
     pub roads: crate::roads_ui::Roads,
     /// The AI assistant (its window, task and draft).
     pub ai: crate::ai_ui::Assistant,
+    pub(crate) land_move: crate::land_move_ui::LandMove,
+    pub(crate) guide_draft: Option<Vec<map_core::guides::Guide>>,
     pub plugins: crate::plugin_ui::PluginUi,
     pub book_ui: crate::book_ui::BookUi,
+    pub(crate) worldview_ui: crate::worldview_ui::WorldviewUi,
+    pub(crate) environment_ui: crate::environment_ui::EnvironmentUi,
+    pub(crate) visualization_ui: crate::visualization_ui::VisualizationUi,
+    pub(crate) model_viewer: Option<crate::model_viewer::Viewer>,
     pub climate_ui: crate::climate_ui::ClimateUi,
     /// The layout view (the export page with its furniture to drag).
     pub page: crate::pageview_ui::PageView,
@@ -347,7 +358,9 @@ impl App {
         }
         let prefs_path = map_io::prefs::default_path();
         let prefs = map_io::prefs::load(&prefs_path);
-        crate::i18n::set(crate::i18n::Lang::from_code(&prefs.language));
+        let language = crate::i18n::Lang::from_code(&prefs.language);
+        crate::i18n::set(language);
+        crate::install_fonts(&cc.egui_ctx, font.clone(), language);
         cc.egui_ctx.set_zoom_factor(prefs.ui_scale);
         // Ctrl + plus and minus zoom the map; the interface's size is a preference
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
@@ -395,6 +408,11 @@ impl App {
             focus: None,
             focus_view: None,
             focus_play: None,
+            playback: Default::default(),
+            study_year_cache: Default::default(),
+            studio: Default::default(),
+            professional_raise: false,
+            workspace_camera_epoch: 0,
             focus_name: None,
             assign_fill: false,
             query: None,
@@ -403,8 +421,14 @@ impl App {
             names_open: false,
             roads: Default::default(),
             ai: Default::default(),
+            land_move: Default::default(),
+            guide_draft: None,
             plugins: Default::default(),
             book_ui: Default::default(),
+            worldview_ui: Default::default(),
+            environment_ui: Default::default(),
+            visualization_ui: Default::default(),
+            model_viewer: None,
             climate_ui: Default::default(),
             page: Default::default(),
             events_open: false,
@@ -554,7 +578,7 @@ impl App {
     }
 
     pub fn set_status(&mut self, msg: impl Into<String>, err: bool) {
-        self.status = msg.into();
+        self.status = crate::i18n::message(msg.into());
         self.status_err = err;
     }
 
@@ -568,11 +592,11 @@ impl App {
                     self.adopt_new_features(had);
                 }
                 self.dirty = true;
-                self.set_status(format!("{label}：完成"), false);
+                self.set_status(crate::trf!("{label}：完成"), false);
                 Some(v)
             }
             Err(e) => {
-                self.set_status(format!("{label}失败：{e}"), true);
+                self.set_status(crate::trf!("{label}失败：{e}"), true);
                 None
             }
         }
@@ -604,6 +628,7 @@ impl App {
     fn reset_view_state(&mut self) {
         self.history.clear();
         self.book_ui=Default::default();
+        self.worldview_ui=Default::default();
         self.reset_board_view();
     }
 
@@ -627,12 +652,19 @@ impl App {
     }
 
     pub(crate) fn reset_board_view(&mut self) {
+        self.stop_timeline_playback();
+        self.reset_studio_navigation();
+        self.workspace_camera_epoch = self.workspace_camera_epoch.wrapping_add(1);
         self.diplomacy_ui = Default::default();
         self.tab = if self.doc.paper.is_some() { crate::panels::Tab::Features } else { crate::panels::Tab::Countries };
         self.globe_inertia.stop();
         self.star_map = Default::default();
         self.climate_ui = Default::default();
-        self.ai = Default::default();
+        self.environment_ui.leave_board();
+        self.visualization_ui = Default::default();
+        self.ai.document_changed();
+        self.land_move = Default::default();
+        self.guide_draft = None;
         self.plugins = Default::default();
         self.bg_edit = None;
         self.event_sel = None;
@@ -680,7 +712,7 @@ impl App {
             Ok((doc, r)) => {
                 self.new_doc(doc);
                 self.set_status(
-                    format!(
+                    crate::trf!(
                         "测试世界：{} 个面（起初 {}），{}{} 次变化（{} 次局部重建），建国 {}、终止 {}，用时 {:.1} s",
                         r.faces_end,
                         r.faces_start,
@@ -694,7 +726,7 @@ impl App {
                     false,
                 );
             }
-            Err(_) => self.set_status("生成测试世界失败", true),
+            Err(_) => self.set_status(crate::i18n::tr("生成测试世界失败"), true),
         }
     }
 
@@ -714,7 +746,7 @@ impl App {
                 self.dirty = false;
                 self.reset_view_state();
                 self.autosave.open_project(Some(&p),self.history.generation());
-                self.set_status(format!("已打开 {}（{:.0} ms）", p.display(), t.elapsed().as_secs_f64() * 1e3), false);
+                self.set_status(crate::trf!("已打开 {}（{:.0} ms）", p.display(), t.elapsed().as_secs_f64() * 1e3), false);
                 self.note_recent(&p);
                 self.path = Some(p);
             }
@@ -722,13 +754,13 @@ impl App {
                 if !p.exists() {
                     self.prefs.forget_recent(&p);
                 }
-                self.set_status(format!("打开失败：{e}"), true)
+                self.set_status(crate::trf!("打开失败：{e}"), true)
             }
         }
     }
 
     pub fn open_dialog(&mut self) {
-        if let Some(p) = self.file_dialog().add_filter("Atlas 工程", &["atlas"]).pick_file() {
+        if let Some(p) = self.file_dialog().add_filter(crate::i18n::tr("Atlas 工程"), &["atlas"]).pick_file() {
             self.open_path(p);
         }
     }
@@ -740,7 +772,7 @@ impl App {
             (Some(p), false) => p.clone(),
             _ => {
                 let name = format!("{}.atlas", self.doc.meta.name);
-                match self.file_dialog().add_filter("Atlas 工程", &["atlas"]).set_file_name(name).save_file() {
+                match self.file_dialog().add_filter(crate::i18n::tr("Atlas 工程"), &["atlas"]).set_file_name(name).save_file() {
                     Some(p) => p,
                     None => return false,
                 }
@@ -751,17 +783,17 @@ impl App {
         match map_io::project::save_with_backups(&path, &self.doc, 3) {
             Ok(()) => {
                 let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                self.set_status(format!("已保存 {}（{:.1} KB，{:.0} ms）", path.display(), size as f64 / 1024.0, t.elapsed().as_secs_f64() * 1e3), false);
+                self.set_status(crate::trf!("已保存 {}（{:.1} KB，{:.0} ms）", path.display(), size as f64 / 1024.0, t.elapsed().as_secs_f64() * 1e3), false);
                 self.note_recent(&path);
                 if let Err(e) = self.autosave.saved_project(&path,self.history.generation()) {
-                    self.set_status(format!("已保存工程，保存点迁移仍待重试：{e}"),true);
+                    self.set_status(crate::trf!("已保存工程，保存点迁移仍待重试：{e}"),true);
                 }
                 self.path = Some(path);
                 self.dirty = false;
                 true
             }
             Err(e) => {
-                self.set_status(format!("保存失败：{e}"), true);
+                self.set_status(crate::trf!("保存失败：{e}"), true);
                 false
             }
         }
@@ -772,20 +804,26 @@ impl App {
         let viewing = self.doc.year;
         let board=map_core::world_book::WorldBook::current(&self.doc);
         if let Some(l) = self.history.undo(&mut self.doc) {
+            self.visualization_ui.reload(&self.doc);
+            self.environment_ui.reload();
+            self.worldview_ui.reload(&self.doc);
             self.dirty = true;
             let note = self.keep_book_history_view(board,viewing);
             self.after_history_jump();
-            self.set_status(format!("撤销：{l}{note}"), false);
+            self.set_status(crate::trf!("撤销：{l}{note}"), false);
         }
     }
     pub fn redo(&mut self) {
         let viewing = self.doc.year;
         let board=map_core::world_book::WorldBook::current(&self.doc);
         if let Some(l) = self.history.redo(&mut self.doc) {
+            self.visualization_ui.reload(&self.doc);
+            self.environment_ui.reload();
+            self.worldview_ui.reload(&self.doc);
             self.dirty = true;
             let note = self.keep_book_history_view(board,viewing);
             self.after_history_jump();
-            self.set_status(format!("重做：{l}{note}"), false);
+            self.set_status(crate::trf!("重做：{l}{note}"), false);
         }
     }
 
@@ -852,7 +890,7 @@ impl App {
 
     /// Derived data (meshes, colours, overlays, labels) — each part is only
     /// rebuilt when its inputs changed.
-    fn refresh_derived(&mut self) {
+    pub(crate) fn refresh_derived(&mut self) {
         let d = &self.doc;
         let theme_stale = self.theme_src.as_ref().is_none_or(|s| {
             !(s.owner.ptr_eq(&d.owner)
@@ -864,6 +902,7 @@ impl App {
                 && s.active_layer == d.active_layer
                 && s.theme == d.theme
                 && s.style == d.style
+                && map_core::visualization::same_map_inputs(s, d)
                 && s.year == d.year)
         });
         self.last_stats = self.scene.update_geometry(&self.doc, self.cam2d.lon0);
@@ -965,6 +1004,7 @@ impl App {
             return;
         }
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            self.land_move = Default::default();
             self.clear_draft();
             self.merge_first = None;
             self.measure_pts.clear();
@@ -991,6 +1031,7 @@ impl App {
     }
 
     pub fn set_tool(&mut self, t: Tool) {
+        self.land_move = Default::default();
         if self.tool != t {
             self.end_pending();
             self.ann_path = None;
@@ -1008,7 +1049,7 @@ impl App {
     pub fn new_test_world(&mut self, detailed: bool) {
         let spec = if detailed { map_core::testworld::TestWorldSpec::detailed() } else { map_core::testworld::TestWorldSpec::default() };
         self.test_world = Some(std::thread::spawn(move || map_core::testworld::history_world(&spec)));
-        self.set_status(if detailed { "正在生成精细测试世界…" } else { "正在生成测试世界…" }, false);
+        self.set_status(if detailed { crate::i18n::tr("正在生成精细测试世界…") } else { crate::i18n::tr("正在生成测试世界…") }, false);
     }
 
     pub fn making_test_world(&self) -> bool {
@@ -1026,13 +1067,13 @@ impl App {
         let faces = self.doc.topo.faces.len();
         let mut tidy = self.doc.clone();
         match tidy.tidy_faces() {
-            0 => self.set_status("整理地块：没有可以合并的地块", false),
+            0 => self.set_status(crate::i18n::tr("整理地块：没有可以合并的地块"), false),
             n => {
                 let before = std::mem::replace(&mut self.doc, tidy);
                 self.history.push("整理地块", before, &self.doc);
                 self.dirty = true;
                 self.selected_face = None;
-                self.set_status(format!("整理地块：合并 {n} 处，地块 {} → {}；各年份地图不变", faces - 1, self.doc.topo.faces.len() - 1), false);
+                self.set_status(crate::trf!("整理地块：合并 {n} 处，地块 {} → {}；各年份地图不变", faces - 1, self.doc.topo.faces.len() - 1), false);
             }
         }
     }
@@ -1040,9 +1081,11 @@ impl App {
     fn menu(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
             self.action_menus(ui);
+            if ui.small_button(crate::i18n::tr("设置")).clicked() { self.run(Act::Prefs); }
+            if ui.small_button(crate::i18n::tr("创作工作室")).clicked() { self.run(Act::Studio); }
             ui.separator();
             if let Some(paper) = self.doc.paper {
-                ui.label(format!("平面画布 · {} × {} px", paper.width, paper.height));
+                ui.label(crate::trf!("平面画布 · {} × {} px", paper.width, paper.height));
                 return;
             }
             if ui.selectable_label(self.star_map.open, crate::i18n::tr("星图")).clicked() {
@@ -1050,17 +1093,60 @@ impl App {
             }
             if self.star_map.open { return; }
             ui.separator();
-            ui.label("投影：");
-            egui::ComboBox::from_id_salt("proj").selected_text(self.cam2d.proj.name()).show_ui(ui, |ui| {
+            ui.label(crate::i18n::tr("投影："));
+            egui::ComboBox::from_id_salt("proj").selected_text(crate::i18n::tr(self.cam2d.proj.name())).show_ui(ui, |ui| {
                 for p in Projection::ALL {
-                    if ui.selectable_value(&mut self.cam2d.proj, p, p.name()).changed() {
+                    if ui.selectable_value(&mut self.cam2d.proj, p, crate::i18n::tr(p.name())).changed() {
                         self.fit_pending = true;
                     }
                 }
             });
-            ui.label("中央经线");
-            ui.add(egui::DragValue::new(&mut self.cam2d.lon0).range(-180.0..=180.0).speed(1.0).suffix("°"));
+            ui.label(crate::i18n::tr("中央经线"));
+            let mut meridian = self.cam2d.lon0;
+            let changed = ui.add(
+                egui::DragValue::new(&mut meridian)
+                    .range(-180.0..=180.0)
+                    .speed(1.0)
+                    .suffix("°"),
+            ).on_hover_text(crate::i18n::tr("点击输入经度。正值为东经，负值为西经。")).changed();
+            let recenter = ui.small_button(crate::i18n::tr("居中")).on_hover_text(crate::i18n::tr("将这条经线放到二维和球体视图正中央，保留当前缩放。")).clicked();
+            if changed || recenter {
+                self.center_on_meridian(meridian);
+            }
+            ui.menu_button(crate::i18n::tr("视角"), |ui| {
+                if ui.button(crate::i18n::tr("0° 经线居中")).clicked() {
+                    self.center_on_meridian(0.0);
+                    ui.close();
+                }
+                if ui.button(crate::i18n::tr("将当前中央经线记为打开视角")).clicked() {
+                    let old = self.doc.home_view;
+                    let view = map_core::doc::HomeView {
+                        projection: self.cam2d.proj,
+                        central_meridian: self.cam2d.lon0,
+                        globe_latitude: self.globe.center_lat.clamp(-89.0, 89.0),
+                        flat_extent: old.and_then(|view| view.flat_extent),
+                    };
+                    self.edit("设置打开视角", |doc| {
+                        doc.home_view = Some(view);
+                        Ok(())
+                    });
+                    ui.close();
+                }
+            });
         });
+    }
+
+    fn center_on_meridian(&mut self, meridian: f64) {
+        if !meridian.is_finite() {
+            return;
+        }
+        let longitude = meridian.clamp(-180.0, 180.0);
+        self.cam2d.lon0 = longitude;
+        self.cam2d.center[0] = 0.0;
+        self.globe.center_lon = longitude;
+        self.globe_inertia.stop();
+        self.fit_pending = false;
+        self.nav_touched = true;
     }
 
     /// Replace the world with imported polygons whose neighbours share
@@ -1069,17 +1155,17 @@ impl App {
         if let Some((mut repair, mut snap)) = self.import_dialog {
             let mut go = false;
             let mut open = true;
-            egui::Window::new("导入 GeoJSON 为新世界").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
-                ui.radio_value(&mut repair, false, "严格模式：边界必须逐坐标一致，任何不一致都报告并停止");
-                ui.radio_value(&mut repair, true, "修复模式：吸附、补交点、去除重叠、填补细缝，并报告每处改动");
+            egui::Window::new(crate::i18n::tr("导入 GeoJSON 为新世界")).open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
+                ui.radio_value(&mut repair, false, crate::i18n::tr("严格模式：边界必须逐坐标一致，任何不一致都报告并停止"));
+                ui.radio_value(&mut repair, true, crate::i18n::tr("修复模式：吸附、补交点、去除重叠、填补细缝，并报告每处改动"));
                 ui.add_enabled_ui(repair, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("吸附距离");
+                        ui.label(crate::i18n::tr("吸附距离"));
                         ui.add(egui::DragValue::new(&mut snap).range(0.1..=10000.0).speed(1.0).suffix(" m"));
                     });
-                    ui.weak("小于吸附距离的顶点合并、贴到相邻边界上；宽度不超过 3 倍吸附距离、被陆地围住的缝隙并入相邻国家。");
+                    ui.weak(crate::i18n::tr("小于吸附距离的顶点合并、贴到相邻边界上；宽度不超过 3 倍吸附距离、被陆地围住的缝隙并入相邻国家。"));
                 });
-                if ui.button("选择文件…").clicked() {
+                if ui.button(crate::i18n::tr("选择文件…")).clicked() {
                     go = true;
                 }
             });
@@ -1090,7 +1176,7 @@ impl App {
         }
         if let Some(lines) = &self.import_report {
             let mut open = true;
-            egui::Window::new("导入报告").open(&mut open).default_width(520.0).show(ctx, |ui| {
+            egui::Window::new(crate::i18n::tr("导入报告")).open(&mut open).default_width(520.0).show(ctx, |ui| {
                 egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
                     for l in lines {
                         ui.label(l);
@@ -1158,7 +1244,7 @@ impl App {
             Err(rep) => {
                 let first = rep.problems.iter().take(3).cloned().collect::<Vec<_>>().join("；");
                 let hint = if repair { "" } else { "。可改用修复模式" };
-                self.set_status(format!("共享边界导入失败（{}，{} 个问题）：{first}{hint}", if repair { "修复模式" } else { "严格模式" }, rep.problems.len()), true);
+                self.set_status(crate::trf!("共享边界导入失败（{}，{} 个问题）：{first}{hint}", if repair { "修复模式" } else { "严格模式" }, rep.problems.len()), true);
                 let mut lines = vec![format!("导入失败，{} 个问题：", rep.problems.len())];
                 lines.extend(rep.problems.iter().take(50).map(|p| format!("  · {p}")));
                 self.import_report = Some(lines);
@@ -1174,12 +1260,12 @@ impl App {
         let text = if shp {
             match map_io::shapefile::read(&p) {
                 Ok(r) if r.features == 0 => {
-                    self.set_status(format!("Shapefile 中没有面或线要素（跳过 {} 个点或空要素）", r.skipped), true);
+                    self.set_status(crate::trf!("Shapefile 中没有面或线要素（跳过 {} 个点或空要素）", r.skipped), true);
                     return None;
                 }
                 Ok(r) => r.geojson,
                 Err(e) => {
-                    self.set_status(format!("读取 Shapefile 失败：{e}"), true);
+                    self.set_status(crate::trf!("读取 Shapefile 失败：{e}"), true);
                     return None;
                 }
             }
@@ -1187,7 +1273,7 @@ impl App {
             match std::fs::read_to_string(&p) {
                 Ok(t) => t,
                 Err(e) => {
-                    self.set_status(format!("读取失败：{e}"), true);
+                    self.set_status(crate::trf!("读取失败：{e}"), true);
                     return None;
                 }
             }
@@ -1212,11 +1298,11 @@ impl App {
         let Some(p) = self.file_dialog().add_filter("CSV", &["csv", "txt"]).pick_file() else { return };
         let text = match std::fs::read_to_string(&p) {
             Ok(t) => t,
-            Err(e) => return self.set_status(format!("读取失败：{e}"), true),
+            Err(e) => return self.set_status(crate::trf!("读取失败：{e}"), true),
         };
         if let Some(rep) = self.edit("导入 CSV", |d| map_io::table::import(d, &text, false)) {
             self.set_status(
-                format!(
+                crate::trf!(
                     "CSV：{} 行，写入 {} 个值，新建字段 {:?}，未匹配 {} 个{}",
                     rep.rows,
                     rep.values_set,
@@ -1236,18 +1322,18 @@ impl App {
             self.confirm_close = true;
         }
         if self.confirm_close {
-            egui::Window::new("未保存的修改").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-                ui.label("当前世界有未保存的修改，是否保存？");
+            egui::Window::new(crate::i18n::tr("未保存的修改")).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                ui.label(crate::i18n::tr("当前世界有未保存的修改，是否保存？"));
                 ui.horizontal(|ui| {
-                    if ui.button("保存").clicked() && self.save(false) {
+                    if ui.button(crate::i18n::tr("保存")).clicked() && self.save(false) {
                         self.allow_close = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
-                    if ui.button("不保存").clicked() {
+                    if ui.button(crate::i18n::tr("不保存")).clicked() {
                         self.allow_close = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
-                    if ui.button("取消").clicked() {
+                    if ui.button(crate::i18n::tr("取消")).clicked() {
                         self.confirm_close = false;
                     }
                 });
@@ -1289,38 +1375,9 @@ impl App {
     }
 }
 
-impl eframe::App for App {
-    fn on_exit(&mut self) {
-        self.autosave.finish();
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        let t0 = Instant::now();
-        if self.parent.is_none() {
-            self.parent = ParentWindow::of(frame);
-        }
-        let ctx = ui.ctx().clone();
-        if self.doc.paper.is_some() {
-            self.cam2d.proj = Projection::Equirectangular;
-            self.cam2d.lon0 = 0.0;
-        }
-        // `stable_dt` leaves out the time the window rested between repaints
-        self.frame_ms = self.frame_ms * 0.9 + ctx.input(|i| i.stable_dt).min(1.0) * 1000.0 * 0.1;
-        self.shortcuts(&ctx);
-        let mut lap = Instant::now();
-        let mut laps = [0.0f32; 4];
-        let mut mark = |i: usize, lap: &mut Instant| {
-            laps[i] += lap.elapsed().as_secs_f32() * 1000.0;
-            *lap = Instant::now();
-        };
-        if !self.star_map.open {
-            self.refresh_derived();
-        }
-        mark(0, &mut lap);
-        self.poll_underlays(&ctx);
-        self.climate_tick(&ctx);
-        self.poll_bg_edit(&ctx);
-        self.poll_test_world(&ctx);
+impl App {
+    pub(crate) fn read_workspace_input(&mut self,ctx:&egui::Context) {
+        self.shortcuts(ctx);
         ctx.input(|i| {
             for e in &i.events {
                 if let egui::Event::PointerButton { pressed: true, modifiers, .. } = e {
@@ -1336,6 +1393,82 @@ impl eframe::App for App {
         } else if !down && !released {
             self.space_pan = false;
         }
+    }
+    pub(crate) fn show_workspace_editors(&mut self,ctx:&egui::Context) {
+        self.export_window(ctx);
+        self.palette_window(ctx);
+        self.shortcuts_window(ctx);
+        self.about_window(ctx);
+        self.tutorial_window(ctx);
+        self.prefs_window(ctx);
+        self.welcome_window(ctx);
+        self.history_window(ctx);
+        self.checkpoints_window(ctx);
+        self.focus_window(ctx);
+        self.query_window(ctx);
+        self.names_window(ctx);
+        self.roads_window(ctx);
+        self.assistant_window(ctx);
+        self.geographic_guides_window(ctx);
+        self.plugin_window(ctx);
+        self.book_window(ctx);
+        self.worldview_window(ctx);
+        self.diplomacy_window(ctx);
+        self.climate_window(ctx);
+        self.environment_window(ctx);
+        self.visualization_window(ctx);
+        self.page_window(ctx);
+        self.events_window(ctx);
+        self.wizard_window(ctx);
+        self.partition_window(ctx);
+        self.playback_window(ctx);
+        self.confirm_replace_window(ctx);
+        self.reshape_window(ctx);
+        self.recovery_window(ctx);
+        self.import_windows(ctx);
+    }
+}
+
+impl eframe::App for App {
+    fn on_exit(&mut self) {
+        self.cancel_video_on_exit();
+        self.autosave.finish();
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let t0 = Instant::now();
+        if self.parent.is_none() {
+            self.parent = ParentWindow::of(frame);
+        }
+        let ctx = ui.ctx().clone();
+        if self.doc.paper.is_some() {
+            self.cam2d.proj = Projection::Equirectangular;
+            self.cam2d.lon0 = 0.0;
+        }
+        // `stable_dt` leaves out the time the window rested between repaints
+        self.frame_ms = self.frame_ms * 0.9 + ctx.input(|i| i.stable_dt).min(1.0) * 1000.0 * 0.1;
+        if ctx.input(|i| i.viewport().focused==Some(true)) {
+            self.studio.foreground=false;
+        }
+        if std::mem::take(&mut self.professional_raise) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+        if !self.studio.foreground { self.read_workspace_input(&ctx); }
+        let mut lap = Instant::now();
+        let mut laps = [0.0f32; 4];
+        let mut mark = |i: usize, lap: &mut Instant| {
+            laps[i] += lap.elapsed().as_secs_f32() * 1000.0;
+            *lap = Instant::now();
+        };
+        if !self.studio.foreground && !self.star_map.open {
+            self.refresh_derived();
+        }
+        mark(0, &mut lap);
+        self.poll_underlays(&ctx);
+        self.climate_tick(&ctx);
+        self.environment_tick(&ctx);
+        self.poll_bg_edit(&ctx);
+        self.poll_test_world(&ctx);
         // where the pointer is on the map; set again by the view under it
         self.cursor = None;
         // what was selected may be gone (undo, deletion)
@@ -1351,12 +1484,24 @@ impl eframe::App for App {
             self.title = title;
         }
 
+        if self.studio.foreground {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.heading("Atlas Forge");
+                ui.label(&self.doc.meta.name);
+                if ui.button(crate::i18n::tr("切回专业界面")).clicked() {
+                    self.switch_workspace();
+                }
+            });
+        } else {
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::top("world-book-navigation").show(ui, |ui| self.book_bar(ui));
         if self.star_map.open {
             self.star_chart(ui);
         } else {
-            egui::Panel::top("options").show(ui, |ui| self.options_bar(ui));
+            egui::Panel::top("options").show(ui, |ui| {
+                if self.land_move.active { self.land_move_bar(ui); }
+                else { self.options_bar(ui); }
+            });
             egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
             egui::Panel::bottom("timeline").show(ui, |ui| self.timeline_bar(ui));
             if self.table_panel {
@@ -1384,33 +1529,14 @@ impl eframe::App for App {
                 }
             });
         }
+        }
         mark(2, &mut lap);
-        self.export_window(&ctx);
-        self.palette_window(&ctx);
-        self.shortcuts_window(&ctx);
-        self.about_window(&ctx);
-        self.tutorial_window(&ctx);
-        self.prefs_window(&ctx);
-        self.welcome_window(&ctx);
-        self.history_window(&ctx);
-        self.checkpoints_window(&ctx);
-        self.focus_window(&ctx);
-        self.query_window(&ctx);
-        self.names_window(&ctx);
-        self.roads_window(&ctx);
-        self.assistant_window(&ctx);
-        self.plugin_window(&ctx);
-        self.book_window(&ctx);
-        self.diplomacy_window(&ctx);
-        self.climate_window(&ctx);
-        self.page_window(&ctx);
-        self.events_window(&ctx);
-        self.wizard_window(&ctx);
-        self.partition_window(&ctx);
+        if !self.studio.foreground { self.show_workspace_editors(&ctx); }
+        self.studio_window(&ctx);
+        self.model_viewer_window(&ctx);
         self.focus_play_tick(&ctx);
+        self.playback_tick(&ctx);
         self.sync_prefs(&ctx);
-        self.confirm_replace_window(&ctx);
-        self.reshape_window(&ctx);
         if self.doc.year != frame_start.year {
             self.doc.refresh_time_view();
         }
@@ -1420,8 +1546,6 @@ impl eframe::App for App {
         self.sync_fonts(&ctx);
         self.coalesce_settings(&ctx, &frame_start, gen_start);
         self.handle_close(&ctx);
-        self.recovery_window(&ctx);
-        self.import_windows(&ctx);
         let busy = self.pending.is_some() || self.settings_pending.is_some();
         crate::crash::remember(&self.doc, &self.path, self.history.generation(), self.dirty);
         // for testing the crash handling: ATLAS_DEBUG_PANIC makes the
@@ -1430,7 +1554,7 @@ impl eframe::App for App {
             panic!("ATLAS_DEBUG_PANIC: deliberate crash with unsaved work");
         }
         if let Some(e) = self.autosave.tick(&ctx, &self.doc, self.path.clone(), self.history.generation(), self.dirty, busy) {
-            self.set_status(format!("自动保存失败：{e}"), true);
+            self.set_status(crate::trf!("自动保存失败：{e}"), true);
         }
         mark(3, &mut lap);
         if let Some(p) = &mut self.prof {

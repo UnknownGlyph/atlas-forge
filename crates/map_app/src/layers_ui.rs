@@ -67,7 +67,7 @@ impl App {
             self.active_group = Some(g);
             self.tab = Tab::Features;
             let name = self.doc.group(g).map(|x| x.name.clone()).unwrap_or_default();
-            self.set_status(format!("已新建“{name}”{}；它是当前图层，新画的要素会进入它", if fs.is_empty() { String::new() } else { format!("，移入 {} 个要素", fs.len()) }), false);
+            self.set_status(crate::trf!("已新建“{name}”{}；它是当前图层，新画的要素会进入它", if fs.is_empty() { String::new() } else { format!("，移入 {} 个要素", fs.len()) }), false);
             self.group_rename = Some((g, name, true));
         }
     }
@@ -76,7 +76,7 @@ impl App {
     pub fn ungroup_selection(&mut self) {
         let fs = self.selection();
         if self.edit("移出图层", |d| d.set_group(&fs, None)).is_some() {
-            self.set_status(format!("{} 个要素已移出图层（回到最下面，按原来的顺序绘制）", fs.len()), false);
+            self.set_status(crate::trf!("{} 个要素已移出图层（回到最下面，按原来的顺序绘制）", fs.len()), false);
         }
     }
 
@@ -98,16 +98,16 @@ impl App {
         let mut rename = self.group_rename.take();
         let mut ops: Vec<Op> = Vec::new();
         ui.horizontal(|ui| {
-            ui.label(RichText::new("图层").strong());
-            if ui.small_button("＋ 新建").on_hover_text("在最上面新建一个空图层，并设为当前图层：之后新画、粘贴的要素进入它").clicked() {
+            ui.label(RichText::new(crate::i18n::tr("图层")).strong());
+            if ui.small_button(crate::i18n::tr("＋ 新建")).on_hover_text(crate::i18n::tr("在最上面新建一个空图层，并设为当前图层：之后新画、粘贴的要素进入它")).clicked() {
                 ops.push(Op::New);
             }
-            if ui.add_enabled(!sel.is_empty(), egui::Button::new("所选建为图层").small()).on_hover_text("Ctrl+G：新建图层，把所选要素移入").clicked() {
+            if ui.add_enabled(!sel.is_empty(), egui::Button::new(crate::i18n::tr("所选建为图层")).small()).on_hover_text(crate::i18n::tr("Ctrl+G：新建图层，把所选要素移入")).clicked() {
                 ops.push(Op::FromSelection);
             }
         });
         if groups.is_empty() {
-            ui.weak("图层把地图上的文字、符号、线和区域分成几组：整组显示、隐藏、锁定、调不透明度，上面的图层盖住下面的。现在还没有图层，全部要素按原来的顺序绘制。");
+            ui.weak(crate::i18n::tr("图层把地图上的文字、符号、线和区域分成几组：整组显示、隐藏、锁定、调不透明度，上面的图层盖住下面的。现在还没有图层，全部要素按原来的顺序绘制。"));
         }
         let n = groups.len();
         // the top of the stack first
@@ -115,11 +115,11 @@ impl App {
             // (ids by layer, not by place in the list)
             ui.push_id(g.id.0, |ui| ui.horizontal(|ui| {
                 let mut on = !g.hidden;
-                if ui.checkbox(&mut on, "").on_hover_text("显示整个图层；取消后其中的要素不绘制、不导出、不进图例").changed() {
+                if ui.checkbox(&mut on, "").on_hover_text(crate::i18n::tr("显示整个图层；取消后其中的要素不绘制、不导出、不进图例")).changed() {
                     ops.push(Op::Hide(g.id, !on));
                 }
-                let lock = if g.locked { RichText::new("锁") } else { RichText::new("锁").weak() };
-                if ui.selectable_label(g.locked, lock).on_hover_text(if g.locked { "已锁定：其中的要素不会在地图上被选中或移动。单击解锁" } else { "单击锁定整个图层" }).clicked() {
+                let lock = if g.locked { RichText::new(crate::i18n::tr("锁")) } else { RichText::new(crate::i18n::tr("锁")).weak() };
+                if ui.selectable_label(g.locked, lock).on_hover_text(if g.locked { crate::i18n::tr("已锁定：其中的要素不会在地图上被选中或移动。单击解锁") } else { crate::i18n::tr("单击锁定整个图层") }).clicked() {
                     ops.push(Op::Lock(g.id, !g.locked));
                 }
                 match &mut rename {
@@ -135,49 +135,49 @@ impl App {
                     _ => {
                         let in_hand = self.active_group == Some(g.id);
                         let name = if g.hidden { RichText::new(&g.name).weak() } else { RichText::new(&g.name) };
-                        let r = ui.selectable_label(in_hand, name).on_hover_text("单击设为当前图层（新画、粘贴的要素进入它），再单击取消；双击改名；右键有更多操作");
+                        let r = ui.selectable_label(in_hand, name).on_hover_text(crate::i18n::tr("单击设为当前图层（新画、粘贴的要素进入它），再单击取消；双击改名；右键有更多操作"));
                         if r.double_clicked() {
                             rename = Some((g.id, g.name.clone(), true));
                         } else if r.clicked() {
                             ops.push(Op::InHand((!in_hand).then_some(g.id)));
                         }
                         r.context_menu(|ui| {
-                            if ui.button("改名").clicked() {
+                            if ui.button(crate::i18n::tr("改名")).clicked() {
                                 rename = Some((g.id, g.name.clone(), true));
                             }
-                            if ui.add_enabled(!sel.is_empty(), egui::Button::new(format!("所选要素移入（{}）", sel.len()))).clicked() {
+                            if ui.add_enabled(!sel.is_empty(), egui::Button::new(crate::trf!("所选要素移入（{}）", sel.len()))).clicked() {
                                 ops.push(Op::TakeSelection(g.id));
                             }
-                            if ui.button("选中其中的要素").clicked() {
+                            if ui.button(crate::i18n::tr("选中其中的要素")).clicked() {
                                 ops.push(Op::SelectMembers(g.id));
                             }
                             ui.separator();
-                            if ui.add_enabled(i + 1 < n, egui::Button::new("移到最上")).clicked() {
+                            if ui.add_enabled(i + 1 < n, egui::Button::new(crate::i18n::tr("移到最上"))).clicked() {
                                 ops.push(Op::Move(g.id, n - 1));
                             }
-                            if ui.add_enabled(i > 0, egui::Button::new("移到最下")).clicked() {
+                            if ui.add_enabled(i > 0, egui::Button::new(crate::i18n::tr("移到最下"))).clicked() {
                                 ops.push(Op::Move(g.id, 0));
                             }
                             ui.separator();
-                            if ui.button("删除图层（要素保留）").clicked() {
+                            if ui.button(crate::i18n::tr("删除图层（要素保留）")).clicked() {
                                 ops.push(Op::Remove(g.id));
                             }
                         });
                     }
                 }
-                ui.weak(format!("{} 个", count.get(&Some(g.id)).copied().unwrap_or(0)));
+                ui.weak(crate::trf!("{} 个", count.get(&Some(g.id)).copied().unwrap_or(0)));
                 let mut pct = (g.opacity * 100.0).round();
-                let r = ui.add(egui::DragValue::new(&mut pct).range(0.0..=100.0).speed(1.0).suffix("%")).on_hover_text("不透明度：整层要素一起变淡，导出同样生效");
+                let r = ui.add(egui::DragValue::new(&mut pct).range(0.0..=100.0).speed(1.0).suffix("%")).on_hover_text(crate::i18n::tr("不透明度：整层要素一起变淡，导出同样生效"));
                 if r.changed() {
                     ops.push(Op::Opacity(g.id, pct / 100.0));
                 }
                 if r.drag_stopped() || r.lost_focus() {
                     ops.push(Op::OpacityDone);
                 }
-                if ui.add_enabled(i + 1 < n, egui::Button::new("▲").small()).on_hover_text("上移一层：盖住原来在它上面的那一层").clicked() {
+                if ui.add_enabled(i + 1 < n, egui::Button::new("▲").small()).on_hover_text(crate::i18n::tr("上移一层：盖住原来在它上面的那一层")).clicked() {
                     ops.push(Op::Move(g.id, i + 1));
                 }
-                if ui.add_enabled(i > 0, egui::Button::new("▼").small()).on_hover_text("下移一层").clicked() {
+                if ui.add_enabled(i > 0, egui::Button::new("▼").small()).on_hover_text(crate::i18n::tr("下移一层")).clicked() {
                     ops.push(Op::Move(g.id, i - 1));
                 }
             }));
@@ -186,14 +186,14 @@ impl App {
         if !groups.is_empty() {
             ui.horizontal(|ui| {
                 ui.add_space(4.0);
-                ui.weak(format!("未分组的要素 {} 个：在所有图层之下，按原来的顺序绘制", count.get(&None).copied().unwrap_or(0)));
+                ui.weak(crate::trf!("未分组的要素 {} 个：在所有图层之下，按原来的顺序绘制", count.get(&None).copied().unwrap_or(0)));
             });
         }
         ui.horizontal_wrapped(|ui| {
-            ui.weak("底图");
-            ui.checkbox(&mut self.doc.style.show_labels, "国家名称");
-            ui.checkbox(&mut self.doc.style.show_cities, "城市");
-            ui.checkbox(&mut self.graticule, "经纬网");
+            ui.weak(crate::i18n::tr("底图"));
+            ui.checkbox(&mut self.doc.style.show_labels, crate::i18n::tr("国家名称"));
+            ui.checkbox(&mut self.doc.style.show_cities, crate::i18n::tr("城市"));
+            ui.checkbox(&mut self.graticule, crate::i18n::tr("经纬网"));
         });
         self.group_rename = rename;
         for op in ops {
@@ -202,7 +202,7 @@ impl App {
                     if let Some(g) = self.edit("新建图层", |d| Ok(d.add_group(""))) {
                         self.active_group = Some(g);
                         let name = self.doc.group(g).map(|x| x.name.clone()).unwrap_or_default();
-                        self.set_status(format!("已新建“{name}”：它是当前图层，新画的要素会进入它"), false);
+                        self.set_status(crate::trf!("已新建“{name}”：它是当前图层，新画的要素会进入它"), false);
                         self.group_rename = Some((g, name, true));
                     }
                 }
@@ -236,7 +236,7 @@ impl App {
                 }
                 Op::Remove(g) => {
                     if let Some(n) = self.edit("删除图层", |d| d.remove_group(g)) {
-                        self.set_status(format!("图层已删除，其中的 {n} 个要素保留在地图上（Ctrl+Z 撤销）"), false);
+                        self.set_status(crate::trf!("图层已删除，其中的 {n} 个要素保留在地图上（Ctrl+Z 撤销）"), false);
                     }
                     self.group_rename = None;
                 }
@@ -250,8 +250,8 @@ impl App {
                 Op::InHand(g) => {
                     self.active_group = g;
                     match g.and_then(|g| self.doc.group(g)) {
-                        Some(x) => self.set_status(format!("当前图层：{}。新画、粘贴的要素进入它", x.name), false),
-                        None => self.set_status("没有当前图层：新画的要素不进入任何图层", false),
+                        Some(x) => self.set_status(crate::trf!("当前图层：{}。新画、粘贴的要素进入它", x.name), false),
+                        None => self.set_status(crate::i18n::tr("没有当前图层：新画的要素不进入任何图层"), false),
                     }
                 }
                 Op::TakeSelection(g) => {
@@ -265,7 +265,7 @@ impl App {
                     let n = fs.len();
                     self.set_tool(Tool::Select);
                     self.set_selection(fs);
-                    self.set_status(format!("已选择图层里的 {n} 个要素（隐藏或锁定的不选）"), false);
+                    self.set_status(crate::trf!("已选择图层里的 {n} 个要素（隐藏或锁定的不选）"), false);
                 }
             }
         }

@@ -275,9 +275,9 @@ impl App {
                     let curved = self.doc.curves.contains_key(&f.id());
                     self.set_status(
                         if curved {
-                            "已选中曲线：拖动锚点与控制柄修改；双击锚点切换平滑/尖角，双击线上添加锚点，右键锚点删除"
+                            crate::i18n::tr("已选中曲线：拖动锚点与控制柄修改；双击锚点切换平滑/尖角，双击线上添加锚点，右键锚点删除")
                         } else {
-                            "这条线（区域）还不是曲线：在右侧面板中点“转为曲线”后即可拖动锚点与控制柄"
+                            crate::i18n::tr("这条线（区域）还不是曲线：在右侧面板中点“转为曲线”后即可拖动锚点与控制柄")
                         },
                         false,
                     );
@@ -311,7 +311,7 @@ impl App {
         if nodes.len() < if area { 3 } else { 2 } {
             // (a lone anchor from a stray double-click is just dropped)
             if nodes.len() > 1 {
-                self.set_status(if area { "区域至少需要三个锚点" } else { "线至少需要两个锚点" }, true);
+                self.set_status(if area { crate::i18n::tr("区域至少需要三个锚点") } else { crate::i18n::tr("线至少需要两个锚点") }, true);
             }
             return;
         }
@@ -335,7 +335,7 @@ impl App {
             self.set_selection(vec![f]);
             self.curve_focus = Some(id);
             self.tab = crate::panels::Tab::Features;
-            self.set_status(format!("{label}：完成。拖动锚点与控制柄可修改；在右侧面板命名与设置样式"), false);
+            self.set_status(crate::trf!("{label}：完成。拖动锚点与控制柄可修改；在右侧面板命名与设置样式"), false);
         }
     }
 
@@ -424,13 +424,13 @@ impl App {
             Some(c) => {
                 let (n, smooth) = (c.nodes.len(), c.nodes.iter().filter(|n| n.h_in.is_some() || n.h_out.is_some()).count());
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("曲线").strong());
-                    ui.weak(format!("{n} 个锚点，其中 {smooth} 个带控制柄"));
+                    ui.label(RichText::new(crate::i18n::tr("曲线")).strong());
+                    ui.weak(crate::trf!("{n} 个锚点，其中 {smooth} 个带控制柄"));
                 })
                 .response
-                .on_hover_text("拖动锚点与控制柄修改（选择、钢笔或编辑顶点工具）；按住 Alt 拖动控制柄可把平滑点拆成尖角；双击锚点切换平滑/尖角；双击线上添加锚点；右键锚点删除");
+                .on_hover_text(crate::i18n::tr("拖动锚点与控制柄修改（选择、钢笔或编辑顶点工具）；按住 Alt 拖动控制柄可把平滑点拆成尖角；双击锚点切换平滑/尖角；双击线上添加锚点；右键锚点删除"));
                 ui.horizontal_wrapped(|ui| {
-                    if ui.small_button("全部平滑").on_hover_text("每个锚点都改为平滑点（控制柄沿前后锚点方向）").clicked() {
+                    if ui.small_button(crate::i18n::tr("全部平滑")).on_hover_text(crate::i18n::tr("每个锚点都改为平滑点（控制柄沿前后锚点方向）")).clicked() {
                         self.edit("曲线全部平滑", |d| {
                             d.edit_curve(id, |c| {
                                 for i in 0..c.nodes.len() {
@@ -440,7 +440,7 @@ impl App {
                             })
                         });
                     }
-                    if ui.small_button("全部尖角").on_hover_text("去掉所有控制柄：锚点之间是直线").clicked() {
+                    if ui.small_button(crate::i18n::tr("全部尖角")).on_hover_text(crate::i18n::tr("去掉所有控制柄：锚点之间是直线")).clicked() {
                         self.edit("曲线全部尖角", |d| {
                             d.edit_curve(id, |c| {
                                 for i in 0..c.nodes.len() {
@@ -450,19 +450,19 @@ impl App {
                             })
                         });
                     }
-                    if ui.small_button("转为折线").on_hover_text("不再是曲线，保持现在的形状（由许多短直线组成）；之后可像普通的线一样逐点编辑").clicked() {
+                    if ui.small_button(crate::i18n::tr("转为折线")).on_hover_text(crate::i18n::tr("不再是曲线，保持现在的形状（由许多短直线组成）；之后可像普通的线一样逐点编辑")).clicked() {
                         self.edit("曲线转为折线", |d| d.drop_curve(id, true));
                     }
                 });
             }
             None => {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("曲线").strong());
+                    ui.label(RichText::new(crate::i18n::tr("曲线")).strong());
                     let n = if area { self.doc.areas[&id].ring.len() } else { self.doc.rivers[&id].pts.len() };
-                    if ui.small_button("转为平滑曲线").on_hover_text(format!("以现有的 {n} 个点为锚点，生成经过它们的平滑曲线")).clicked() {
+                    if ui.small_button(crate::i18n::tr("转为平滑曲线")).on_hover_text(crate::trf!("以现有的 {n} 个点为锚点，生成经过它们的平滑曲线")).clicked() {
                         self.edit("转为平滑曲线", |d| d.curve_from_points(id, true));
                     }
-                    if ui.small_button("转为曲线（保持形状）").on_hover_text("每个点都成为尖角锚点，形状不变；之后可从锚点拉出控制柄").clicked() {
+                    if ui.small_button(crate::i18n::tr("转为曲线（保持形状）")).on_hover_text(crate::i18n::tr("每个点都成为尖角锚点，形状不变；之后可从锚点拉出控制柄")).clicked() {
                         self.edit("转为曲线", |d| d.curve_from_points(id, false));
                     }
                 });
@@ -472,14 +472,14 @@ impl App {
 
     /// The pen tool's options (in the options bar).
     pub fn pen_options(&mut self, ui: &mut egui::Ui) {
-        ui.label("画");
+        ui.label(crate::i18n::tr("画"));
         for t in [PenTarget::River, PenTarget::Route, PenTarget::Area] {
             if ui.selectable_value(&mut self.pen_target, t, t.name()).changed() {
                 self.pen.clear();
             }
         }
         if self.pen_target == PenTarget::Route {
-            ui.menu_button("线路样式…", |ui| {
+            ui.menu_button(crate::i18n::tr("线路样式…"), |ui| {
                 let mut st = self.route_style;
                 crate::river_ui::route_style_ui(ui, &mut st);
                 self.route_style = st;
@@ -487,7 +487,7 @@ impl App {
         }
         if !self.pen.is_empty() {
             ui.separator();
-            ui.weak(format!("{} 个锚点", self.pen.len()));
+            ui.weak(crate::trf!("{} 个锚点", self.pen.len()));
         }
     }
 }

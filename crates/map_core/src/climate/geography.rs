@@ -121,27 +121,7 @@ pub fn sample(
     ];
     let mut mask = vec![false; W * H];
     let mut touched = Vec::new();
-    // A water face joined to the exterior ocean is open water. An inland
-    // lake has no such path, even when its holes contain islands.
-    let mut sea = std::collections::HashSet::new();
-    let mut queue = vec![BACKGROUND];
-    while let Some(id) = queue.pop() {
-        if doc.face_kind_at(id, doc.year) != Some(FaceKind::Water) || !sea.insert(id) {
-            continue;
-        }
-        let face = &doc.topo.faces[&id];
-        for arc in face.outer.iter().chain(face.holes.iter().flatten()) {
-            let edge = &doc.topo.edges[&arc.edge];
-            let next = if edge.left == id {
-                edge.right
-            } else {
-                edge.left
-            };
-            if !sea.contains(&next) {
-                queue.push(next);
-            }
-        }
-    }
+    let sea = ocean_faces(doc);
     for (&id, face) in &doc.topo.faces {
         if id == BACKGROUND {
             continue;
@@ -243,4 +223,29 @@ pub fn footprint(center_point: LonLat, radius: f64) -> Vec<usize> {
 }
 pub fn region_cells(region: Region) -> impl Iterator<Item = usize> {
     (0..W * H).filter(move |&i| region.contains(center(i)))
+}
+
+pub(crate) fn ocean_faces(doc: &Document) -> std::collections::HashSet<crate::topo::FaceId> {
+    // A water face joined to the exterior ocean is open water. An inland
+    // lake has no such path, even when its holes contain islands.
+    let mut sea = std::collections::HashSet::new();
+    let mut queue = vec![BACKGROUND];
+    while let Some(id) = queue.pop() {
+        if doc.face_kind_at(id, doc.year) != Some(FaceKind::Water) || !sea.insert(id) {
+            continue;
+        }
+        let face = &doc.topo.faces[&id];
+        for arc in face.outer.iter().chain(face.holes.iter().flatten()) {
+            let edge = &doc.topo.edges[&arc.edge];
+            let next = if edge.left == id {
+                edge.right
+            } else {
+                edge.left
+            };
+            if !sea.contains(&next) {
+                queue.push(next);
+            }
+        }
+    }
+    sea
 }

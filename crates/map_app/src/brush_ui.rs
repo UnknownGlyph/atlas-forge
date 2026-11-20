@@ -35,14 +35,14 @@ impl App {
     fn commit_brush(&mut self, vg: &ViewGeom) {
         let stroke = std::mem::take(&mut self.brush_stroke);
         if self.bg_edit.is_some() {
-            return self.set_status("正在处理上一次绘制，请稍候", true);
+            return self.set_status(crate::i18n::tr("正在处理上一次绘制，请稍候"), true);
         }
         let pts: Vec<[f64; 2]> = stroke.iter().map(|p| [p.x as f64, p.y as f64]).collect();
         // one stroke is one connected patch; keep the largest if it is not
         let Some(ring) = map_core::shape::brush_outline(&pts, self.brush_px as f64).into_iter().max_by_key(|r| r.len()) else { return };
         let ll: Option<Vec<LonLat>> = ring.iter().map(|p| vg.to_lonlat(Pos2::new(p[0] as f32, p[1] as f32))).collect();
         let Some(ll) = ll else {
-            return self.set_status("画笔超出了地图范围，请在地图内涂抹", true);
+            return self.set_status(crate::i18n::tr("画笔超出了地图范围，请在地图内涂抹"), true);
         };
         self.clear_draft();
         self.draft_snap = vec![false; ll.len()];

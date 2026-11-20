@@ -38,13 +38,13 @@ impl App {
         let mut save = None;
         let mut remove = None;
         let mut related_event = None;
-        egui::Window::new("外交关系")
+        egui::Window::new(crate::i18n::tr("外交关系"))
             .open(&mut open)
             .default_width(585.0)
             .scroll(true)
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    if ui.button("新建关系或协约").clicked() {
+                    if ui.button(crate::i18n::tr("新建关系或协约")).clicked() {
                         let mut record = Agreement {
                             from: doc.year,
                             ..Default::default()
@@ -64,8 +64,8 @@ impl App {
                         state.edit = Some((None, record));
                         state.search.clear();
                     }
-                    ui.checkbox(&mut state.all_years, "浏览所有年份");
-                    ui.checkbox(&mut state.lines, "地图连线");
+                    ui.checkbox(&mut state.all_years, crate::i18n::tr("浏览所有年份"));
+                    ui.checkbox(&mut state.lines, crate::i18n::tr("地图连线"));
                 });
                 let year = if state.all_years { None } else { doc.year };
                 if let Some(d) = &doc.diplomacy {
@@ -82,16 +82,16 @@ impl App {
                                             record.kind.name(),
                                         );
                                         ui.strong(&record.name);
-                                        if ui.small_button("编辑").clicked() {
+                                        if ui.small_button(crate::i18n::tr("编辑")).clicked() {
                                             state.edit = Some((Some(*id), record.clone()));
                                             state.search.clear();
                                         }
                                         if record.event.is_some()
-                                            && ui.small_button("关联事件").clicked()
+                                            && ui.small_button(crate::i18n::tr("关联事件")).clicked()
                                         {
                                             related_event = record.event;
                                         }
-                                        if ui.small_button("删除…").clicked() {
+                                        if ui.small_button(crate::i18n::tr("删除…")).clicked() {
                                             state.delete = Some(*id);
                                         }
                                     });
@@ -107,7 +107,7 @@ impl App {
                                         let fmt = |year: Option<i32>| {
                                             year.map_or("不限".into(), |y| doc.calendar.show(y))
                                         };
-                                        ui.weak(format!(
+                                        ui.weak(crate::trf!(
                                             "{} 至 {}",
                                             fmt(record.from),
                                             fmt(record.until)
@@ -118,11 +118,11 @@ impl App {
                                     }
                                     if state.delete == Some(*id) {
                                         ui.horizontal(|ui| {
-                                            if ui.button("确认删除关系").clicked() {
+                                            if ui.button(crate::i18n::tr("确认删除关系")).clicked() {
                                                 remove = Some(*id);
                                                 state.delete = None;
                                             }
-                                            if ui.button("取消").clicked() {
+                                            if ui.button(crate::i18n::tr("取消")).clicked() {
                                                 state.delete = None;
                                             }
                                         });
@@ -134,7 +134,7 @@ impl App {
                 let mut cancel = false;
                 if let Some((id, record)) = &mut state.edit {
                     ui.separator();
-                    ui.label("名称");
+                    ui.label(crate::i18n::tr("名称"));
                     ui.text_edit_singleline(&mut record.name);
                     ui.horizontal_wrapped(|ui| {
                         egui::ComboBox::from_id_salt("diplomatic-kind")
@@ -148,8 +148,8 @@ impl App {
                         date(ui, &mut record.until, "结束年", doc.year.unwrap_or(0));
                     });
                     ui.horizontal(|ui| {
-                        ui.label(format!("参与国家（已选 {} 个）", record.parties.len()));
-                        ui.add(egui::TextEdit::singleline(&mut state.search).hint_text("搜索国家"));
+                        ui.label(crate::trf!("参与国家（已选 {} 个）", record.parties.len()));
+                        ui.add(egui::TextEdit::singleline(&mut state.search).hint_text(crate::i18n::tr("搜索国家")));
                     });
                     let search = state.search.to_lowercase();
                     egui::ScrollArea::vertical()
@@ -185,22 +185,22 @@ impl App {
                                 .map_or("不关联事件", |e| e.name.as_str()),
                         )
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut record.event, None, "不关联事件");
+                            ui.selectable_value(&mut record.event, None, crate::i18n::tr("不关联事件"));
                             for event in doc.events_in_order() {
                                 ui.selectable_value(&mut record.event, Some(event.id), &event.name);
                             }
                         });
-                    ui.label("说明或条约内容");
+                    ui.label(crate::i18n::tr("说明或条约内容"));
                     ui.add(
                         egui::TextEdit::multiline(&mut record.note)
                             .desired_rows(3)
                             .desired_width(480.),
                     );
                     ui.horizontal(|ui| {
-                        if ui.button("保存关系").clicked() {
+                        if ui.button(crate::i18n::tr("保存关系")).clicked() {
                             save = Some((*id, record.clone()));
                         }
-                        if ui.button("取消编辑").clicked() {
+                        if ui.button(crate::i18n::tr("取消编辑")).clicked() {
                             cancel = true;
                         }
                     });

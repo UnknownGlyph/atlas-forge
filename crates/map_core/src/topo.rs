@@ -19,6 +19,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "region_geometry.rs"]
+mod region_geometry;
+pub use region_geometry::{GeoOffset, LandBlock, LandTransform};
+
 macro_rules! id_type {
     ($name:ident) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

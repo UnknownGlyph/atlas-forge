@@ -18,19 +18,25 @@ mod crash;
 mod curve_ui;
 mod draw_ui;
 mod events_ui;
+mod environment_ui;
 mod features_ui;
 mod focus_ui;
 mod i18n;
 mod fonts_ui;
 mod furniture_ui;
+mod help_advisor;
+mod guides_ui;
 mod label_ui;
 mod map_detail;
 mod layers_ui;
+mod land_move_ui;
 mod layout_ui;
 mod lifespan_ui;
 mod measure_ui;
+mod model_viewer;
 mod names_ui;
 mod pageview_ui;
+mod playback_ui;
 mod panels;
 mod plugin_ui;
 mod partition_ui;
@@ -43,9 +49,12 @@ mod self_test;
 mod shell_ui;
 mod star_map;
 mod styles_ui;
+mod studio_ui;
 mod symbol_ui;
 mod view;
+mod visualization_ui;
 mod wizard_ui;
+mod worldview_ui;
 mod timeline_ui;
 mod tutorial_ui;
 mod diplomacy_ui;
@@ -89,7 +98,6 @@ fn main() -> eframe::Result<()> {
             let font = map_io::png::find_system_font().map(Arc::new);
             // the system's fonts are listed in the background, for the font pickers
             map_io::fonts::warm();
-            install_fonts(&cc.egui_ctx, font.clone());
             #[cfg(debug_assertions)]
             if std::env::var_os("ATLAS_DEBUG_UI").is_some() {
                 cc.egui_ctx.global_style_mut(|s| {
@@ -104,7 +112,7 @@ fn main() -> eframe::Result<()> {
         // no window to show it in: a message box, with what to try
         let _ = rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
-            .set_title("Atlas Forge 无法启动")
+            .set_title(crate::i18n::tr("Atlas Forge 无法启动"))
             .set_description(format!(
                 "无法创建窗口或图形设备：{e}
 
@@ -115,12 +123,27 @@ fn main() -> eframe::Result<()> {
 }
 
 /// Add a CJK system font as a fallback so Chinese names render.
-fn install_fonts(ctx: &egui::Context, font: Option<Arc<Vec<u8>>>) {
-    let Some(bytes) = font else { return };
+fn install_fonts(ctx: &egui::Context, font: Option<Arc<Vec<u8>>>, lang: i18n::Lang) {
     let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert("cjk".into(), Arc::new(egui::FontData::from_owned((*bytes).clone())));
+    let preferred: &[&str] = match lang {
+        i18n::Lang::Ja => &["YuGothR.ttc","meiryo.ttc","msgothic.ttc"],
+        i18n::Lang::ZhTw => &["msjh.ttc","mingliu.ttc"],
+        _ => &[],
+    };
+    let localized = map_io::fonts::font_dirs().iter()
+        .flat_map(|folder| preferred.iter().map(move |file|folder.join(file)))
+        .find_map(|path|std::fs::read(path).ok());
+    if let Some(data) = localized {
+        fonts.font_data.insert("locale".into(),Arc::new(egui::FontData::from_owned(data)));
+    }
+    if let Some(bytes) = font {
+        fonts.font_data.insert("cjk".into(), Arc::new(egui::FontData::from_owned((*bytes).clone())));
+    }
     for fam in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        fonts.families.entry(fam).or_default().push("cjk".into());
+        let stack = fonts.families.entry(fam).or_default();
+        for id in ["locale","cjk"] {
+            if fonts.font_data.contains_key(id) { stack.push(id.into()); }
+        }
     }
     ctx.set_fonts(fonts);
 }

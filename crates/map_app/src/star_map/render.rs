@@ -1,14 +1,15 @@
-use super::{Body, Galaxy, Star, StarMap, Target};
+use super::{Body, Galaxy, Star, StarChart, StarMap, Target};
 use eframe::egui::{
     self,
     epaint::{Mesh, Vertex, WHITE_UV},
     Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, TextureId,
 };
-use glam::{Quat, Vec3};
+use glam::{DVec3, Quat, Vec3};
+use map_core::star_chart::Orbit;
 use std::f32::consts::{PI, TAU};
 
 mod lunar;
-pub(super) use lunar::{aim_eclipse, event_time, local_system, moon_phase, LunarTarget};
+pub(super) use lunar::{aim_eclipse, displayed_phase, event_time, local_system, LunarTarget};
 
 const SYSTEM_DISTANCE: f32 = 29.0;
 
@@ -34,6 +35,14 @@ impl Camera {
             pitch: 0.98,
             distance: 125.0,
             base: 125.0,
+        }
+    }
+    pub(super) fn neighborhood() -> Self {
+        Self {
+            yaw: -0.28,
+            pitch: 0.63,
+            distance: 11.0,
+            base: 11.0,
         }
     }
 
@@ -130,9 +139,8 @@ fn backdrop(painter: &Painter, rect: Rect) {
     painter.add(egui::Shape::mesh(points));
 }
 
-fn orbit_position(body: &Body, days: f64) -> Vec3 {
-    let [x, y, z] = body.orbit.position(days);
-    let point = Vec3::new(x as f32, y as f32, z as f32);
+fn distance_display(position: DVec3) -> Vec3 {
+    let point = position.as_vec3();
     let distance = point.length();
     point * (screen_scale(distance) / distance.max(0.0001))
 }
@@ -141,11 +149,13 @@ fn screen_scale(au: f32) -> f32 {
     2.75 * au.mul_add(2.65, 1.0).ln()
 }
 
-fn orbit_curve(p: &Painter, view: &View, body: &Body) {
+fn orbit_curve(p: &Painter, view: &View, orbit: &Orbit) {
     let mut line = Vec::new();
     let stroke = Stroke::new(0.85, Color32::from_rgb(55, 78, 111));
     for i in 0..=120 {
-        let pos = orbit_position(body, body.orbit.days * f64::from(i) / 120.0);
+        let pos = distance_display(DVec3::from(
+            orbit.position(orbit.days * f64::from(i) / 120.0),
+        ));
         if let Some((s, _)) = view.project(pos) {
             line.push(s);
         } else if line.len() > 1 {
@@ -166,7 +176,33 @@ struct Visible<'a> {
     z: f32,
     r: f32,
     world: Vec3,
+    physical: DVec3,
     body: Option<&'a Body>,
+    star: Option<&'a Star>,
+}
+
+fn paint_model(
+    state: &StarMap,
+    painter: &Painter,
+    view: &View,
+    asset: Option<u64>,
+    center: Vec3,
+    radius: f32,
+    rotation: Quat,
+    moving: bool,
+) -> bool {
+    let Some(model) = state.models.get(asset) else {
+        return false;
+    };
+    let mesh = crate::model_viewer::project_mesh(
+        model,
+        rotation,
+        |v| view.project(center + v * radius),
+        moving,
+        false,
+    );
+    painter.add(egui::Shape::mesh(mesh));
+    true
 }
 
 pub(super) fn system(
@@ -176,33 +212,60 @@ pub(super) fn system(
     state: &StarMap,
     star: &Star,
     home: &Body,
-    planets: &[Body],
+    chart: &StarChart,
 ) -> Option<Target> {
     let painter = ui.painter_at(rect);
     backdrop(&painter, rect);
     let entries = std::iter::once((Target::Home, home)).chain(
-        planets
+        chart
+            .planets
             .iter()
             .enumerate()
             .map(|(i, p)| (Target::Planet(i), p)),
     );
+    let stars = std::iter::once((Target::Star, star, DVec3::ZERO)).chain(
+        chart.companions.iter().enumerate().map(|(i, c)| {
+            (
+                Target::Companion(i),
+                &c.star,
+                DVec3::from(c.orbit.position(state.days)),
+            )
+        }),
+    );
+    let lights: Vec<_> = stars
+        .map(|(id, s, p)| (id, s, state.position(id.key(), || p)))
+        .collect();
+    let position = |id: Target, body: &Body| {
+        state.position(id.key(), || DVec3::from(body.orbit.position(state.days)))
+    };
     let focus = if state.follow {
-        entries
-            .clone()
-            .find(|(t, _)| *t == state.target)
-            .map_or(Vec3::ZERO, |(_, p)| orbit_position(p, state.days))
+        let pos = lights
+            .iter()
+            .find(|(id, _, _)| *id == state.target)
+            .map(|(_, _, p)| *p)
+            .or_else(|| {
+                entries
+                    .clone()
+                    .find(|(id, _)| *id == state.target)
+                    .map(|(id, body)| position(id, body))
+            });
+        pos.map_or(Vec3::ZERO, distance_display)
     } else {
         Vec3::ZERO
     };
     let view = state.system_camera.view(rect, focus);
-    if state.orbits {
+    if state.orbits && !chart.gravity {
         for (_, body) in entries.clone() {
-            orbit_curve(&painter, &view, body);
+            orbit_curve(&painter, &view, &body.orbit);
+        }
+        for companion in &chart.companions {
+            orbit_curve(&painter, &view, &companion.orbit);
         }
     }
     let mut visible: Vec<_> = entries
         .filter_map(|(id, b)| {
-            let world = orbit_position(b, state.days);
+            let physical = position(id, b);
+            let world = distance_display(physical);
             let (p, z) = view.project(world)?;
             let chosen = id == state.target && state.follow;
             let r = (5.3 * b.radii_earth.powf(0.34) as f32 * SYSTEM_DISTANCE / z)
@@ -219,22 +282,29 @@ pub(super) fn system(
                 z,
                 r,
                 world,
+                physical,
                 body: Some(b),
+                star: None,
             })
         })
         .collect();
-    if let Some((p, z)) = view.project(Vec3::ZERO) {
-        let r =
-            (18.0 * (star.radius_solar as f32).powf(0.26) * SYSTEM_DISTANCE / z).clamp(8.0, 73.0);
-        visible.push(Visible {
-            id: Target::Star,
-            name: &star.name,
-            p,
-            z,
-            r,
-            world: Vec3::ZERO,
-            body: None,
-        });
+    for &(id, star, physical) in &lights {
+        let world = distance_display(physical);
+        if let Some((p, z)) = view.project(world) {
+            let r = (18.0 * (star.radius_solar as f32).powf(0.26) * SYSTEM_DISTANCE / z)
+                .clamp(8.0, 73.0);
+            visible.push(Visible {
+                id,
+                name: &star.name,
+                p,
+                z,
+                r,
+                world,
+                physical,
+                body: None,
+                star: Some(star),
+            });
+        }
     }
     visible.sort_by(|a, b| b.z.total_cmp(&a.z));
     let mut occupied: Vec<Rect> = visible
@@ -243,7 +313,16 @@ pub(super) fn system(
         .collect();
     for v in &visible {
         if let Some(body) = v.body {
-            let light = (-v.world).normalize_or_zero();
+            let light = lights
+                .iter()
+                .map(|(_, star, at)| {
+                    let delta = *at - v.physical;
+                    delta.normalize_or_zero()
+                        * (star.luminosity_solar / delta.length_squared().max(1e-9))
+                })
+                .sum::<DVec3>()
+                .normalize_or_zero()
+                .as_vec3();
             let direction = if body.retrograde { -1.0 } else { 1.0 };
             let tilt = Quat::from_rotation_x((body.tilt as f32).to_radians());
             let spin = if body.synchronous {
@@ -259,25 +338,36 @@ pub(super) fn system(
             let texture = (v.id == Target::Home)
                 .then(|| state.surface.as_ref().map(|s| s.image.id()))
                 .flatten();
-            sphere(
+            if !paint_model(
+                state,
                 &painter,
                 &view,
-                v.p,
-                v.r,
-                SphereStyle {
-                    rotation,
-                    light,
-                    texture,
-                    lighting: state.lighting,
-                    color: body.color,
-                    eclipse: None,
-                    rocky: false,
-                },
-            );
+                body.model,
+                v.world,
+                v.r * v.z / view.focal,
+                rotation,
+                state.playing || response.dragged(),
+            ) {
+                sphere(
+                    &painter,
+                    &view,
+                    v.p,
+                    v.r,
+                    SphereStyle {
+                        rotation,
+                        light,
+                        texture,
+                        lighting: state.lighting,
+                        color: body.color,
+                        eclipse: None,
+                        rocky: false,
+                    },
+                );
+            }
             if body.rings {
                 rings(&painter, &view, v, rotation, true);
             }
-        } else {
+        } else if let Some(star) = v.star {
             let color = stellar_color(star.temperature);
             let glow = (8.0 + 4.0 * star.luminosity_solar.clamp(0.01, 250.0).ln().max(0.0)) as u8;
             for (scale, alpha) in [(2.4, glow / 3), (1.7, glow / 2), (1.28, glow)] {
@@ -287,12 +377,23 @@ pub(super) fn system(
                     Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha),
                 );
             }
-            painter.circle_filled(v.p, v.r, color);
-            painter.circle_filled(
-                v.p,
-                v.r * 0.72,
-                Color32::from_rgba_unmultiplied(255, 245, 225, 55),
-            );
+            if !paint_model(
+                state,
+                &painter,
+                &view,
+                star.model,
+                v.world,
+                v.r * v.z / view.focal,
+                Quat::IDENTITY,
+                state.playing || response.dragged(),
+            ) {
+                painter.circle_filled(v.p, v.r, color);
+                painter.circle_filled(
+                    v.p,
+                    v.r * 0.72,
+                    Color32::from_rgba_unmultiplied(255, 245, 225, 55),
+                );
+            }
         }
         if v.id == state.target {
             painter.circle_stroke(
@@ -574,9 +675,19 @@ pub(super) fn galaxy(ui: &egui::Ui, rect: Rect, response: &egui::Response, state
     }) {
         state.points = Some((g.clone(), galactic_stars(g)));
     }
-    let view = state.galaxy_camera.view(rect, Vec3::ZERO);
+    let a = g.home_angle.to_radians();
+    let home = Vec3::new(a.cos() * g.home_kly, 0.0, a.sin() * g.home_kly);
+    let solar = state.gaia_center == super::GaiaCenter::SolarSystem;
+    let view = state.galaxy_camera.view(rect, if solar { home } else { Vec3::ZERO });
     let mut mesh = Mesh::default();
-    for star in &state.points.as_ref().unwrap().1 {
+    for star in state
+        .points
+        .as_ref()
+        .unwrap()
+        .1
+        .iter()
+        .filter(|_| !solar)
+    {
         if let Some((pos, z)) = view
             .project(star.p)
             .filter(|(p, _)| rect.expand(2.0).contains(*p))
@@ -589,10 +700,107 @@ pub(super) fn galaxy(ui: &egui::Ui, rect: Rect, response: &egui::Response, state
             );
         }
     }
+    let pointer = response
+        .interact_pointer_pos()
+        .filter(|_| response.clicked());
+    let mut found_observed = None;
+    let mut observed_distance: f32 = 7.0;
+    let observed = map_core::star_chart::gaia::stars();
+    if state.gaia_visible {
+        for (i, star) in observed.iter().enumerate() {
+            let Some((p, _)) = view
+                .project(star.position(g.home_kly, g.home_angle))
+                .filter(|(p, _)| rect.expand(3.0).contains(*p))
+            else {
+                continue;
+            };
+            let color = stellar_color(
+                (14_500.0 - 4200.0 * (f64::from(star.color_index) + 0.55)).clamp(2500.0, 16_000.0),
+            );
+            let visual = ((12.0 - star.magnitude) / 9.0).clamp(0.08, 1.0);
+            let r = if solar {
+                0.74 + visual * 1.8
+            } else {
+                0.43 + visual * 0.44
+            };
+            let alpha = if solar {
+                0.33 + 0.61 * visual
+            } else {
+                0.11 + 0.28 * visual
+            };
+            dot(&mut mesh, p, r, color.gamma_multiply(alpha));
+            if let Some(cursor) = pointer {
+                let distance = cursor.distance(p);
+                if distance < observed_distance {
+                    found_observed = Some(i);
+                    observed_distance = distance;
+                }
+            }
+        }
+    }
     painter.add(egui::Shape::mesh(mesh));
-    let a = g.home_angle.to_radians();
-    if let Some((pos, _)) = view.project(Vec3::new(a.cos() * g.home_kly, 0.0, a.sin() * g.home_kly))
-    {
+    let mut picked_custom = None;
+    for (i, star) in g.stars.iter().enumerate() {
+        let world = Vec3::from(star.position_kly);
+        let Some((p, z)) = view
+            .project(world)
+            .filter(|(p, _)| rect.expand(16.0).contains(*p))
+        else {
+            continue;
+        };
+        let tint = stellar_color(star.temperature);
+        let selected = state.galaxy_selected == Some(i);
+        let r = if selected { 8.0 } else { 4.2 };
+        if !paint_model(
+            state,
+            &painter,
+            &view,
+            star.model,
+            world,
+            r * z / view.focal,
+            Quat::IDENTITY,
+            response.dragged(),
+        ) {
+            painter.circle_filled(p, r, tint);
+        }
+        if selected || state.labels {
+            painter.text(
+                p + egui::vec2(r + 5.0, 0.0),
+                Align2::LEFT_CENTER,
+                &star.name,
+                FontId::proportional(11.5),
+                tint,
+            );
+        }
+        if pointer.is_some_and(|at| at.distance(p) < r + 5.0) {
+            picked_custom = Some(i);
+        }
+    }
+    if pointer.is_some() {
+        if let Some(i) = picked_custom {
+            state.galaxy_selected = Some(i);
+            state.observed = None;
+        } else if let Some(i) = found_observed {
+            state.observed = Some(i);
+            state.galaxy_selected = None;
+        }
+    }
+    if state.gaia_visible {
+        if let Some(star) = state.observed.and_then(|i| observed.get(i)) {
+            if let Some((p, _)) = view.project(star.position(g.home_kly, g.home_angle)) {
+                let cyan = Color32::from_rgb(131, 222, 235);
+                painter.circle_stroke(p, 5.0, Stroke::new(1.1, cyan));
+                painter.text(
+                    p + egui::vec2(10.0, -8.0),
+                    Align2::LEFT_BOTTOM,
+                    format!("Gaia DR3 {}", star.source_id),
+                    FontId::monospace(11.0),
+                    cyan,
+                );
+            }
+        }
+    }
+    if let Some((pos, _)) = view.project(home) {
         let accent = Color32::from_rgb(126, 221, 250);
         painter.circle_filled(pos, 3.0, accent);
         painter.circle_stroke(pos, 7.5, Stroke::new(1.3, accent));
@@ -605,7 +813,9 @@ pub(super) fn galaxy(ui: &egui::Ui, rect: Rect, response: &egui::Response, state
                 accent,
             );
         }
-        if response.clicked()
+        if !solar
+            && picked_custom.is_none()
+            && response.clicked()
             && response
                 .interact_pointer_pos()
                 .is_some_and(|p| p.distance(pos) < 13.0)

@@ -224,6 +224,12 @@ pub fn run(session: &mut Session, task: &str, cfg: &Config, net: &dyn Transport,
     conversation::run(session, task, cfg, net, on_step)
 }
 
+/// Answer a usage question using the configured provider. No document,
+/// editing session or callable action is given to the provider.
+pub fn answer_help(prompt: String, cfg: &Config, net: &dyn Transport) -> Result<String, String> {
+    conversation::answer_help(prompt, cfg, net)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

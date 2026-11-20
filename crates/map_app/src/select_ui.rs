@@ -148,8 +148,8 @@ impl App {
         self.set_status(
             match n {
                 0 => "已取消选择".to_string(),
-                1 => format!("已选择{}（拖动可移动，Delete 删除；Shift 单击加选）", hit.kind_name()),
-                _ => format!("已选择 {n} 个要素（拖动任意一个可一起移动）"),
+                1 => crate::trf!("已选择{}（拖动可移动，Delete 删除；Shift 单击加选）", hit.kind_name()),
+                _ => crate::trf!("已选择 {n} 个要素（拖动任意一个可一起移动）"),
             },
             false,
         );
@@ -201,7 +201,7 @@ impl App {
                 }
                 let n = sel.len();
                 self.set_selection(sel);
-                self.set_status(format!("已选择 {n} 个要素"), false);
+                self.set_status(crate::trf!("已选择 {n} 个要素"), false);
             }
             return true;
         }
@@ -243,7 +243,7 @@ impl App {
             self.move_drag = None;
             self.snap_guides.clear();
             self.end_pending();
-            self.set_status("已移动（Ctrl+Z 撤销）", false);
+            self.set_status(crate::i18n::tr("已移动（Ctrl+Z 撤销）"), false);
         }
         true
     }
@@ -332,7 +332,7 @@ impl App {
         self.clear_selection();
         self.selected_sym = None;
         self.selected_ann = None;
-        self.set_status(format!("已删除 {n} 个要素（Ctrl+Z 撤销）"), false);
+        self.set_status(crate::trf!("已删除 {n} 个要素（Ctrl+Z 撤销）"), false);
     }
 
     /// Select the features an edit made (pasted, duplicated): in a tool
@@ -352,7 +352,7 @@ impl App {
     pub fn duplicate_selection(&mut self) {
         let fs = self.selection();
         if fs.is_empty() {
-            self.set_status("先选中要复制的线、区域、符号或文字", true);
+            self.set_status(crate::i18n::tr("先选中要复制的线、区域、符号或文字"), true);
             return;
         }
         // about 24 px at the current 2D zoom
@@ -360,7 +360,7 @@ impl App {
         if let Some(new) = self.edit(if fs.len() == 1 { "再制要素" } else { "再制多个要素" }, |doc| doc.duplicate_features(&fs, d, -d)) {
             let n = new.len();
             self.select_new(new);
-            self.set_status(format!("已再制 {n} 个要素：拖动可移动"), false);
+            self.set_status(crate::trf!("已再制 {n} 个要素：拖动可移动"), false);
         }
     }
 
@@ -383,7 +383,7 @@ impl App {
             self.selected_sym = None;
             self.selected_ann = None;
         }
-        self.set_status(format!("已{} {n} 个要素（Ctrl+V 粘贴，也可粘贴到另一个窗口）", if cut { "剪切" } else { "复制" }), false);
+        self.set_status(crate::trf!("已{} {n} 个要素（Ctrl+V 粘贴，也可粘贴到另一个窗口）", if cut { "剪切" } else { "复制" }), false);
     }
 
     /// Paste features: under the pointer when it is over the map, else a
@@ -406,7 +406,7 @@ impl App {
         if let Some(new) = made {
             let n = new.len();
             self.select_new(new);
-            self.set_status(format!("已粘贴 {n} 个要素"), false);
+            self.set_status(crate::trf!("已粘贴 {n} 个要素"), false);
         }
     }
 
@@ -422,7 +422,7 @@ impl App {
                 egui::Event::Cut => self.copy_selection(ctx, true),
                 egui::Event::Paste(text) => match map_io::clip::from_text(&text) {
                     Some(clip) => self.paste(clip),
-                    None => self.set_status("剪贴板里不是地图要素", true),
+                    None => self.set_status(crate::i18n::tr("剪贴板里不是地图要素"), true),
                 },
                 _ => {}
             }
@@ -434,7 +434,7 @@ impl App {
         let n = fs.len();
         if self.edit("隐藏要素", |d| fs.iter().try_for_each(|f| d.set_hidden(*f, true))).is_some() {
             self.clear_selection();
-            self.set_status(format!("已隐藏 {n} 个要素（在“要素”标签中可重新显示）"), false);
+            self.set_status(crate::trf!("已隐藏 {n} 个要素（在“要素”标签中可重新显示）"), false);
         }
     }
 
@@ -443,7 +443,7 @@ impl App {
         let n = fs.len();
         if self.edit("锁定要素", |d| fs.iter().try_for_each(|f| d.set_locked(*f, true))).is_some() {
             self.clear_selection();
-            self.set_status(format!("已锁定 {n} 个要素：不会再被选中或移动（“对象”菜单或“要素”标签中解锁）"), false);
+            self.set_status(crate::trf!("已锁定 {n} 个要素：不会再被选中或移动（“对象”菜单或“要素”标签中解锁）"), false);
         }
     }
 
@@ -453,14 +453,14 @@ impl App {
             d.locked.clear();
             Ok(())
         });
-        self.set_status(format!("已解锁 {n} 个要素"), false);
+        self.set_status(crate::trf!("已解锁 {n} 个要素"), false);
     }
 
     pub fn select_all_features(&mut self) {
         let all: Vec<FeatureRef> = self.doc.features().into_iter().map(|f| f.what).filter(|f| self.doc.pickable(*f)).collect();
         let n = all.len();
         self.set_selection(all);
-        self.set_status(format!("已选择全部 {n} 个要素"), false);
+        self.set_status(crate::trf!("已选择全部 {n} 个要素"), false);
     }
 
     pub fn align_selection(&mut self, how: Align) {
@@ -489,31 +489,31 @@ impl App {
                 None => kinds.push((f.kind_name(), 1)),
             }
         }
-        ui.label(RichText::new(format!("已选择 {} 个要素", fs.len())).strong());
+        ui.label(RichText::new(crate::trf!("已选择 {} 个要素", fs.len())).strong());
         ui.weak(kinds.iter().map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join("，"));
         ui.horizontal_wrapped(|ui| {
             let ctx = ui.ctx().clone();
-            if ui.button("复制").on_hover_text("Ctrl+C；可粘贴到另一个窗口").clicked() {
+            if ui.button(crate::i18n::tr("复制")).on_hover_text(crate::i18n::tr("Ctrl+C；可粘贴到另一个窗口")).clicked() {
                 self.copy_selection(&ctx, false);
             }
-            if ui.button("原处再制").on_hover_text("Ctrl+D").clicked() {
+            if ui.button(crate::i18n::tr("原处再制")).on_hover_text("Ctrl+D").clicked() {
                 self.duplicate_selection();
             }
-            if ui.button("隐藏").clicked() {
+            if ui.button(crate::i18n::tr("隐藏")).clicked() {
                 self.hide_selection();
             }
-            if ui.button("锁定").on_hover_text("锁定后不会被选中或移动").clicked() {
+            if ui.button(crate::i18n::tr("锁定")).on_hover_text(crate::i18n::tr("锁定后不会被选中或移动")).clicked() {
                 self.lock_selection();
             }
-            if ui.button("删除").on_hover_text("Delete").clicked() {
+            if ui.button(crate::i18n::tr("删除")).on_hover_text("Delete").clicked() {
                 self.delete_selection();
             }
         });
         ui.push_id("styles", |ui| self.style_row(ui, &fs));
         ui.horizontal(|ui| {
-            ui.label("旋转");
+            ui.label(crate::i18n::tr("旋转"));
             ui.add(egui::DragValue::new(&mut self.xf_rotate).speed(1.0).range(-360.0..=360.0).suffix("°"));
-            if ui.button("应用").on_hover_text("绕所选要素的中心逆时针旋转（负值为顺时针）；直排的文字随之转向").clicked() {
+            if ui.button(crate::i18n::tr("应用")).on_hover_text(crate::i18n::tr("绕所选要素的中心逆时针旋转（负值为顺时针）；直排的文字随之转向")).clicked() {
                 let deg = self.xf_rotate;
                 self.edit("旋转要素", |d| {
                     let c = d.features_centre(&fs).ok_or("没有可旋转的要素")?;
@@ -521,9 +521,9 @@ impl App {
                 });
             }
             ui.separator();
-            ui.label("缩放");
+            ui.label(crate::i18n::tr("缩放"));
             ui.add(egui::DragValue::new(&mut self.xf_scale).speed(1.0).range(1.0..=1000.0).suffix("%"));
-            if ui.button("应用 ").on_hover_text("以所选要素的中心为基准放大或缩小形状与间距（文字与符号本身的大小不变）").clicked() {
+            if ui.button(crate::i18n::tr("应用 ")).on_hover_text(crate::i18n::tr("以所选要素的中心为基准放大或缩小形状与间距（文字与符号本身的大小不变）")).clicked() {
                 let k = self.xf_scale / 100.0;
                 self.edit("缩放要素", |d| {
                     let c = d.features_centre(&fs).ok_or("没有可缩放的要素")?;
@@ -533,7 +533,7 @@ impl App {
         });
         if fs.len() >= 2 {
             ui.horizontal_wrapped(|ui| {
-                ui.label("对齐");
+                ui.label(crate::i18n::tr("对齐"));
                 for (how, name, hint) in [
                     (Align::West, "西", "各要素的中心对齐到最西的经度"),
                     (Align::MidLon, "经向居中", "对齐到中间的经度"),
@@ -550,11 +550,11 @@ impl App {
         }
         if fs.len() >= 3 {
             ui.horizontal(|ui| {
-                ui.label("均匀分布");
-                if ui.small_button("沿经度").on_hover_text("最西与最东的不动，其余按经度等距排开").clicked() {
+                ui.label(crate::i18n::tr("均匀分布"));
+                if ui.small_button(crate::i18n::tr("沿经度")).on_hover_text(crate::i18n::tr("最西与最东的不动，其余按经度等距排开")).clicked() {
                     self.distribute_selection(true);
                 }
-                if ui.small_button("沿纬度").clicked() {
+                if ui.small_button(crate::i18n::tr("沿纬度")).clicked() {
                     self.distribute_selection(false);
                 }
             });

@@ -88,7 +88,7 @@ fn color_field(ui: &mut egui::Ui, color: &mut [u8; 4], swatches: &[Swatch]) -> b
 fn swatch_menu(ui: &mut egui::Ui, color: &mut [u8; 4], swatches: &[Swatch]) -> bool {
     let mut changed = false;
     if !swatches.is_empty() {
-        ui.menu_button("色板…", |ui| {
+        ui.menu_button(crate::i18n::tr("色板…"), |ui| {
             for s in swatches {
                 ui.horizontal(|ui| {
                     let (r, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), Sense::hover());
@@ -122,45 +122,45 @@ fn look_editor(ui: &mut egui::Ui, look: &mut Look, swatches: &[Swatch]) -> Did {
             acc = crate::river_ui::route_style_ui(ui, st);
             if !swatches.is_empty() {
                 ui.horizontal(|ui| {
-                    ui.weak("从色板选颜色");
+                    ui.weak(crate::i18n::tr("从色板选颜色"));
                     acc.0 |= swatch_menu(ui, &mut st.color, swatches);
                 });
             }
         }
         Look::Area(a) => {
             ui.horizontal(|ui| {
-                ui.label("图案");
+                ui.label(crate::i18n::tr("图案"));
                 for p in Pattern::ALL {
                     track(&mut acc, ui.radio_value(&mut a.pattern, p, p.name()));
                 }
             });
-            track(&mut acc, ui.add(egui::Slider::new(&mut a.spacing, 3.0..=40.0).suffix(" px").text("间距")));
-            track(&mut acc, ui.add(egui::Slider::new(&mut a.angle, -90.0..=90.0).suffix("°").text("角度")));
+            track(&mut acc, ui.add(egui::Slider::new(&mut a.spacing, 3.0..=40.0).suffix(" px").text(crate::i18n::tr("间距"))));
+            track(&mut acc, ui.add(egui::Slider::new(&mut a.angle, -90.0..=90.0).suffix("°").text(crate::i18n::tr("角度"))));
             ui.horizontal(|ui| {
                 acc.0 |= color_field(ui, &mut a.color, swatches);
-                ui.label("颜色");
-                track(&mut acc, ui.checkbox(&mut a.tint, "底色"));
-                track(&mut acc, ui.checkbox(&mut a.dashed, "虚线边框"));
+                ui.label(crate::i18n::tr("颜色"));
+                track(&mut acc, ui.checkbox(&mut a.tint, crate::i18n::tr("底色")));
+                track(&mut acc, ui.checkbox(&mut a.dashed, crate::i18n::tr("虚线边框")));
             });
         }
         Look::Text(t) => {
-            track(&mut acc, ui.add(egui::Slider::new(&mut t.size, 2.0..=400.0).logarithmic(true).text("字号")));
-            track(&mut acc, ui.add(egui::Slider::new(&mut t.spacing, 0.0..=3.0).text("字距")));
+            track(&mut acc, ui.add(egui::Slider::new(&mut t.size, 2.0..=400.0).logarithmic(true).text(crate::i18n::tr("字号"))));
+            track(&mut acc, ui.add(egui::Slider::new(&mut t.spacing, 0.0..=3.0).text(crate::i18n::tr("字距"))));
             ui.horizontal(|ui| {
                 acc.0 |= color_field(ui, &mut t.color, swatches);
-                ui.label("颜色");
-                track(&mut acc, ui.checkbox(&mut t.italic, "斜体"));
+                ui.label(crate::i18n::tr("颜色"));
+                track(&mut acc, ui.checkbox(&mut t.italic, crate::i18n::tr("斜体")));
             });
             ui.horizontal(|ui| {
-                ui.label("字体");
+                ui.label(crate::i18n::tr("字体"));
                 acc.0 |= crate::fonts_ui::font_picker(ui, "text-style", &mut t.font, &mut t.bold);
             });
         }
         Look::Symbol(sy) => {
-            track(&mut acc, ui.add(egui::Slider::new(&mut sy.size, 2.0..=30.0).suffix(" px").text("大小")));
+            track(&mut acc, ui.add(egui::Slider::new(&mut sy.size, 2.0..=30.0).suffix(" px").text(crate::i18n::tr("大小"))));
             ui.horizontal(|ui| {
                 acc.0 |= color_field(ui, &mut sy.color, swatches);
-                ui.label("颜色");
+                ui.label(crate::i18n::tr("颜色"));
             });
         }
     }
@@ -219,9 +219,9 @@ impl App {
         }
         let cur = self.draw_style_of(kind);
         let name = cur.and_then(|s| styles.iter().find(|x| x.0 == s)).map_or("（自身外观）".to_string(), |x| x.1.clone());
-        ui.label("样式");
+        ui.label(crate::i18n::tr("样式"));
         egui::ComboBox::from_id_salt(("draw-style", kind)).selected_text(name).width(110.0).show_ui(ui, |ui| {
-            if ui.selectable_label(cur.is_none(), "（自身外观）").on_hover_text("新画的要素不使用样式，外观可逐个设置").clicked() {
+            if ui.selectable_label(cur.is_none(), crate::i18n::tr("（自身外观）")).on_hover_text(crate::i18n::tr("新画的要素不使用样式，外观可逐个设置")).clicked() {
                 self.draw_style.remove(&kind);
             }
             for (id, n, look) in &styles {
@@ -234,7 +234,7 @@ impl App {
             }
         })
         .response
-        .on_hover_text("新画的要素使用这个样式；之后修改样式，它们会一起改变");
+        .on_hover_text(crate::i18n::tr("新画的要素使用这个样式；之后修改样式，它们会一起改变"));
         ui.separator();
     }
 
@@ -252,7 +252,7 @@ impl App {
         let mut apply: Option<StyleId> = None;
         let (mut make, mut leave) = (false, false);
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("样式").strong());
+            ui.label(RichText::new(crate::i18n::tr("样式")).strong());
             let text = match (current, links.len()) {
                 (Some(s), _) => self.doc.style(s).map(|x| x.name.clone()).unwrap_or_default(),
                 (None, 1) => "（自身外观）".to_string(),
@@ -260,7 +260,7 @@ impl App {
             };
             egui::ComboBox::from_id_salt("style-row").selected_text(text).width(120.0).show_ui(ui, |ui| {
                 if choices.is_empty() {
-                    ui.weak("还没有这类样式：点“建立样式”，或在“样式”标签中添加常用样式");
+                    ui.weak(crate::i18n::tr("还没有这类样式：点“建立样式”，或在“样式”标签中添加常用样式"));
                 }
                 for (id, n, look) in &choices {
                     ui.horizontal(|ui| {
@@ -271,23 +271,23 @@ impl App {
                     });
                 }
             });
-            if ui.small_button("建立样式").on_hover_text("以这个外观建立一个命名样式，所选同类要素都使用它").clicked() {
+            if ui.small_button(crate::i18n::tr("建立样式")).on_hover_text(crate::i18n::tr("以这个外观建立一个命名样式，所选同类要素都使用它")).clicked() {
                 make = true;
             }
-            if links.iter().any(|l| l.is_some()) && ui.small_button("脱离样式").on_hover_text("保留现在的外观，但不再随样式改变；之后可以单独修改").clicked() {
+            if links.iter().any(|l| l.is_some()) && ui.small_button(crate::i18n::tr("脱离样式")).on_hover_text(crate::i18n::tr("保留现在的外观，但不再随样式改变；之后可以单独修改")).clicked() {
                 leave = true;
             }
         });
         if let Some(s) = current {
             let n = self.doc.style_users(s).len();
             if n > stylable.len() {
-                ui.weak(format!("修改外观会改变这个样式，使用它的全部 {n} 个要素都会随之改变；只改这里请先“脱离样式”。"));
+                ui.weak(crate::trf!("修改外观会改变这个样式，使用它的全部 {n} 个要素都会随之改变；只改这里请先“脱离样式”。"));
             }
         }
         if let Some(s) = apply {
             if let Some(n) = self.edit("使用样式", |d| d.link_style(&stylable, s)) {
                 let name = self.doc.style(s).map(|x| x.name.clone()).unwrap_or_default();
-                self.set_status(format!("{n} 个要素使用样式“{name}”"), false);
+                self.set_status(crate::trf!("{n} 个要素使用样式“{name}”"), false);
             }
         }
         if make {
@@ -301,7 +301,7 @@ impl App {
             }) {
                 let name = self.doc.style(s).map(|x| x.name.clone()).unwrap_or_default();
                 self.style_open = Some(s);
-                self.set_status(format!("已建立样式“{name}”，{} 个要素使用它；在“样式”标签中可改名与修改", same.len()), false);
+                self.set_status(crate::trf!("已建立样式“{name}”，{} 个要素使用它；在“样式”标签中可改名与修改", same.len()), false);
             }
         }
         if leave {
@@ -315,11 +315,11 @@ impl App {
     /// Copy the look of the (first) selected feature, for 粘贴样式.
     pub fn copy_style(&mut self) {
         let Some(f) = self.selection().into_iter().find(|f| self.doc.feature_look(*f).is_some()) else {
-            return self.set_status("所选要素没有可复制的样式", true);
+            return self.set_status(crate::i18n::tr("所选要素没有可复制的样式"), true);
         };
         let look = self.doc.feature_look(f).unwrap();
         self.style_clip = Some((look, self.doc.style_of_feature(f)));
-        self.set_status(format!("已复制{}的样式：选中其他同类要素后“粘贴样式”", f.kind_name()), false);
+        self.set_status(crate::trf!("已复制{}的样式：选中其他同类要素后“粘贴样式”", f.kind_name()), false);
     }
 
     /// Give the selection the copied look (and its style, if it had one).
@@ -327,7 +327,7 @@ impl App {
         let Some((look, link)) = self.style_clip.clone() else { return };
         let fs: Vec<FeatureRef> = self.selection().into_iter().filter(|f| StyleKind::of(*f) == Some(look.kind())).collect();
         if fs.is_empty() {
-            return self.set_status(format!("所选要素中没有{}，不能粘贴这个样式", look.kind().name()), true);
+            return self.set_status(crate::trf!("所选要素中没有{}，不能粘贴这个样式", look.kind().name()), true);
         }
         let link = link.filter(|s| self.doc.style(*s).is_some_and(|x| x.look == look));
         if let Some(n) = self.edit("粘贴样式", |d| {
@@ -343,7 +343,7 @@ impl App {
             };
             Ok(fs.len())
         }) {
-            self.set_status(format!("已把样式粘贴到 {n} 个要素"), false);
+            self.set_status(crate::trf!("已把样式粘贴到 {n} 个要素"), false);
         }
     }
 
@@ -355,17 +355,17 @@ impl App {
         }
         let Some(o) = resp.interact_pointer_pos() else { return };
         let Some(from) = self.feature_at(o, vg).filter(|f| self.doc.feature_look(*f).is_some()) else {
-            return self.set_status("这里没有可吸取样式的线路、区域、文字或符号", true);
+            return self.set_status(crate::i18n::tr("这里没有可吸取样式的线路、区域、文字或符号"), true);
         };
         let to: Vec<FeatureRef> = self.selection().into_iter().filter(|f| *f != from).collect();
         if to.is_empty() {
-            return self.set_status("先用选择工具（V）选中要修改的要素，再用吸管单击样板", true);
+            return self.set_status(crate::i18n::tr("先用选择工具（V）选中要修改的要素，再用吸管单击样板"), true);
         }
         match self.edit("吸取样式", |d| d.copy_look(from, &to)) {
-            Some(0) => self.set_status(format!("所选要素中没有{}，吸管只把样式给同类要素", from.kind_name()), true),
+            Some(0) => self.set_status(crate::trf!("所选要素中没有{}，吸管只把样式给同类要素", from.kind_name()), true),
             Some(n) => {
                 let via = self.doc.style_of_feature(from).and_then(|s| self.doc.style(s)).map(|s| format!("样式“{}”", s.name)).unwrap_or_else(|| "外观".into());
-                self.set_status(format!("{n} 个要素换成了这个{}的{via}", from.kind_name()), false);
+                self.set_status(crate::trf!("{n} 个要素换成了这个{}的{via}", from.kind_name()), false);
             }
             None => {}
         }
@@ -383,7 +383,7 @@ impl App {
         if let Some(st) = changed.first().and_then(|s| self.doc.style(*s)) {
             let (name, n) = (st.name.clone(), self.doc.style_users(st.id).len());
             if n > 1 {
-                self.set_status(format!("样式“{name}”已随之修改：使用它的 {n} 个要素都已更新"), false);
+                self.set_status(crate::trf!("样式“{name}”已随之修改：使用它的 {n} 个要素都已更新"), false);
             }
         }
     }
@@ -397,14 +397,14 @@ impl App {
         let sel = self.selection();
         let sel_kinds: std::collections::BTreeSet<StyleKind> = sel.iter().filter(|f| self.doc.feature_look(**f).is_some()).filter_map(|f| StyleKind::of(*f)).collect();
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("要素样式").strong());
-            if ui.small_button("添加常用样式").on_hover_text("进军路线、前线、铁路、商路、争议地区、占领区、海洋名称……已有的不重复添加").clicked() {
+            ui.label(RichText::new(crate::i18n::tr("要素样式")).strong());
+            if ui.small_button(crate::i18n::tr("添加常用样式")).on_hover_text(crate::i18n::tr("进军路线、前线、铁路、商路、争议地区、占领区、海洋名称……已有的不重复添加")).clicked() {
                 ops.push(Op::Presets);
             }
-            if ui.add_enabled(!sel_kinds.is_empty(), egui::Button::new("从所选建立").small()).on_hover_text("以所选要素的外观建立样式，所选同类要素都使用它").clicked() {
+            if ui.add_enabled(!sel_kinds.is_empty(), egui::Button::new(crate::i18n::tr("从所选建立")).small()).on_hover_text(crate::i18n::tr("以所选要素的外观建立样式，所选同类要素都使用它")).clicked() {
                 ops.push(Op::FromSelection);
             }
-            ui.menu_button("新建…", |ui| {
+            ui.menu_button(crate::i18n::tr("新建…"), |ui| {
                 for k in StyleKind::ALL {
                     if ui.button(k.name()).clicked() {
                         ops.push(Op::New(k));
@@ -413,7 +413,7 @@ impl App {
             });
         });
         if self.doc.styles.is_empty() {
-            ui.weak("样式是有名字的外观（线路的颜色与线型、区域的图案、文字的字号……）。要素使用样式后，修改样式即可一次改变全部使用它的要素。没有使用样式的要素保持各自的外观。");
+            ui.weak(crate::i18n::tr("样式是有名字的外观（线路的颜色与线型、区域的图案、文字的字号……）。要素使用样式后，修改样式即可一次改变全部使用它的要素。没有使用样式的要素保持各自的外观。"));
         }
         let swatches = self.doc.swatches.clone();
         let styles = self.doc.styles.clone();
@@ -427,7 +427,7 @@ impl App {
                 ui.label(RichText::new(kind.name()).strong());
                 let draw = self.draw_style_of(kind);
                 if let Some(s) = draw.and_then(|s| self.doc.style(s)) {
-                    ui.weak(format!("新画的用“{}”", s.name));
+                    ui.weak(crate::trf!("新画的用“{}”", s.name));
                 }
             });
             let place = |id: StyleId| styles.iter().position(|s| s.id == id).unwrap_or(0);
@@ -448,41 +448,41 @@ impl App {
                                 }
                             }
                             _ => {
-                                let r = ui.selectable_label(open, &st.name).on_hover_text("单击展开修改；双击改名；右键更多操作");
+                                let r = ui.selectable_label(open, &st.name).on_hover_text(crate::i18n::tr("单击展开修改；双击改名；右键更多操作"));
                                 if r.double_clicked() {
                                     self.style_rename = Some((st.id, st.name.clone(), true));
                                 } else if r.clicked() {
                                     ops.push(Op::Open((!open).then_some(st.id)));
                                 }
                                 r.context_menu(|ui| {
-                                    if ui.button("改名").clicked() {
+                                    if ui.button(crate::i18n::tr("改名")).clicked() {
                                         self.style_rename = Some((st.id, st.name.clone(), true));
                                     }
-                                    if ui.button("复制样式").clicked() {
+                                    if ui.button(crate::i18n::tr("复制样式")).clicked() {
                                         ops.push(Op::Duplicate(st.id));
                                     }
-                                    if ui.button("选中使用它的要素").clicked() {
+                                    if ui.button(crate::i18n::tr("选中使用它的要素")).clicked() {
                                         ops.push(Op::SelectUsers(st.id));
                                     }
-                                    if ui.button("新画的要素用它").clicked() {
+                                    if ui.button(crate::i18n::tr("新画的要素用它")).clicked() {
                                         ops.push(Op::DrawWith(kind, Some(st.id)));
                                     }
                                     ui.separator();
-                                    if ui.add_enabled(i > 0, egui::Button::new("上移")).clicked() {
+                                    if ui.add_enabled(i > 0, egui::Button::new(crate::i18n::tr("上移"))).clicked() {
                                         ops.push(Op::Move(st.id, place(of_kind[i - 1].id)));
                                     }
-                                    if ui.add_enabled(i + 1 < of_kind.len(), egui::Button::new("下移")).clicked() {
+                                    if ui.add_enabled(i + 1 < of_kind.len(), egui::Button::new(crate::i18n::tr("下移"))).clicked() {
                                         ops.push(Op::Move(st.id, place(of_kind[i + 1].id)));
                                     }
                                     ui.separator();
-                                    if ui.button("删除样式（要素保留外观）").clicked() {
+                                    if ui.button(crate::i18n::tr("删除样式（要素保留外观）")).clicked() {
                                         ops.push(Op::Remove(st.id));
                                     }
                                 });
                             }
                         }
-                        ui.weak(format!("{users} 个"));
-                        if sel_kinds.contains(&kind) && ui.small_button("应用到所选").clicked() {
+                        ui.weak(crate::trf!("{users} 个"));
+                        if sel_kinds.contains(&kind) && ui.small_button(crate::i18n::tr("应用到所选")).clicked() {
                             ops.push(Op::Apply(st.id));
                         }
                     });
@@ -496,7 +496,7 @@ impl App {
                             if stopped || (changed && !ui.ctx().input(|i| i.pointer.any_down())) {
                                 ops.push(Op::LookDone);
                             }
-                            ui.weak(if users > 0 { format!("修改立即应用到使用它的 {users} 个要素。") } else { "还没有要素使用它：在要素面板的“样式”中选择，或用吸管。".into() });
+                            ui.weak(if users > 0 { crate::trf!("修改立即应用到使用它的 {users} 个要素。") } else { "还没有要素使用它：在要素面板的“样式”中选择，或用吸管。".into() });
                         });
                     }
                 });
@@ -505,15 +505,15 @@ impl App {
         // the palette
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("色板").strong());
+            ui.label(RichText::new(crate::i18n::tr("色板")).strong());
             let mut c = c32(self.new_swatch);
             if ui.color_edit_button_srgba(&mut c).changed() {
                 self.new_swatch = c.to_array();
             }
-            if ui.small_button("＋ 加入").on_hover_text("把左边的颜色加入色板；样式与要素的颜色旁都可以从色板选色").clicked() {
+            if ui.small_button(crate::i18n::tr("＋ 加入")).on_hover_text(crate::i18n::tr("把左边的颜色加入色板；样式与要素的颜色旁都可以从色板选色")).clicked() {
                 ops.push(Op::AddSwatch(self.new_swatch));
             }
-            if ui.small_button("取自地图").on_hover_text("把地图上要素与样式用得最多的颜色加入色板（最多 12 种）").clicked() {
+            if ui.small_button(crate::i18n::tr("取自地图")).on_hover_text(crate::i18n::tr("把地图上要素与样式用得最多的颜色加入色板（最多 12 种）")).clicked() {
                 ops.push(Op::SwatchesFromMap);
             }
         });
@@ -521,12 +521,12 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 for (i, s) in swatches.iter().enumerate() {
                     let mut c = c32(s.color);
-                    let r = ui.color_edit_button_srgba(&mut c).on_hover_text(format!("{}（右键删除）", s.name));
+                    let r = ui.color_edit_button_srgba(&mut c).on_hover_text(crate::trf!("{}（右键删除）", s.name));
                     if r.changed() {
                         ops.push(Op::SwatchColor(i, c.to_array()));
                     }
                     r.context_menu(|ui| {
-                        if ui.button("从色板删除").clicked() {
+                        if ui.button(crate::i18n::tr("从色板删除")).clicked() {
                             ops.push(Op::RemoveSwatch(i));
                         }
                     });
@@ -542,7 +542,7 @@ impl App {
             match op {
                 Op::Presets => {
                     if let Some(n) = self.edit("添加常用样式", |d| Ok(d.add_preset_styles())) {
-                        self.set_status(if n == 0 { "常用样式都已在样式库中".to_string() } else { format!("已添加 {n} 个常用样式") }, false);
+                        self.set_status(if n == 0 { "常用样式都已在样式库中".to_string() } else { crate::trf!("已添加 {n} 个常用样式") }, false);
                     }
                 }
                 Op::New(k) => {
@@ -580,7 +580,7 @@ impl App {
                 }
                 Op::Remove(s) => {
                     if let Some(n) = self.edit("删除样式", |d| d.remove_style(s)) {
-                        self.set_status(format!("样式已删除；使用它的 {n} 个要素保留现在的外观（Ctrl+Z 撤销）"), false);
+                        self.set_status(crate::trf!("样式已删除；使用它的 {n} 个要素保留现在的外观（Ctrl+Z 撤销）"), false);
                     }
                 }
                 Op::Move(s, to) => {
@@ -588,7 +588,7 @@ impl App {
                 }
                 Op::Apply(s) => {
                     if let Some(n) = self.edit("使用样式", |d| d.link_style(&sel, s)) {
-                        self.set_status(format!("{n} 个要素使用了这个样式"), false);
+                        self.set_status(crate::trf!("{n} 个要素使用了这个样式"), false);
                     }
                 }
                 Op::SelectUsers(s) => {
@@ -596,7 +596,7 @@ impl App {
                     let n = fs.len();
                     self.set_tool(Tool::Select);
                     self.set_selection(fs);
-                    self.set_status(format!("已选择使用这个样式的 {n} 个要素"), false);
+                    self.set_status(crate::trf!("已选择使用这个样式的 {n} 个要素"), false);
                 }
                 Op::DrawWith(k, s) => {
                     match s {
@@ -641,7 +641,7 @@ impl App {
                         }
                         Ok(d.swatches.len() - before)
                     }) {
-                        self.set_status(format!("色板中加入了 {n} 种地图上用到的颜色"), false);
+                        self.set_status(crate::trf!("色板中加入了 {n} 种地图上用到的颜色"), false);
                     }
                 }
             }

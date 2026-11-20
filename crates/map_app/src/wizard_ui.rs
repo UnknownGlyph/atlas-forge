@@ -36,81 +36,81 @@ impl App {
         let mut open = true;
         let mut go = false;
         let busy = self.wizard.job.is_some();
-        egui::Window::new("新世界向导").open(&mut open).resizable(false).default_width(360.0).show(ctx, |ui| {
+        egui::Window::new(crate::i18n::tr("新世界向导")).open(&mut open).resizable(false).default_width(360.0).show(ctx, |ui| {
             let w = &mut self.wizard;
             let s = &mut w.spec;
             egui::Grid::new("wizard").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                ui.label("名称");
+                ui.label(crate::i18n::tr("名称"));
                 ui.text_edit_singleline(&mut s.name);
                 ui.end_row();
-                ui.label("星球半径");
+                ui.label(crate::i18n::tr("星球半径"));
                 ui.add(egui::DragValue::new(&mut s.radius_km).range(500.0..=100000.0).speed(10.0).suffix(" km"));
                 ui.end_row();
-                ui.label("陆地比例");
+                ui.label(crate::i18n::tr("陆地比例"));
                 let mut pct = s.land * 100.0;
                 if ui.add(egui::Slider::new(&mut pct, 10.0..=70.0).suffix("%").fixed_decimals(0)).changed() {
                     s.land = pct / 100.0;
                 }
                 ui.end_row();
-                ui.label("大陆数量");
+                ui.label(crate::i18n::tr("大陆数量"));
                 ui.add(egui::Slider::new(&mut s.continents, 1..=8));
                 ui.end_row();
-                ui.label("海岸与边界的粗糙度");
+                ui.label(crate::i18n::tr("海岸与边界的粗糙度"));
                 ui.add(egui::Slider::new(&mut s.roughness, 0.0..=1.0).fixed_decimals(2));
                 ui.end_row();
-                ui.label("国家数量").on_hover_text("0 为只生成陆地（无主）");
+                ui.label(crate::i18n::tr("国家数量")).on_hover_text(crate::i18n::tr("0 为只生成陆地（无主）"));
                 ui.add(egui::Slider::new(&mut s.countries, 0..=80));
                 ui.end_row();
-                ui.label("名称风格");
+                ui.label(crate::i18n::tr("名称风格"));
                 egui::ComboBox::from_id_salt("wizard-style").selected_text(s.style.name()).show_ui(ui, |ui| {
                     for st in NameStyle::ALL {
                         ui.selectable_value(&mut s.style, st, st.name());
                     }
                 });
                 ui.end_row();
-                ui.label("河流数量");
+                ui.label(crate::i18n::tr("河流数量"));
                 ui.add(egui::Slider::new(&mut s.rivers, 0..=40));
                 ui.end_row();
-                ui.label("首都");
-                ui.checkbox(&mut s.capitals, "每个国家一个首都");
+                ui.label(crate::i18n::tr("首都"));
+                ui.checkbox(&mut s.capitals, crate::i18n::tr("每个国家一个首都"));
                 ui.end_row();
-                ui.label("随机历史");
+                ui.label(crate::i18n::tr("随机历史"));
                 ui.horizontal(|ui| {
                     ui.add_enabled(s.countries > 0, egui::Checkbox::new(&mut w.with_history, ""));
                     ui.add_enabled_ui(w.with_history && s.countries > 0, |ui| {
                         ui.add(egui::DragValue::new(&mut w.history.0).speed(1.0));
-                        ui.label("至");
+                        ui.label(crate::i18n::tr("至"));
                         ui.add(egui::DragValue::new(&mut w.history.1).speed(1.0));
-                        ui.add(egui::DragValue::new(&mut w.history.2).range(10..=600).suffix(" 次变化"));
+                        ui.add(egui::DragValue::new(&mut w.history.2).range(10..=600).suffix(crate::i18n::tr(" 次变化")));
                     });
                 });
                 ui.end_row();
-                ui.label("种子");
+                ui.label(crate::i18n::tr("种子"));
                 ui.horizontal(|ui| {
                     ui.add(egui::DragValue::new(&mut s.seed).speed(1.0));
-                    if ui.small_button("随机").clicked() {
+                    if ui.small_button(crate::i18n::tr("随机")).clicked() {
                         s.seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.subsec_nanos() as u64 ^ d.as_secs());
                     }
                 });
                 ui.end_row();
             });
-            ui.weak("海洋留在日界线附近与两极，陆地不会跨越地图边缘。生成的地块、国界、河流与城市都可以照常编辑；高程用于地形晕渲。");
+            ui.weak(crate::i18n::tr("海洋留在日界线附近与两极，陆地不会跨越地图边缘。生成的地块、国界、河流与城市都可以照常编辑；高程用于地形晕渲。"));
             ui.separator();
             let dirty = self.dirty;
             ui.horizontal(|ui| {
                 if busy {
                     ui.spinner();
-                    ui.label("正在生成…");
+                    ui.label(crate::i18n::tr("正在生成…"));
                 } else if self.wizard.confirm {
-                    ui.colored_label(egui::Color32::from_rgb(220, 120, 40), "当前世界有未保存的修改。");
-                    if ui.button("放弃修改并生成").clicked() {
+                    ui.colored_label(egui::Color32::from_rgb(220, 120, 40), crate::i18n::tr("当前世界有未保存的修改。"));
+                    if ui.button(crate::i18n::tr("放弃修改并生成")).clicked() {
                         go = true;
                         self.wizard.confirm = false;
                     }
-                    if ui.button("取消").clicked() {
+                    if ui.button(crate::i18n::tr("取消")).clicked() {
                         self.wizard.confirm = false;
                     }
-                } else if ui.button("生成新世界").clicked() {
+                } else if ui.button(crate::i18n::tr("生成新世界")).clicked() {
                     if dirty {
                         self.wizard.confirm = true;
                     } else {
@@ -141,7 +141,7 @@ impl App {
                 self.new_doc(doc);
                 self.wizard.open = false;
                 self.set_status(
-                    format!(
+                    crate::trf!(
                         "新世界：陆地 {:.0}%，{} 块陆地，{} 个国家，{} 条河流，{} 座城市{}，用时 {:.1} s",
                         r.land * 100.0,
                         r.landmasses,
@@ -154,8 +154,8 @@ impl App {
                     false,
                 );
             }
-            Ok(Err(e)) => self.set_status(format!("生成新世界失败：{e}"), true),
-            Err(_) => self.set_status("生成新世界时出错（已记录）", true),
+            Ok(Err(e)) => self.set_status(crate::trf!("生成新世界失败：{e}"), true),
+            Err(_) => self.set_status(crate::i18n::tr("生成新世界时出错（已记录）"), true),
         }
     }
 }

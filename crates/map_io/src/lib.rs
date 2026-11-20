@@ -8,11 +8,15 @@
 
 pub mod atlas;
 pub mod batch;
+pub mod chart_csv;
 pub mod checkpoints;
+pub mod cloud;
 pub mod dossier;
 pub mod clip;
 pub mod fonts;
 pub mod geojson;
+pub mod gaia_csv;
+pub mod model;
 pub mod pdf;
 pub mod png;
 pub mod prefs;

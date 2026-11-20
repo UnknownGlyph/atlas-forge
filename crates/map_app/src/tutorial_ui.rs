@@ -1,6 +1,7 @@
 //! The illustrated Yuanyang lessons. Instructions and figures occupy
 //! separate pages with a chapter index. Launching a tool returns to the map.
 use crate::{actions::Act, app::App, view::Tool};
+use crate::i18n::{text, tr};
 use eframe::egui;
 use serde::Deserialize;
 use std::sync::OnceLock;
@@ -173,25 +174,25 @@ impl App {
             .min_size([530.0, 395.0])
             .resizable(true)
             .show(ctx, |ui| {
-                ui.heading("从零绘制远洋人民共和国与四邻国");
+                ui.heading(crate::i18n::tr("从零绘制远洋人民共和国与四邻国"));
                 ui.add_space(8.0);
                 let sidebar = ui.available_width() >= 760.0;
                 let previous_chapter = state.step;
                 if !sidebar {
                     egui::ComboBox::from_id_salt("tutorial-chapter")
-                        .selected_text(&chapters[state.step].title)
+                        .selected_text(text(&chapters[state.step].title))
                         .show_ui(ui, |ui| {
                             for (i, chapter) in chapters.iter().enumerate() {
-                                ui.selectable_value(&mut state.step, i, &chapter.title);
+                                ui.selectable_value(&mut state.step, i, text(&chapter.title));
                             }
                         });
                 }
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut state.page, Page::Practice, "操作与验收");
+                    ui.selectable_value(&mut state.page, Page::Practice, crate::i18n::tr("操作与验收"));
                     if ui
                         .selectable_label(
                             state.page == Page::Figure && state.figure_step.is_none(),
-                            "阶段大图",
+                            crate::i18n::tr("阶段大图"),
                         )
                         .clicked()
                     {
@@ -205,7 +206,7 @@ impl App {
                     if sidebar {
                         ui.vertical(|ui| {
                             ui.set_width(216.0);
-                            ui.strong("教程目录");
+                            ui.strong(crate::i18n::tr("教程目录"));
                             ui.add_space(8.0);
                             egui::ScrollArea::vertical()
                                 .id_salt("tutorial-navigation")
@@ -213,7 +214,7 @@ impl App {
                                 .show(ui, |ui| {
                                     ui.spacing_mut().item_spacing.y = 8.0;
                                     for (i, chapter) in chapters.iter().enumerate() {
-                                        let title = format!("{:02}　{}", i + 1, chapter.title);
+                                        let title = format!("{:02}　{}", i + 1, text(&chapter.title));
                                         if ui.selectable_label(state.step == i, title).clicked() {
                                             state.step = i;
                                             state.page = Page::Practice;
@@ -231,7 +232,7 @@ impl App {
                         ui.set_width(ui.available_width());
                         let chapter = &chapters[state.step];
                         let media = &MEDIA[state.step];
-                        ui.heading(&chapter.title);
+                        ui.heading(text(&chapter.title));
                         ui.add_space(6.0);
                         match state.page {
                             Page::Practice => {
@@ -248,7 +249,7 @@ impl App {
 
                 ui.horizontal_wrapped(|ui| {
                     if ui
-                        .add_enabled(state.step > 0, egui::Button::new("上一节"))
+                        .add_enabled(state.step > 0, egui::Button::new(crate::i18n::tr("上一节")))
                         .clicked()
                     {
                         state.step -= 1;
@@ -256,23 +257,23 @@ impl App {
                         state.figure_step = None;
                     }
                     if ui
-                        .add_enabled(state.step + 1 < chapters.len(), egui::Button::new("下一节"))
+                        .add_enabled(state.step + 1 < chapters.len(), egui::Button::new(crate::i18n::tr("下一节")))
                         .clicked()
                     {
                         state.step += 1;
                         state.page = Page::Practice;
                         state.figure_step = None;
                     }
-                    ui.weak(format!(
+                    ui.weak(crate::trf!(
                         "第 {} 节，共 {} 节",
                         state.step + 1,
                         chapters.len()
                     ));
                     ui.add_space(8.0);
-                    if ui.button(MEDIA[state.step].entry).clicked() {
+                    if ui.button(tr(MEDIA[state.step].entry)).clicked() {
                         action = Some(MEDIA[state.step].action);
                     }
-                    if ui.button("打开教程成品").clicked() {
+                    if ui.button(crate::i18n::tr("打开教程成品")).clicked() {
                         action = Some(Act::TutorialExample);
                     }
                 });
@@ -291,26 +292,26 @@ fn instructions(ui: &mut egui::Ui, chapter: &Chapter, height: f32) -> Option<usi
         .id_salt(("tutorial-instructions", &chapter.id))
         .max_height(height)
         .show(ui, |ui| {
-            ui.label(egui::RichText::new(&chapter.goal).size(16.0));
+            ui.label(egui::RichText::new(text(&chapter.goal)).size(16.0));
             ui.add_space(13.0);
             for (index, item) in chapter.steps.iter().enumerate() {
                 ui.label(
-                    egui::RichText::new(format!("{}. {}", index + 1, item.title))
+                    egui::RichText::new(format!("{}. {}", index + 1, text(&item.title)))
                         .size(16.0)
                         .strong(),
                 );
-                ui.label(egui::RichText::new(&item.body).size(15.0));
-                if ui.link("查看本步配图").clicked() {
+                ui.label(egui::RichText::new(text(&item.body)).size(15.0));
+                if ui.link(crate::i18n::tr("查看本步配图")).clicked() {
                     picture = Some(index);
                 }
                 ui.add_space(11.0);
             }
             ui.separator();
-            ui.strong("验收");
-            ui.label(egui::RichText::new(&chapter.check).size(15.0));
+            ui.strong(crate::i18n::tr("验收"));
+            ui.label(egui::RichText::new(text(&chapter.check)).size(15.0));
             ui.add_space(10.0);
-            ui.strong("遇到问题");
-            ui.label(egui::RichText::new(&chapter.help).size(15.0));
+            ui.strong(crate::i18n::tr("遇到问题"));
+            ui.label(egui::RichText::new(text(&chapter.help)).size(15.0));
         });
     picture
 }
@@ -326,8 +327,8 @@ fn figure(
     debug_assert_eq!(chapter.image, media.image);
     debug_assert_eq!(chapter.id, media.id);
     ui.horizontal(|ui| {
-        ui.selectable_value(&mut state.original_size, false, "适合窗口");
-        ui.selectable_value(&mut state.original_size, true, "原始尺寸");
+        ui.selectable_value(&mut state.original_size, false, crate::i18n::tr("适合窗口"));
+        ui.selectable_value(&mut state.original_size, true, crate::i18n::tr("原始尺寸"));
     });
     let step = state.figure_step.and_then(|i| chapter.steps.get(i));
     let (name, bytes) = step
@@ -364,15 +365,15 @@ fn figure(
     }
     ui.add_space(7.0);
     if let Some(step) = step {
-        ui.strong(&step.title);
+        ui.strong(text(&step.title));
         if name == media.image {
-            ui.label(&chapter.caption);
+            ui.label(text(&chapter.caption));
         }
-        if ui.link("返回操作步骤").clicked() {
+        if ui.link(crate::i18n::tr("返回操作步骤")).clicked() {
             state.page = Page::Practice;
         }
     } else {
-        ui.label(&chapter.caption);
+        ui.label(text(&chapter.caption));
     }
 }
 

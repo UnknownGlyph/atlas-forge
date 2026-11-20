@@ -206,7 +206,7 @@ pub struct Layer {
     pub shares: ShareStore,
 }
 
-pub const FORMAT_VERSION: u32 = 6;
+pub const FORMAT_VERSION: u32 = 8;
 /// Built-in, geometry-derived field key.
 pub const AREA_KEY: &str = "area_km2";
 
@@ -961,6 +961,8 @@ impl HomeView {
 pub struct Document {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home_view: Option<HomeView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guides: Vec<crate::guides::Guide>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paper: Option<crate::paper::Paper>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -969,6 +971,10 @@ pub struct Document {
     pub book: Option<std::sync::Arc<crate::world_book::WorldBook>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub climate: Option<std::sync::Arc<crate::climate::Project>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<std::sync::Arc<crate::environment::Project>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visualization: Option<std::sync::Arc<crate::visualization::Project>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub star_chart: Option<std::sync::Arc<crate::star_chart::StarChart>>,
     pub format_version: u32,
@@ -1159,10 +1165,13 @@ impl Document {
         Self {
             format_version: FORMAT_VERSION,
             home_view: None,
+            guides: Vec::new(),
             book: None,
             paper: None,
             diplomacy: None,
             climate: None,
+            environment: None,
+            visualization: None,
             star_chart: None,
             meta: Meta { name: name.into(), planet_radius_km: radius_km, description: String::new() },
             topo: Topology::default(),

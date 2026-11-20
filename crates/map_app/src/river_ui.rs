@@ -7,7 +7,7 @@
 /// started, drag stopped) so a slider drag is one undo step.
 pub fn route_style_ui(ui: &mut egui::Ui, st: &mut map_core::doc::RouteStyle) -> (bool, bool, bool) {
     let mut changed = false;
-    if ui.checkbox(&mut st.broad, "粗箭头").on_hover_text("画成由窄渐宽、末端带大箭头的色带（进军、迁徙方向）；宽度为色带宽度").changed() {
+    if ui.checkbox(&mut st.broad, crate::i18n::tr("粗箭头")).on_hover_text(crate::i18n::tr("画成由窄渐宽、末端带大箭头的色带（进军、迁徙方向）；宽度为色带宽度")).changed() {
         changed = true;
         if st.broad && st.width < 6.0 {
             st.width = 14.0;
@@ -16,7 +16,7 @@ pub fn route_style_ui(ui: &mut egui::Ui, st: &mut map_core::doc::RouteStyle) -> 
         }
     }
     if st.broad {
-        changed |= ui.checkbox(&mut st.hollow, "空心").on_hover_text("只画轮廓（撤退、计划中的行动等）；轮廓使用下面的线型").changed();
+        changed |= ui.checkbox(&mut st.hollow, crate::i18n::tr("空心")).on_hover_text(crate::i18n::tr("只画轮廓（撤退、计划中的行动等）；轮廓使用下面的线型")).changed();
     }
     if !st.broad || st.hollow {
         ui.horizontal(|ui| {
@@ -27,17 +27,17 @@ pub fn route_style_ui(ui: &mut egui::Ui, st: &mut map_core::doc::RouteStyle) -> 
     }
     if !st.broad {
         ui.horizontal_wrapped(|ui| {
-            ui.label("装饰");
+            ui.label(crate::i18n::tr("装饰"));
             for d in map_core::deco::Deco::ALL {
                 changed |= ui.radio_value(&mut st.deco, d, d.name()).changed();
             }
             if st.deco == map_core::deco::Deco::Teeth {
-                changed |= ui.checkbox(&mut st.deco_flip, "翻转").on_hover_text("锯齿默认在画线方向的左侧；勾选后在右侧").changed();
+                changed |= ui.checkbox(&mut st.deco_flip, crate::i18n::tr("翻转")).on_hover_text(crate::i18n::tr("锯齿默认在画线方向的左侧；勾选后在右侧")).changed();
             }
         });
     }
     let range = if st.broad { 4.0..=60.0 } else { 0.5..=12.0 };
-    let rw = ui.add(egui::Slider::new(&mut st.width, range).suffix(" px").text(if st.broad { "宽度" } else { "线宽" }));
+    let rw = ui.add(egui::Slider::new(&mut st.width, range).suffix(" px").text(if st.broad { crate::i18n::tr("宽度") } else { crate::i18n::tr("线宽") }));
     changed |= rw.changed();
     ui.horizontal(|ui| {
         let mut c = Color32::from_rgba_unmultiplied(st.color[0], st.color[1], st.color[2], st.color[3]);
@@ -45,8 +45,8 @@ pub fn route_style_ui(ui: &mut egui::Ui, st: &mut map_core::doc::RouteStyle) -> 
             st.color = c.to_array();
             changed = true;
         }
-        ui.label("颜色");
-        changed |= ui.checkbox(&mut st.arrow, "终点箭头").changed();
+        ui.label(crate::i18n::tr("颜色"));
+        changed |= ui.checkbox(&mut st.arrow, crate::i18n::tr("终点箭头")).changed();
     });
     (changed, rw.drag_started(), rw.drag_stopped())
 }
@@ -64,7 +64,7 @@ impl App {
         self.selected_face = None;
         self.selected_river = None;
         self.tab = crate::panels::Tab::Countries;
-        self.set_status(format!("已选择城市 {}", self.doc.entities[&id].name), false);
+        self.set_status(crate::trf!("已选择城市 {}", self.doc.entities[&id].name), false);
         true
     }
 
@@ -94,12 +94,12 @@ impl App {
                 self.drag_city = None;
                 let name = |d: &map_core::doc::Document, e: Option<map_core::EntityId>| e.and_then(|e| d.entities.get(&e)).map_or("无归属".to_string(), |x| x.name.clone());
                 match self.doc.move_city(id, p) {
-                    Ok(map_core::doc::CityMove::Same) => self.set_status("已移动城市", false),
-                    Ok(map_core::doc::CityMove::Parent(to)) => self.set_status(format!("已移动城市：现属于 {}", name(&self.doc, to)), false),
+                    Ok(map_core::doc::CityMove::Same) => self.set_status(crate::i18n::tr("已移动城市"), false),
+                    Ok(map_core::doc::CityMove::Parent(to)) => self.set_status(crate::trf!("已移动城市：现属于 {}", name(&self.doc, to)), false),
                     Ok(map_core::doc::CityMove::Kept { here }) => {
-                        self.set_status(format!("已移动城市：新位置在 {} 境内；因为选定了年份或城市归属有年份记录，归属未自动修改（可在城市属性中改为所在国家）", name(&self.doc, here)), false)
+                        self.set_status(crate::trf!("已移动城市：新位置在 {} 境内；因为选定了年份或城市归属有年份记录，归属未自动修改（可在城市属性中改为所在国家）", name(&self.doc, here)), false)
                     }
-                    Err(e) => self.set_status(format!("移动城市失败：{e}"), true),
+                    Err(e) => self.set_status(crate::trf!("移动城市失败：{e}"), true),
                 }
                 self.end_pending();
             }
@@ -119,7 +119,7 @@ impl App {
                     Ok(())
                 }).is_some() {
                     self.selected = self.selected.filter(|s| *s != id);
-                    self.set_status(format!("已删除城市 {name}（Ctrl+Z 撤销）"), false);
+                    self.set_status(crate::trf!("已删除城市 {name}（Ctrl+Z 撤销）"), false);
                 }
                 return true;
             }
@@ -190,7 +190,7 @@ impl App {
         if let Some(id) = self.selected_river.take() {
             let Some((name, kind)) = self.doc.rivers.get(&id).map(|r| (r.name.clone(), r.kind_name())) else { return };
             if self.edit(&format!("删除{kind}"), |d| d.rivers.remove(&id).map(|_| ()).ok_or_else(|| "线不存在".to_string())).is_some() {
-                self.set_status(format!("已删除{kind} {name}（Ctrl+Z 撤销）"), false);
+                self.set_status(crate::trf!("已删除{kind} {name}（Ctrl+Z 撤销）"), false);
             }
         }
     }
@@ -415,10 +415,10 @@ impl App {
         };
         ui.separator();
         let kind = self.doc.rivers[&id].kind_name();
-        ui.label(RichText::new(format!("所选{kind}")).strong());
+        ui.label(RichText::new(crate::trf!("所选{kind}")).strong());
         let cur = self.doc.rivers[&id].name.clone();
         ui.horizontal(|ui| {
-            ui.label("名称");
+            ui.label(crate::i18n::tr("名称"));
             if self.river_name.as_ref().is_none_or(|(r, _)| *r != id) {
                 self.river_name = Some((id, cur.clone()));
             }
@@ -434,13 +434,13 @@ impl App {
                 });
             }
         });
-        ui.label(format!("长度约 {} km · {} 个点", map_core::doc::format_num(self.doc.river_length_km(id).round()), self.doc.rivers[&id].pts.len()));
+        ui.label(crate::trf!("长度约 {} km · {} 个点", map_core::doc::format_num(self.doc.river_length_km(id).round()), self.doc.rivers[&id].pts.len()));
         if self.doc.rivers[&id].route.is_some() {
-            ui.weak(crate::roads_ui::travel_lines(self.doc.river_length_km(id))).on_hover_text("按每日行程估算：步行 30 km、车队 25 km、骑马 60 km、驿马换马 200 km；一天按十小时计");
+            ui.weak(crate::roads_ui::travel_lines(self.doc.river_length_km(id))).on_hover_text(crate::i18n::tr("按每日行程估算：步行 30 km、车队 25 km、骑马 60 km、驿马换马 200 km；一天按十小时计"));
         }
         self.curve_panel(ui, id);
         let mut show = self.doc.rivers[&id].show_name;
-        if ui.checkbox(&mut show, "沿线标注名称").on_hover_text("把名称沿着这条线写在线的上方，从左往右读；线在屏幕上太短时不显示").changed() {
+        if ui.checkbox(&mut show, crate::i18n::tr("沿线标注名称")).on_hover_text(crate::i18n::tr("把名称沿着这条线写在线的上方，从左往右读；线在屏幕上太短时不显示")).changed() {
             self.edit(if show { "显示线名" } else { "隐藏线名" }, |d| {
                 let mut r = d.rivers.get(&id).ok_or("线不存在")?.clone();
                 r.show_name = show;
@@ -450,9 +450,9 @@ impl App {
         }
         ui.horizontal(|ui| {
             use map_core::shape::LineStyle;
-            ui.label("形状：");
+            ui.label(crate::i18n::tr("形状："));
             for (style, text) in [(LineStyle::Smooth, "平滑"), (LineStyle::Natural, "自然化")] {
-                if ui.small_button(text).on_hover_text("两端不动；细节精度取当前缩放，自然化使用工具栏的粗糙度").clicked() {
+                if ui.small_button(text).on_hover_text(crate::i18n::tr("两端不动；细节精度取当前缩放，自然化使用工具栏的粗糙度")).clicked() {
                     let min_len = 4.0 * 57.29578 / self.cam2d.zoom.max(1e-9);
                     let amount = self.roughness as f64;
                     self.edit(text, |d| {
@@ -468,7 +468,7 @@ impl App {
                     });
                 }
             }
-            if ui.small_button(format!("删除{kind}")).clicked() {
+            if ui.small_button(crate::trf!("删除{kind}")).clicked() {
                 self.delete_selected_river();
             }
         });
@@ -507,7 +507,7 @@ impl App {
                 self.end_pending();
             }
         }
-        ui.weak(format!("编辑顶点工具（E）：拖动{kind}的点，拖动线上任意处插入点，右键删除点。选择工具下拖动这条线可整体移动，Ctrl+D 复制。{kind}不随年份变化。"));
+        ui.weak(crate::trf!("编辑顶点工具（E）：拖动{kind}的点，拖动线上任意处插入点，右键删除点。选择工具下拖动这条线可整体移动，Ctrl+D 复制。{kind}不随年份变化。"));
     }
 }
 
