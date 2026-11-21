@@ -65,9 +65,17 @@ impl Store {
         Self::from_draft(&stamp().1).expect("generated draft key")
     }
 
+    pub fn draft_in(recovery_directory: &Path) -> Self {
+        Self::from_draft_in(recovery_directory, &stamp().1).expect("generated draft key")
+    }
+
     pub fn from_draft(key: &str) -> Option<Self> {
+        Self::from_draft_in(&recovery::default_dir(), key)
+    }
+
+    pub fn from_draft_in(recovery_directory: &Path, key: &str) -> Option<Self> {
         valid_key(key).then(|| Self {
-            root: recovery::default_dir().join("draft-history").join(key),
+            root: recovery_directory.join("draft-history").join(key),
             draft: Some(key.to_owned()),
         })
     }

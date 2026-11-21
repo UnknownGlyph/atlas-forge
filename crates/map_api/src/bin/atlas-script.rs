@@ -12,6 +12,7 @@ const HELP: &str =
   (no mode)                                  read JSONL from stdin
   --request JSON                             run one JSON request
   --file PLAN.json                            run a transactional JSON script
+  --steps NEW_DIR                             export one preview per step with --file
   --plugin FILE --command ID [--params JSON | --params-file FILE]
                                              run a declarative plug-in command
 With --out, only successful batches save a draft. Outputs and errors are JSON.";
@@ -23,6 +24,7 @@ const FLAGS: &[&str] = &[
     "--command",
     "--params",
     "--params-file",
+    "--steps",
 ];
 
 fn options(args: &[String]) -> Result<BTreeMap<&str, &str>, String> {
@@ -46,6 +48,7 @@ fn options(args: &[String]) -> Result<BTreeMap<&str, &str>, String> {
         || has("--plugin") != has("--command")
         || (!has("--plugin") && (has("--params") || has("--params-file")))
         || (has("--params") && has("--params-file"))
+        || (has("--steps") && !has("--file"))
     {
         return Err("请选择一种运行方式，并在插件模式下指定命令。".into());
     }
@@ -68,9 +71,18 @@ fn finish_batch(
     session: &mut Session,
     requests: &[Value],
     out: Option<&str>,
+    preview_dir: Option<&str>,
 ) -> Result<bool, String> {
-    let batch = automation::run_batch(session, requests);
+    let (batch, steps) = if preview_dir.is_some() {
+        automation::run_visual_steps(session, requests)
+    } else {
+        (automation::run_batch(session, requests), Vec::new())
+    };
     let mut report = serde_json::to_value(&batch).map_err(|e| e.to_string())?;
+    if let Some(directory) = preview_dir {
+        let manifest = write_previews(Path::new(directory), &steps, &batch)?;
+        report["steps"] = json!(manifest.display().to_string());
+    }
     if let (true, Some(path)) = (batch.ok, out) {
         let saved = session.handle_mut(&json!({"op":"draft.save","args":{"path":path}}));
         if saved["ok"] == true {
@@ -82,6 +94,27 @@ fn finish_batch(
     }
     print(&report)?;
     Ok(report["ok"] == true)
+}
+
+fn write_previews(
+    directory: &Path,
+    steps: &[automation::VisualStep],
+    report: &automation::BatchReport,
+) -> Result<std::path::PathBuf, String> {
+    std::fs::create_dir(directory).map_err(|error| format!("{}：{error}", directory.display()))?;
+    let font = map_io::png::find_system_font();
+    let mut frames = Vec::with_capacity(steps.len());
+    for step in steps {
+        let file = format!("step-{:04}.png", step.number);
+        let bytes = step.preview(1000, 560, font.as_deref())?;
+        map_io::recovery::write_atomic(&directory.join(&file), &bytes).map_err(|e| e.to_string())?;
+        frames.push(json!({"number":step.number, "operation":step.operation, "image":file}));
+    }
+    let manifest = directory.join("steps.json");
+    let bytes = serde_json::to_vec_pretty(&json!({"steps": frames, "ok":report.ok, "failed_at":report.failed_at}))
+        .map_err(|e| e.to_string())?;
+    map_io::recovery::write_atomic(&manifest, &bytes).map_err(|e| e.to_string())?;
+    Ok(manifest)
 }
 
 fn execute(src: &str, opts: BTreeMap<&str, &str>) -> Result<bool, String> {
@@ -96,13 +129,14 @@ fn execute(src: &str, opts: BTreeMap<&str, &str>) -> Result<bool, String> {
             (_, Some(path)) => automation::read_json(Path::new(path))?,
             _ => Map::new(),
         };
-        return finish_batch(&mut session, &command.expand(&parameters)?, out);
+        return finish_batch(&mut session, &command.expand(&parameters)?, out, None);
     }
     if let Some(path) = opts("--file") {
         return finish_batch(
             &mut session,
             &automation::load_script(Path::new(path))?,
             out,
+            opts("--steps"),
         );
     }
     if let Some(input) = opts("--request") {
@@ -114,7 +148,7 @@ fn execute(src: &str, opts: BTreeMap<&str, &str>) -> Result<bool, String> {
             }
         };
         if out.is_some() {
-            return finish_batch(&mut session, &[req], out);
+            return finish_batch(&mut session, &[req], out, None);
         }
         let result = automation::request(&mut session, &req);
         print(&result)?;
@@ -137,7 +171,7 @@ fn execute(src: &str, opts: BTreeMap<&str, &str>) -> Result<bool, String> {
         }
     }
     if out.is_some() {
-        return finish_batch(&mut session, &pending, out);
+        return finish_batch(&mut session, &pending, out, None);
     }
     Ok(true)
 }

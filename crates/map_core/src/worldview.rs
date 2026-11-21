@@ -210,6 +210,110 @@ pub struct Catalog {
     pub templates: OrdMap<Id, Arc<Template>>,
 }
 
+#[derive(Clone, Copy)]
+pub enum Starter {
+    Family,
+    Person,
+    Minerals,
+}
+
+impl Starter {
+    pub const ALL: [Self; 3] = [Self::Family, Self::Person, Self::Minerals];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Family => "家族与谱系",
+            Self::Person => "人物关系网",
+            Self::Minerals => "国家矿产档案",
+        }
+    }
+
+    pub fn install(self, catalog: &mut Catalog) -> Result<Id, String> {
+        let text = |name: &str| Field { name: name.into(), ..Default::default() };
+        let number = |name: &str, unit: &str| Field {
+            name: name.into(), unit: unit.into(), kind: Kind::Number, ..Default::default()
+        };
+        let person = || Schema {
+            name: "人物".into(),
+            fields: BTreeMap::from([
+                ("role".into(), text("身份与职务")),
+                ("birth".into(), number("出生年份", "年")),
+                ("home".into(), text("出身地")),
+                ("profile".into(), text("生平")),
+            ]),
+            ..Default::default()
+        };
+        let definition = match self {
+            Self::Family => Schema {
+                name: "家族".into(),
+                fields: BTreeMap::from([
+                    ("seat".into(), text("本家或驻地")),
+                    ("founding_year".into(), number("创立年份", "年")),
+                    ("motto".into(), text("家训")),
+                    ("heraldry".into(), text("纹章")),
+                ]),
+                ..Default::default()
+            },
+            Self::Person => person(),
+            Self::Minerals => {
+                let mut years = number("按现有产量可开采年数", "年");
+                years.rule = Some(Rule { expression: "reserve / annual_output".into(), ..Default::default() });
+                Schema {
+                    name: "国家矿产".into(),
+                    description: "可将档案关联到地图国家、矿区或港口，再按年份填写储量与产量。".into(),
+                    fields: BTreeMap::from([
+                        ("mineral".into(), text("矿种")),
+                        ("reserve".into(), number("探明储量", "t")),
+                        ("annual_output".into(), number("年产量", "t/年")),
+                        ("remaining_years".into(), years),
+                        ("note".into(), text("矿带与运输")),
+                    ]),
+                }
+            }
+        };
+        let schema = install_schema(catalog, definition)?;
+        match self {
+            Self::Family => {
+                let person = install_schema(catalog, person())?;
+                install_relation(catalog, "所属家族", person, schema)?;
+                install_relation(catalog, "亲子", person, person)?;
+                install_relation(catalog, "婚姻", person, person)?;
+            }
+            Self::Person => {
+                for relation in ["同盟", "师徒", "对手"] {
+                    install_relation(catalog, relation, schema, schema)?;
+                }
+            }
+            Self::Minerals => {}
+        }
+        if !catalog.templates.values().any(|entry| entry.schema == schema && entry.name == self.name()) {
+            let id = catalog.alloc()?;
+            catalog.templates.insert(id, Arc::new(Template {
+                name: self.name().into(), schema, ..Default::default()
+            }));
+        }
+        Ok(schema)
+    }
+}
+
+fn install_schema(catalog: &mut Catalog, definition: Schema) -> Result<Id, String> {
+    let existing = catalog.schemas.iter().find(|(_, schema)| schema.as_ref() == &definition).map(|(id, _)| *id);
+    if let Some(id) = existing { return Ok(id); }
+    let id = catalog.alloc()?;
+    catalog.schemas.insert(id, Arc::new(definition));
+    Ok(id)
+}
+
+fn install_relation(catalog: &mut Catalog, name: &str, source: Id, target: Id) -> Result<(), String> {
+    if !catalog.relation_types.values().any(|r| r.name == name && r.source == Some(source) && r.target == Some(target)) {
+        let id = catalog.alloc()?;
+        catalog.relation_types.insert(id, Arc::new(RelationType {
+            name: name.into(), source: Some(source), target: Some(target), ..Default::default()
+        }));
+    }
+    Ok(())
+}
+
 fn key_valid(key: &str) -> bool {
     let mut chars = key.chars();
     chars

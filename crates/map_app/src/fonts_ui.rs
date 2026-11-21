@@ -7,7 +7,7 @@
 use crate::app::App;
 use eframe::egui::{self, FontData, FontDefinitions, FontFamily, RichText};
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// The key a font face is registered under ("family", or "family#bold").
 pub fn font_key(family: &str, bold: bool) -> String {
@@ -16,6 +16,65 @@ pub fn font_key(family: &str, bold: bool) -> String {
     } else {
         family.to_string()
     }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum LocaleFont {
+    #[default]
+    Default,
+    Japanese,
+    TraditionalChinese,
+}
+
+impl LocaleFont {
+    pub(crate) fn for_language(language: crate::i18n::Lang) -> Self {
+        match language {
+            crate::i18n::Lang::Ja => Self::Japanese,
+            crate::i18n::Lang::ZhTw => Self::TraditionalChinese,
+            _ => Self::Default,
+        }
+    }
+
+    fn load(self) -> Option<&'static Arc<FontData>> {
+        static JAPANESE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+        static TRADITIONAL: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+        let (slot, names): (_, &[&str]) = match self {
+            Self::Default => return None,
+            Self::Japanese => (&JAPANESE, &["YuGothM.ttc", "YuGothR.ttc", "meiryo.ttc", "msgothic.ttc"]),
+            Self::TraditionalChinese => (&TRADITIONAL, &["msjh.ttc", "mingliu.ttc"]),
+        };
+        slot.get_or_init(|| {
+            let folders = map_io::fonts::font_dirs();
+            names.iter().flat_map(|name| folders.iter().map(move |dir| dir.join(name)))
+                .find_map(|path| std::fs::read(path).ok())
+                .map(|font| Arc::new(FontData::from_owned(font)))
+        }).as_ref()
+    }
+}
+
+pub(crate) fn warm_ui_assets() {
+    crate::i18n::warm();
+    LocaleFont::Japanese.load();
+    LocaleFont::TraditionalChinese.load();
+}
+
+pub(crate) fn definitions(base: Option<&Arc<FontData>>, locale: LocaleFont) -> FontDefinitions {
+    let mut defs = FontDefinitions::default();
+    if let Some(preferred) = locale.load() {
+        defs.font_data.insert("locale".into(), preferred.clone());
+    }
+    if let Some(base) = base {
+        defs.font_data.insert("cjk".into(), base.clone());
+    }
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        let fonts = defs.families.entry(family).or_default();
+        for key in ["locale", "cjk"] {
+            if defs.font_data.contains_key(key) {
+                fonts.push(key.into());
+            }
+        }
+    }
+    defs
 }
 
 impl App {
@@ -57,50 +116,40 @@ impl App {
             .map(|(f, b)| font_key(&f, b))
             .filter(|k| !self.fonts_missing.contains(k))
             .collect();
-        if wanted.is_subset(&self.fonts_loaded) {
+        let locale = LocaleFont::for_language(crate::i18n::get());
+        if locale == self.font_locale && wanted.iter().all(|key| self.fonts_loaded.contains_key(key)) {
             return;
         }
-        let mut defs = FontDefinitions::default();
-        if let Some(cjk) = &self.font {
-            defs.font_data.insert("cjk".into(), Arc::new(FontData::from_owned((**cjk).clone())));
-            for fam in [FontFamily::Proportional, FontFamily::Monospace] {
-                defs.families.entry(fam).or_default().push("cjk".into());
-            }
-        }
-        let fallback = defs.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-        let mut loaded = BTreeSet::new();
-        for key in wanted.iter().chain(self.fonts_loaded.iter()) {
-            let (family, bold) = match key.strip_suffix("#bold") {
-                Some(f) => (f, true),
-                None => (key.as_str(), false),
-            };
+        for key in wanted.iter().filter(|k| !self.fonts_loaded.contains_key(*k)).cloned().collect::<Vec<_>>() {
+            let (family, bold) = key.strip_suffix("#bold").map_or((key.as_str(), false), |name| (name, true));
             match map_io::fonts::load(family, bold) {
                 Some((bytes, index)) => {
                     let mut data = FontData::from_owned((*bytes).clone());
                     data.index = index;
-                    defs.font_data.insert(key.clone(), Arc::new(data));
-                    let mut chain = vec![key.clone()];
-                    chain.extend(fallback.iter().cloned());
-                    defs.families.insert(FontFamily::Name(key.as_str().into()), chain);
-                    loaded.insert(key.clone());
+                    self.fonts_loaded.insert(key, Arc::new(data));
                 }
                 None => {
-                    self.fonts_missing.insert(key.clone());
+                    self.fonts_missing.insert(key);
                 }
             }
         }
-        if !self.fonts_missing.is_empty() && loaded.len() < wanted.len() {
-            let gone: Vec<String> = wanted.difference(&loaded).map(|k| k.trim_end_matches("#bold").to_string()).collect();
-            self.set_status(crate::trf!("这台电脑上没有字体：{}（用默认字体显示）", gone.join("、")), true);
+
+        let mut defs = definitions(self.interface_font.as_ref(), locale);
+        let fallback = defs.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+        for (key, font) in &self.fonts_loaded {
+            defs.font_data.insert(key.clone(), font.clone());
+            let mut chain = vec![key.clone()];
+            chain.extend(fallback.iter().cloned());
+            defs.families.insert(FontFamily::Name(key.as_str().into()), chain);
         }
         ctx.set_fonts(defs);
-        self.fonts_loaded = loaded;
+        self.font_locale = locale;
     }
 
     /// The egui family to draw with a font (the default one until it is loaded).
     pub fn font_family(&self, font: Option<&str>, bold: bool) -> FontFamily {
         match font {
-            Some(f) if self.fonts_loaded.contains(&font_key(f, bold)) => FontFamily::Name(font_key(f, bold).as_str().into()),
+            Some(f) if self.fonts_loaded.contains_key(&font_key(f, bold)) => FontFamily::Name(font_key(f, bold).as_str().into()),
             _ => FontFamily::Proportional,
         }
     }

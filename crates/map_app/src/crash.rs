@@ -47,7 +47,7 @@ fn report(info: &std::panic::PanicHookInfo, thread: &str) -> String {
 }
 
 /// Install the panic hook. `recovery`: where an emergency snapshot goes.
-pub fn install(recovery: Option<Arc<Recovery>>) {
+pub fn install(recovery: Option<Arc<Recovery>>, crash_directory: std::path::PathBuf) {
     if let Some(r) = recovery {
         let _ = RECOVERY.set(r);
     }
@@ -57,7 +57,7 @@ pub fn install(recovery: Option<Arc<Recovery>>) {
         let here = std::thread::current();
         let on_interface = here.id() == interface;
         let text = report(info, here.name().unwrap_or("(unnamed)"));
-        let log = map_io::recovery::write_crash_log(&map_io::recovery::crash_dir(), &text).ok();
+        let log = map_io::recovery::write_crash_log(&crash_directory, &text).ok();
         if let Some(p) = &log {
             eprintln!("crash log: {}", p.display());
         }

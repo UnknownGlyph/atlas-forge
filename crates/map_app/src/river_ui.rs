@@ -189,7 +189,12 @@ impl App {
     pub fn delete_selected_river(&mut self) {
         if let Some(id) = self.selected_river.take() {
             let Some((name, kind)) = self.doc.rivers.get(&id).map(|r| (r.name.clone(), r.kind_name())) else { return };
-            if self.edit(&format!("删除{kind}"), |d| d.rivers.remove(&id).map(|_| ()).ok_or_else(|| "线不存在".to_string())).is_some() {
+            if self.edit(&format!("删除{kind}"), |d| {
+                use map_core::features::FeatureRef;
+                let route = d.rivers.get(&id).is_some_and(|line| line.route.is_some());
+                let item = if route { FeatureRef::Route(id) } else { FeatureRef::River(id) };
+                (d.delete_features(&[item]) > 0).then_some(()).ok_or_else(|| "线不存在".to_string())
+            }).is_some() {
                 self.set_status(crate::trf!("已删除{kind} {name}（Ctrl+Z 撤销）"), false);
             }
         }
@@ -286,12 +291,13 @@ impl App {
             let mut pieces: Vec<Vec<egui::Pos2>> = vec![Vec::new()];
             let mut prev: Option<egui::Pos2> = None;
             for q in densify_ll(&r.pts) {
-                match vg.to_screen(q) {
+                let screen = vg.to_screen(q);
+                match screen {
                     Some(s) if prev.is_none_or(|p| (p.x - s.x).abs() < vg.rect.width() * 0.5) => pieces.last_mut().unwrap().push(s),
                     Some(s) => pieces.push(vec![s]),
                     None => pieces.push(Vec::new()),
                 }
-                prev = vg.to_screen(q);
+                prev = screen;
             }
             pieces.retain(|p| p.len() >= 2);
             let ends_here = vg.to_screen(*r.pts.last().unwrap_or(&LonLat::new(0.0, 0.0))).is_some();
@@ -319,8 +325,8 @@ impl App {
                         None => {
                             painter.add(Shape::line(ring, stroke));
                         }
-                        Some([d, gap]) if d > 0.1 => painter.extend(Shape::dashed_line(&ring, stroke, d + edge, (gap - edge).max(1.0))),
-                        Some([_, gap]) => painter.extend(Shape::dotted_line(&ring, colour, gap, edge * 0.5)),
+                        Some([d, gap]) if d > 0.1 => crate::screen_path::dashed(painter, &ring, stroke, d + edge, (gap - edge).max(1.0)),
+                        Some([_, gap]) => crate::screen_path::dotted(painter, &ring, colour, gap, edge * 0.5),
                     }
                     continue;
                 }
@@ -332,14 +338,21 @@ impl App {
                     }
                 }
                 // a front line's teeth, a railway's ties
-                let f: Vec<[f32; 2]> = piece.iter().map(|p| [p.x, p.y]).collect();
-                for mk in map_core::deco::decorate(&f, rs.deco, rs.width, rs.deco_flip) {
-                    match mk {
-                        map_core::deco::DecoMark::Fill(t) => {
-                            painter.add(Shape::convex_polygon(t.iter().map(|p| egui::pos2(p[0], p[1])).collect(), colour, Stroke::NONE));
-                        }
-                        map_core::deco::DecoMark::Stroke([a, b]) => {
-                            painter.line_segment([egui::pos2(a[0], a[1]), egui::pos2(b[0], b[1])], Stroke::new(rs.width, colour));
+                if rs.deco != map_core::deco::Deco::None {
+                    let (_, half, height) = map_core::deco::deco_size(rs.deco, rs.width);
+                    let runs = crate::screen_path::visible_runs(&piece, painter.clip_rect().expand(half + height + rs.width + 4.0));
+                    for (run, distance) in runs {
+                        let points: Vec<[f32; 2]> = run.iter().map(|p| [p.x, p.y]).collect();
+                        for mark in map_core::deco::decorate_from(&points, rs.deco, rs.width, rs.deco_flip, distance) {
+                            match mark {
+                                map_core::deco::DecoMark::Fill(points) => {
+                                    let polygon = points.iter().map(|p| egui::pos2(p[0], p[1])).collect();
+                                    painter.add(Shape::convex_polygon(polygon, colour, Stroke::NONE));
+                                }
+                                map_core::deco::DecoMark::Stroke([a, b]) => {
+                                    painter.line_segment([egui::pos2(a[0], a[1]), egui::pos2(b[0], b[1])], Stroke::new(rs.width, colour));
+                                }
+                            }
                         }
                     }
                 }
@@ -350,10 +363,10 @@ impl App {
                     }
                     Some([dash, gap]) if dash > 0.1 => {
                         // egui dashes have square ends; shorten them by the caps the export adds
-                        painter.extend(Shape::dashed_line(&piece, stroke, dash + rs.width, (gap - rs.width).max(1.0)));
+                        crate::screen_path::dashed(painter, &piece, stroke, dash + rs.width, (gap - rs.width).max(1.0));
                     }
                     Some([_, gap]) => {
-                        painter.extend(Shape::dotted_line(&piece, colour, gap, rs.width * 0.5));
+                        crate::screen_path::dotted(painter, &piece, colour, gap, rs.width * 0.5);
                     }
                 }
             }

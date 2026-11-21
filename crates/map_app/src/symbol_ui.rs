@@ -203,7 +203,7 @@ impl App {
 
     pub fn delete_selected_symbol(&mut self) {
         if let Some(id) = self.selected_sym.take() {
-            if self.edit("删除符号", |d| d.symbols.remove(&id).map(|_| ()).ok_or_else(|| "符号不存在".to_string())).is_some() {
+            if self.edit("删除符号", |d| (d.delete_features(&[map_core::features::FeatureRef::Symbol(id)]) > 0).then_some(()).ok_or_else(|| "符号不存在".to_string())).is_some() {
                 self.set_status(crate::i18n::tr("已删除符号（Ctrl+Z 撤销）"), false);
             }
         }

@@ -5,7 +5,7 @@
 use crate::app::App;
 use crate::view::{Tool, ViewGeom};
 use eframe::egui::{self, Color32, Pos2, RichText, Shape, Stroke, Vec2};
-use map_core::area::{centre, fill_pattern, group_rings, Pattern, DOT_RADIUS, HATCH_WIDTH, NAME_PX, OUTLINE_WIDTH};
+use map_core::area::{centre, fill_pattern_in, group_rings, Pattern, DOT_RADIUS, HATCH_WIDTH, NAME_PX, OUTLINE_WIDTH};
 use map_core::geom::LonLat;
 
 fn c32(c: [u8; 4]) -> Color32 {
@@ -44,7 +44,7 @@ impl App {
                 // the whole shape is on screen: wash, stripes and name
                 let rings: Vec<Vec<[f32; 2]>> = screens.iter().map(|s| s[..s.len() - 1].iter().map(|p| p.map_or([0.0, 0.0], |p| [p.x, p.y])).collect()).collect();
                 let ring = &rings[0];
-                if a.tint {
+                if a.fills() {
                     for (outer, holes) in group_rings(&rings) {
                         let mut flat: Vec<f64> = rings[outer].iter().flat_map(|p| [p[0] as f64, p[1] as f64]).collect();
                         let mut starts = Vec::new();
@@ -69,7 +69,9 @@ impl App {
                     (tl, galley)
                 });
                 let gap = name.as_ref().map(|(tl, g)| [tl.x - 4.0, tl.y - 2.0, tl.x + g.size().x + 4.0, tl.y + g.size().y + 2.0]);
-                let (stripes, dots) = fill_pattern(&rings, a.pattern, a.spacing, a.angle, gap);
+                let clip = painter.clip_rect().expand(a.spacing * 0.7 + 4.0);
+                let (stripes, dots) = fill_pattern_in(&rings, a.pattern, a.spacing, a.angle, gap,
+                    Some([clip.left(), clip.top(), clip.right(), clip.bottom()]));
                 for [p, q] in stripes {
                     painter.line_segment([egui::pos2(p[0], p[1]), egui::pos2(q[0], q[1])], Stroke::new(HATCH_WIDTH, col));
                 }
@@ -85,6 +87,7 @@ impl App {
                     painter.galley(tl, galley, Color32::WHITE);
                 }
             }
+            if a.pattern == Pattern::Solid && !selected && !editing { continue; }
             // the outlines, broken where they leave the view or wrap
             let mut pieces: Vec<Vec<Pos2>> = vec![Vec::new()];
             for screen in &screens {
@@ -103,7 +106,7 @@ impl App {
                 }
                 let stroke = Stroke::new(OUTLINE_WIDTH, col);
                 if a.dashed {
-                    painter.extend(Shape::dashed_line(&piece, stroke, 7.0, 4.0));
+                    crate::screen_path::dashed(painter, &piece, stroke, 7.0, 4.0);
                 } else {
                     painter.add(Shape::line(piece, stroke));
                 }
@@ -212,7 +215,7 @@ impl App {
 
     pub fn delete_selected_area(&mut self) {
         if let Some(id) = self.selected_area.take() {
-            if self.edit("删除斜线区域", |d| d.areas.remove(&id).map(|_| ()).ok_or_else(|| "区域不存在".to_string())).is_some() {
+            if self.edit("删除斜线区域", |d| (d.delete_features(&[map_core::features::FeatureRef::Area(id)]) > 0).then_some(()).ok_or_else(|| "区域不存在".to_string())).is_some() {
                 self.set_status(crate::i18n::tr("已删除斜线区域（Ctrl+Z 撤销）"), false);
             }
         }
@@ -249,7 +252,7 @@ impl App {
         ui.horizontal(|ui| {
             let mut c = c32(v.color);
             if ui.color_edit_button_srgba(&mut c).changed() {
-                v.color = c.to_array();
+                v.color = c.to_srgba_unmultiplied();
             }
             ui.label(crate::i18n::tr("颜色"));
             ui.checkbox(&mut v.tint, crate::i18n::tr("底色"));

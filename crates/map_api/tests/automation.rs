@@ -168,3 +168,22 @@ fn stdio_keeps_a_session_and_batch_output_is_atomic() {
     assert_eq!(std::fs::read(&path).unwrap(), original);
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn visual_steps_capture_each_world_and_rollback_a_failed_plan() {
+    let requests = [
+        serde_json::json!({"op":"edit.create","args":{"kind":"country","name":"Alpha"}}),
+        serde_json::json!({"op":"edit.rename","args":{"entity":"Alpha","name":"Beta"}}),
+        serde_json::json!({"op":"edit.rename","args":{"entity":"Missing","name":"Skipped"}}),
+    ];
+    let mut session = map_api::Session::from_arg("--blank").unwrap();
+    let (report, frames) = map_api::automation::run_visual_steps(&mut session, &requests);
+    assert_eq!(report.failed_at, Some(3));
+    assert_eq!(frames.iter().map(|s| s.number).collect::<Vec<_>>(), vec![0, 1, 2]);
+    assert!(frames[0].document.entities.is_empty());
+    assert_eq!(frames[1].document.entities.values().next().unwrap().name, "Alpha");
+    assert_eq!(frames[2].document.entities.values().next().unwrap().name, "Beta");
+    assert!(session.doc().entities.is_empty());
+    let bytes = frames[2].preview(260, 140, None).unwrap();
+    assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+}

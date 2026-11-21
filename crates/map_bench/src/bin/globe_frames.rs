@@ -88,6 +88,7 @@ fn main() {
     let path = std::env::args_os()
         .nth(1)
         .map(PathBuf::from)
+        .or_else(map_io::project::ithaer_test_project)
         .expect("usage: globe_frames <world.atlas>");
     let doc = map_io::project::load(&path).unwrap_or_else(|error| panic!("{error}"));
     let instance = Instance::new(InstanceDescriptor::new_without_display_handle_from_env());

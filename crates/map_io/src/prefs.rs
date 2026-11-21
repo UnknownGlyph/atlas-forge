@@ -24,6 +24,9 @@ pub struct Prefs {
     /// Additional trigger, in committed history operations. Zero is time only.
     pub autosave_steps: u64,
     pub cloud_backup: crate::cloud::Config,
+    pub save_directory: Option<PathBuf>,
+    pub cache_directory: Option<PathBuf>,
+    pub test_project: Option<PathBuf>,
     /// Show the start window when the program opens without a file.
     pub welcome: bool,
     /// Open the latest file at start instead of the sample world.
@@ -44,11 +47,19 @@ pub struct Prefs {
 
 impl Default for Prefs {
     fn default() -> Self {
-        Self { recent: vec![], ui_scale: 1.0, autosave_secs: 60, autosave_on: true, autosave_keep: 20, autosave_steps: 10, cloud_backup: Default::default(), welcome: true, reopen_last: false, layout: "split".into(), graticule: true, progressive_detail: true, furniture: true, perf_in_status: false, undo_limit: 500, language: "zh".into() }
+        Self { recent: vec![], ui_scale: 1.0, autosave_secs: 60, autosave_on: true, autosave_keep: 20, autosave_steps: 10, cloud_backup: Default::default(), save_directory: None, cache_directory: None, test_project: None, welcome: true, reopen_last: false, layout: "split".into(), graticule: true, progressive_detail: true, furniture: true, perf_in_status: false, undo_limit: 500, language: "zh".into() }
     }
 }
 
 impl Prefs {
+    pub fn recovery_directory(&self) -> PathBuf {
+        self.cache_directory.as_ref().map_or_else(crate::recovery::default_dir, |base| base.join("recovery"))
+    }
+
+    pub fn crash_directory(&self) -> PathBuf {
+        self.cache_directory.as_ref().map_or_else(crate::recovery::crash_dir, |base| base.join("crash"))
+    }
+
     /// Values a hand-edited file may have pushed out of range.
     fn tidy(mut self) -> Self {
         self.ui_scale = if self.ui_scale.is_finite() { self.ui_scale.clamp(0.5, 3.0) } else { 1.0 };

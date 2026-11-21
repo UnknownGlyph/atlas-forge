@@ -395,6 +395,12 @@ impl App {
         self.chart_action(action);
     }
 
+    pub(crate) fn delete_chart_selection(&mut self) {
+        if let Some(id) = self.visualization_ui.chosen {
+            self.chart_action(Some(Action::Delete(id)));
+        }
+    }
+
     fn chart_action(&mut self, action: Option<Action>) {
         let Some(action) = action else { return };
         match action {

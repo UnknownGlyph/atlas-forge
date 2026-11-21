@@ -206,7 +206,7 @@ pub struct Layer {
     pub shares: ShareStore,
 }
 
-pub const FORMAT_VERSION: u32 = 8;
+pub const FORMAT_VERSION: u32 = 9;
 /// Built-in, geometry-derived field key.
 pub const AREA_KEY: &str = "area_km2";
 
@@ -2164,7 +2164,12 @@ impl Document {
             self.entities.get_mut(&id).unwrap().successors.retain(|s| *s != e);
         }
         self.name_styles.remove(&e);
-        self.entities.remove(&e);
+        if self.entities.remove(&e).is_some() {
+            if let Some(book) = &mut self.book {
+                let node = crate::world_book::Node::Entity(book.current, e.0);
+                std::sync::Arc::make_mut(book).unlink(node);
+            }
+        }
     }
 
     // -------------------------------------------------------- topology ops

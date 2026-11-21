@@ -59,6 +59,11 @@ pub fn deco_size(deco: Deco, width: f32) -> (f32, f32, f32) {
 /// drawn in (`flip`: on the right); marks are spaced evenly, the first half
 /// a step from the start.
 pub fn decorate(path: &[[f32; 2]], deco: Deco, width: f32, flip: bool) -> Vec<DecoMark> {
+    decorate_from(path, deco, width, flip, 0.0)
+}
+
+/// Marks on a visible portion of a path whose origin is `offset` pixels earlier.
+pub fn decorate_from(path: &[[f32; 2]], deco: Deco, width: f32, flip: bool, offset: f64) -> Vec<DecoMark> {
     if deco == Deco::None || path.len() < 2 {
         return vec![];
     }
@@ -77,8 +82,9 @@ pub fn decorate(path: &[[f32; 2]], deco: Deco, width: f32, flip: bool) -> Vec<De
     let (step, half, height) = deco_size(deco, width);
     let side = if flip { -1.0 } else { 1.0 };
     let mut out = Vec::new();
-    let mut s = step * 0.5;
-    let mut k = 0;
+    let spacing = f64::from(step);
+    let mut k = ((offset - spacing * 0.5) / spacing).ceil().max(0.0) as u64;
+    let mut s = ((k as f64 + 0.5) * spacing - offset) as f32;
     while s + half <= length {
         k += 1;
         let (a, b) = (at(s - half), at(s + half));

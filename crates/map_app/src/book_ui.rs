@@ -213,6 +213,10 @@ fn catalog(
     result.sort_by(|a, b| a.1.cmp(&b.1));
     result
 }
+fn is_library_item(node: Node) -> bool {
+    matches!(node, Node::Map(1..) | Node::Article(_) | Node::Asset(_) | Node::Event(_, _) | Node::Place(_, _))
+}
+
 fn is_in(node: Node, tab: Tab) -> bool {
     match tab {
         Tab::All => true,
@@ -464,7 +468,7 @@ impl App {
     }
     pub fn book_bar(&mut self, ui: &mut egui::Ui) {
         let mut act = None;
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             if ui.button(crate::i18n::tr("世界资料")).clicked() {
                 self.book_context(Node::Map(WorldBook::current(&self.doc)));
             }
@@ -502,6 +506,16 @@ impl App {
             ui.ctx().request_repaint();
         }
     }
+    pub(crate) fn request_library_delete(&mut self) -> bool {
+        if !self.book_ui.open {
+            return false;
+        }
+        if let Some(node) = self.book_ui.selected.filter(|n| is_library_item(*n)) {
+            self.book_ui.delete = Some(node);
+        }
+        true
+    }
+
     pub fn book_window(&mut self, ctx: &egui::Context) {
         if !self.book_ui.open {
             return;
@@ -514,6 +528,7 @@ impl App {
         let state = &mut self.book_ui;
         let node = state.selected.unwrap_or(Node::Map(book.current));
         egui::Window::new(crate::i18n::tr("世界资料库"))
+            .id(egui::Id::unique("atlas-world-library"))
             .open(&mut open)
             .default_size([880., 630.])
             .scroll(true)
@@ -581,6 +596,21 @@ impl App {
                 let term = state.filter.trim().to_lowercase();
                 let items = catalog(book, doc, node, false);
                 let selection = state.checked.clone();
+                if let Some(confirm) = state.delete {
+                    ui.group(|ui| {
+                        ui.strong(crate::trf!("删除 {}？", name(book, doc, confirm)));
+                        ui.label(crate::i18n::tr("可撤销。关联的其他资料会保留。"));
+                        ui.horizontal(|ui| {
+                            if ui.button(crate::i18n::tr("确认删除")).clicked() {
+                                actions.push(Action::Delete(confirm));
+                                state.delete = None;
+                            }
+                            if ui.button(crate::i18n::tr("取消")).clicked() {
+                                state.delete = None;
+                            }
+                        });
+                    });
+                }
                 ui.separator();
                 ui.columns(2, |columns| {
                     let a = &mut columns[0];
@@ -772,23 +802,10 @@ impl App {
                     pane.separator();
                     connections(pane, doc, book, node, state, &mut actions);
                     if book.label(doc, node).is_some()
-                        && matches!(node, Node::Map(1..) | Node::Article(_))
+                        && is_library_item(node)
+                        && pane.button(crate::i18n::tr("删除此项…")).on_hover_text("Delete").clicked()
                     {
-                        if pane.small_button(crate::i18n::tr("删除此项…")).clicked() {
-                            state.delete = Some(node);
-                        }
-                        if state.delete == Some(node) {
-                            pane.label(crate::i18n::tr("确认删除此项？关联资料与其它画板会保留。可撤销。"));
-                            pane.horizontal(|ui| {
-                                if ui.button(crate::i18n::tr("确认删除")).clicked() {
-                                    actions.push(Action::Delete(node));
-                                    state.delete = None;
-                                }
-                                if ui.button(crate::i18n::tr("取消")).clicked() {
-                                    state.delete = None;
-                                }
-                            });
-                        }
+                        state.delete = Some(node);
                     }
                 });
             });
@@ -1315,23 +1332,20 @@ impl App {
             Action::Delete(node) => {
                 let current = WorldBook::current(&self.doc);
                 if self
-                    .edit("删除资料项目", |d| {
-                        match node {
-                            Node::Article(id) => {
-                                WorldBook::edit(d).articles.remove(&id);
-                            }
-                            Node::Map(id) if id != ROOT => {
-                                if current == id {
-                                    WorldBook::switch(d, ROOT, None)?;
-                                }
-                                WorldBook::edit(d).boards.remove(&id);
-                            }
-                            _ => return Err("此处只删除文档或独立画板".into()),
-                        }
-                        Ok(())
-                    })
+                    .edit("删除资料项目", |d| WorldBook::remove_item(d, node))
                     .is_some()
                 {
+                    self.book_ui.reading.retain(|n| *n != node && !matches!(node, Node::Map(id) if n.board() == Some(id)));
+                    if let Node::Map(id) = node {
+                        self.book_ui.map_path.retain(|board| *board != id);
+                        self.book_ui.views.remove(&id);
+                    }
+                    if let Node::Article(id) = node {
+                        self.book_ui.checked.remove(&id);
+                    }
+                    if let Node::Asset(id) = node {
+                        self.book_ui.textures.remove(&id);
+                    }
                     let next = WorldBook::current(&self.doc);
                     if current != next {
                         self.restore_book_view(next);

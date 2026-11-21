@@ -55,9 +55,13 @@ impl App {
             }
             let Some(pos) = vg.to_screen(a.at) else { continue };
             let colour = Color32::from_rgba_unmultiplied(a.color[0], a.color[1], a.color[2], a.color[3]).gamma_multiply(if a.hidden { 0.35 } else { 1.0 });
+            // Rasterize at a bounded size and scale the glyph mesh. Extremely
+            // magnified text should not allocate a new atlas for each wheel tick.
+            let raster_size = crate::label_ui::quantised(size.min(72.0));
+            let mesh_scale = size / raster_size;
             let job = |text: &str, c: Color32| {
                 let mut j = egui::text::LayoutJob::default();
-                j.append(text, 0.0, egui::TextFormat { font_id: egui::FontId::new(size, self.font_family(a.font.as_deref(), a.bold)), color: c, italics: a.italic, ..Default::default() });
+                j.append(text, 0.0, egui::TextFormat { font_id: egui::FontId::new(raster_size, self.font_family(a.font.as_deref(), a.bold)), color: c, italics: a.italic, ..Default::default() });
                 j
             };
             // a curved line goes glyph by glyph along its arc or its drawn curve
@@ -65,7 +69,7 @@ impl App {
             let along = a.on_path() || a.curved();
             let glyphs: Vec<String> = if along { text.chars().map(String::from).collect() } else { vec![text] };
             let galleys: Vec<_> = glyphs.iter().map(|g| painter.layout_job(job(g, colour))).collect();
-            let widths: Vec<f32> = galleys.iter().map(|g| g.size().x).collect();
+            let widths: Vec<f32> = galleys.iter().map(|g| g.size().x * mesh_scale).collect();
             let angle = -a.angle.to_radians();
             // each glyph's centre on screen and its turn (radians, as egui turns)
             let on_curve = a.on_path().then(|| screen_path(vg, &a.path)).flatten().and_then(|p| map_core::path_text::along_path(&p, &widths, 0.0));
@@ -75,18 +79,31 @@ impl App {
             };
             let mut aabb = Rect::NOTHING;
             for ((g, galley), (centre, ga)) in glyphs.iter().zip(galleys).zip(places) {
-                let half = galley.size() * 0.5;
+                let half = galley.size() * (0.5 * mesh_scale);
                 let (c, s) = (ga.cos().abs(), ga.sin().abs());
-                aabb = aabb.union(Rect::from_center_size(centre, Vec2::new(half.x * 2.0 * c + half.y * 2.0 * s, half.x * 2.0 * s + half.y * 2.0 * c)));
-                if g.trim().is_empty() {
+                let box_ = Rect::from_center_size(centre, Vec2::new(half.x * 2.0 * c + half.y * 2.0 * s, half.x * 2.0 * s + half.y * 2.0 * c));
+                aabb = aabb.union(box_);
+                if g.trim().is_empty() || !painter.clip_rect().intersects(box_.expand(2.0)) {
                     continue;
                 }
                 let tl = centre - rotate(half, ga);
+                let make_shape = |galley, col| {
+                    let mut shape = egui::epaint::TextShape::new(egui::Pos2::ZERO, galley, col).with_angle(ga);
+                    shape.transform(egui::emath::TSTransform::from_scaling(mesh_scale));
+                    shape.pos = tl;
+                    shape
+                };
                 let halo = painter.layout_job(job(g, Color32::from_rgba_unmultiplied(255, 255, 255, 170)));
+                let halo = make_shape(halo, Color32::WHITE);
                 for o in [Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, -1.0), Vec2::new(0.0, 1.0)] {
-                    painter.add(egui::epaint::TextShape::new(tl + o, halo.clone(), Color32::WHITE).with_angle(ga));
+                    let mut outline = halo.clone();
+                    outline.pos += o;
+                    painter.add(outline);
                 }
-                painter.add(egui::epaint::TextShape::new(tl, galley, colour).with_angle(ga));
+                painter.add(make_shape(galley, colour));
+            }
+            if !painter.clip_rect().intersects(aabb.expand(2.0)) {
+                continue;
             }
             let aabb = aabb.expand(2.0);
             taken.push(aabb);
@@ -211,7 +228,7 @@ impl App {
 
     pub fn delete_selected_annotation(&mut self) {
         if let Some(id) = self.selected_ann.take() {
-            if self.edit("删除文字", |d| d.annotations.remove(&id).map(|_| ()).ok_or_else(|| "文字不存在".to_string())).is_some() {
+            if self.edit("删除文字", |d| (d.delete_features(&[map_core::features::FeatureRef::Text(id)]) > 0).then_some(()).ok_or_else(|| "文字不存在".to_string())).is_some() {
                 self.set_status(crate::i18n::tr("已删除文字（Ctrl+Z 撤销）"), false);
             }
         }

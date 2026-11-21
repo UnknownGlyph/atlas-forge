@@ -348,6 +348,12 @@ impl App {
         }
     }
 
+    pub(crate) fn delete_environment_selection(&mut self, ctx: &egui::Context) {
+        if let Some(version) = self.doc.environment.as_ref().and_then(|env| env.selected) {
+            self.apply_environment(Action::RemoveVersion(version), ctx);
+        }
+    }
+
     fn apply_environment(&mut self, action: Action, ctx: &egui::Context) {
         let action = match action {
             Action::Generate => {

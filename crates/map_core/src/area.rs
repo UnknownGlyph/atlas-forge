@@ -33,10 +33,12 @@ pub enum Pattern {
     Mountains,
     /// Little trees on the dots' grid, upright (a forest).
     Trees,
+    /// A solid layer of color with no hatching.
+    Solid,
 }
 
 impl Pattern {
-    pub const ALL: [Pattern; 5] = [Pattern::Lines, Pattern::Cross, Pattern::Dots, Pattern::Mountains, Pattern::Trees];
+    pub const ALL: [Pattern; 6] = [Pattern::Lines, Pattern::Cross, Pattern::Dots, Pattern::Mountains, Pattern::Trees, Pattern::Solid];
     pub fn name(self) -> &'static str {
         match self {
             Pattern::Lines => "斜线",
@@ -44,6 +46,7 @@ impl Pattern {
             Pattern::Dots => "点",
             Pattern::Mountains => "山地",
             Pattern::Trees => "森林",
+            Pattern::Solid => "实色",
         }
     }
 }
@@ -120,9 +123,11 @@ impl AreaMark {
         std::iter::once(&self.ring).chain(self.extra.iter()).filter(|r| r.len() >= 3).collect()
     }
 
+    pub fn fills(&self) -> bool { self.tint || self.pattern == Pattern::Solid }
+
     /// The colour of the wash under the stripes.
     pub fn tint_color(&self) -> [u8; 4] {
-        [self.color[0], self.color[1], self.color[2], 45]
+        if self.pattern == Pattern::Solid { self.color } else { [self.color[0], self.color[1], self.color[2], 45] }
     }
 }
 
@@ -131,6 +136,10 @@ impl AreaMark {
 /// segments. Stripes sit on multiples of `spacing` from the origin, so
 /// they do not shimmer as the shape changes.
 pub fn hatch(rings: &[Vec<[f32; 2]>], spacing: f32, angle: f32) -> Vec<[[f32; 2]; 2]> {
+    hatch_in(rings, spacing, angle, None)
+}
+
+fn hatch_in(rings: &[Vec<[f32; 2]>], spacing: f32, angle: f32, view: Option<[f32; 4]>) -> Vec<[[f32; 2]; 2]> {
     let spacing = spacing.max(1.0);
     let (sn, cs) = angle.to_radians().sin_cos();
     // along the stripes, and across them
@@ -143,8 +152,19 @@ pub fn hatch(rings: &[Vec<[f32; 2]>], spacing: f32, angle: f32) -> Vec<[[f32; 2]
         .flat_map(|r| (0..r.len()).map(move |i| (r[i], r[(i + 1) % r.len()])))
         .map(|(a, b)| ([dot(a, n), dot(a, d)], [dot(b, n), dot(b, d)]))
         .collect();
-    let Some(lo) = edges.iter().map(|e| e.0[0]).reduce(f32::min) else { return vec![] };
-    let hi = edges.iter().map(|e| e.0[0]).fold(f32::MIN, f32::max);
+    let Some(mut lo) = edges.iter().map(|e| e.0[0]).reduce(f32::min) else { return vec![] };
+    let mut hi = edges.iter().map(|e| e.0[0]).fold(f32::MIN, f32::max);
+    let along = view.map(|[x0, y0, x1, y1]| {
+        let corners = [[x0, y0], [x0, y1], [x1, y0], [x1, y1]];
+        let bounds = |direction| {
+            corners.iter().map(|point| dot(*point, direction))
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), t| (min.min(t), max.max(t)))
+        };
+        let (first, last) = bounds(n);
+        lo = lo.max(first);
+        hi = hi.min(last);
+        bounds(d)
+    });
     let mut out = Vec::new();
     let mut c = (lo / spacing).ceil() * spacing;
     let mut ts = Vec::new();
@@ -157,8 +177,11 @@ pub fn hatch(rings: &[Vec<[f32; 2]>], spacing: f32, angle: f32) -> Vec<[[f32; 2]
         }
         ts.sort_by(f32::total_cmp);
         for p in ts.chunks_exact(2) {
-            let at = |t: f32| [c * n[0] + t * d[0], c * n[1] + t * d[1]];
-            out.push([at(p[0]), at(p[1])]);
+            let (left, right) = along.map_or((p[0], p[1]), |(first, last)| (p[0].max(first), p[1].min(last)));
+            if left < right {
+                let at = |t: f32| [c * n[0] + t * d[0], c * n[1] + t * d[1]];
+                out.push([at(left), at(right)]);
+            }
         }
         c += spacing;
     }
@@ -169,12 +192,16 @@ pub fn hatch(rings: &[Vec<[f32; 2]>], spacing: f32, angle: f32) -> Vec<[[f32; 2]
 /// other row shifted by half a step, inside `rings`. Like the stripes they
 /// sit on multiples of `spacing`, so they do not shimmer.
 pub fn dots(rings: &[Vec<[f32; 2]>], spacing: f32, angle: f32) -> Vec<[f32; 2]> {
+    dots_in(rings, spacing, angle, None)
+}
+
+fn dots_in(rings: &[Vec<[f32; 2]>], spacing: f32, angle: f32, view: Option<[f32; 4]>) -> Vec<[f32; 2]> {
     let spacing = spacing.max(1.0);
     let (sn, cs) = angle.to_radians().sin_cos();
     let (d, n) = ([cs, -sn], [sn, cs]);
     let dot = |p: [f32; 2], v: [f32; 2]| p[0] * v[0] + p[1] * v[1];
     let mut out = Vec::new();
-    for [p, q] in hatch(rings, spacing, angle) {
+    for [p, q] in hatch_in(rings, spacing, angle, view) {
         let c = dot(p, n);
         let row = (c / spacing).round() as i64;
         let shift = if row.rem_euclid(2) == 1 { spacing * 0.5 } else { 0.0 };
@@ -192,16 +219,29 @@ pub fn dots(rings: &[Vec<[f32; 2]>], spacing: f32, angle: f32) -> Vec<[f32; 2]> 
 /// for a name (`gap`, [x0, y0, x1, y1]) left empty. Shared by the app, the
 /// exports and the legend.
 pub fn fill_pattern(rings: &[Vec<[f32; 2]>], pattern: Pattern, spacing: f32, angle: f32, gap: Option<[f32; 4]>) -> (Vec<[[f32; 2]; 2]>, Vec<[f32; 2]>) {
+    fill_pattern_in(rings, pattern, spacing, angle, gap, None)
+}
+
+/// Restrict pattern work to rows and lengths that may intersect the viewport.
+pub fn fill_pattern_in(
+    rings: &[Vec<[f32; 2]>],
+    pattern: Pattern,
+    spacing: f32,
+    angle: f32,
+    gap: Option<[f32; 4]>,
+    view: Option<[f32; 4]>,
+) -> (Vec<[[f32; 2]; 2]>, Vec<[f32; 2]>) {
     let (mut segs, mut pts) = match pattern {
-        Pattern::Lines => (hatch(rings, spacing, angle), vec![]),
+        Pattern::Lines => (hatch_in(rings, spacing, angle, view), vec![]),
         Pattern::Cross => {
-            let mut s = hatch(rings, spacing, angle);
-            s.extend(hatch(rings, spacing, angle + 90.0));
+            let mut s = hatch_in(rings, spacing, angle, view);
+            s.extend(hatch_in(rings, spacing, angle + 90.0, view));
             (s, vec![])
         }
-        Pattern::Dots => (vec![], dots(rings, spacing, angle)),
-        Pattern::Mountains => (icons(&dots(rings, spacing, angle), spacing, false), vec![]),
-        Pattern::Trees => (icons(&dots(rings, spacing, angle), spacing, true), vec![]),
+        Pattern::Dots => (vec![], dots_in(rings, spacing, angle, view)),
+        Pattern::Mountains => (icons(&dots_in(rings, spacing, angle, view), spacing, false), vec![]),
+        Pattern::Trees => (icons(&dots_in(rings, spacing, angle, view), spacing, true), vec![]),
+        Pattern::Solid => (vec![], vec![]),
     };
     if let Some(g) = gap {
         segs = cut_out(segs, g);
@@ -524,4 +564,23 @@ impl Document {
         self.style_of.remove(&other);
         Ok(())
     }
+}
+
+#[test]
+fn zoomed_hatching_keeps_the_visible_dot_lattice_and_limits_work() {
+    let ring = vec![[-140.0, -100.0], [160.0, -100.0], [160.0, 140.0], [-140.0, 140.0]];
+    let bounds = [12.0, 7.0, 81.0, 49.0];
+    let visible = |p: [f32; 2]| p[0] > bounds[0] + 0.01 && p[1] > bounds[1] + 0.01
+        && p[0] < bounds[2] - 0.01 && p[1] < bounds[3] - 0.01;
+    use crate::area::{fill_pattern, fill_pattern_in, Pattern};
+    let expected = fill_pattern(&[ring.clone()], Pattern::Dots, 7.0, 33.0, None).1;
+    let actual = fill_pattern_in(&[ring], Pattern::Dots, 7.0, 33.0, None, Some(bounds)).1;
+    let point_keys = |points: Vec<[f32; 2]>| points.into_iter().filter(|p| visible(*p))
+        .map(|[x, y]| ((x * 100.0).round() as i32, (y * 100.0).round() as i32))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(point_keys(expected), point_keys(actual));
+
+    let large = vec![[-1.0e6, -1.0e6], [1.0e6, -1.0e6], [1.0e6, 1.0e6], [-1.0e6, 1.0e6]];
+    let (_, dots) = fill_pattern_in(&[large], Pattern::Dots, 7.0, 33.0, None, Some(bounds));
+    assert!(dots.len() < 350);
 }

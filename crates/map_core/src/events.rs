@@ -81,6 +81,10 @@ impl Document {
         if self.events.len() == n {
             return Err("没有这个事件".into());
         }
+        if let Some(book) = &mut self.book {
+            let node = crate::world_book::Node::Event(book.current, id);
+            std::sync::Arc::make_mut(book).unlink(node);
+        }
         Ok(())
     }
 

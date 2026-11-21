@@ -52,6 +52,15 @@ impl App {
         }
     }
 
+    pub(crate) fn delete_event_selection(&mut self) {
+        if let Some(id) = self.event_sel {
+            if self.edit("删除事件", |doc| doc.remove_event(id)).is_some() {
+                self.event_sel = None;
+                self.event_text = None;
+            }
+        }
+    }
+
     pub fn events_window(&mut self, ctx: &egui::Context) {
         if !self.events_open {
             return;
@@ -63,7 +72,7 @@ impl App {
         let mut save = false;
         let mut book_open = None;
         let cal = self.doc.calendar.clone();
-        egui::Window::new(crate::i18n::tr("事件时间线")).open(&mut open).default_width(340.0).show(ctx, |ui| {
+        egui::Window::new(crate::i18n::tr("事件时间线")).id(egui::Id::unique("atlas-events")).open(&mut open).default_width(340.0).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button(crate::i18n::tr("+ 在当前年份新建事件")).clicked() {
                     add = true;
@@ -186,9 +195,8 @@ impl App {
         if let Some(e) = change {
             self.edit("修改事件", move |d| d.update_event(e));
         }
-        if let Some(id) = remove {
-            self.edit("删除事件", move |d| d.remove_event(id));
-            self.event_sel = None;
+        if remove.is_some() {
+            self.delete_event_selection();
         }
         if save {
             if let Some(path) = self.file_dialog().add_filter("Markdown", &["md"]).set_file_name(format!("{} 编年表.md", self.doc.meta.name)).save_file() {

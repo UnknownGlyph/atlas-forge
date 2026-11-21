@@ -492,7 +492,7 @@ fn line_near_view(vg: &ViewGeom, path: &LabelPath) -> bool {
 
 /// A text size from a fixed ladder (steps of 8 %) near `size`: names are
 /// laid out at it and scaled the rest of the way.
-fn quantised(size: f32) -> f32 {
+pub(crate) fn quantised(size: f32) -> f32 {
     let step = 1.08f32.ln();
     (size.max(1.0).ln() / step).round().mul_add(step, 0.0).exp()
 }

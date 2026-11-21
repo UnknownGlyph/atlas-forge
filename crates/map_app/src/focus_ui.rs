@@ -297,6 +297,14 @@ impl App {
 
     /// The window of the active local view: its name and years, what
     /// changed, playing its years, leaving it.
+    pub(crate) fn delete_focused_view(&mut self) {
+        if let Some(id) = self.focus {
+            if self.edit("删除局部视图", |doc| doc.remove_focus(id)).is_some() {
+                self.exit_focus();
+            }
+        }
+    }
+
     pub fn focus_window(&mut self, ctx: &egui::Context) {
         let Some(f) = self.active_focus().cloned() else { return };
         let mut open = true;
@@ -305,7 +313,7 @@ impl App {
         let mut leave = false;
         let mut delete = false;
         egui::Window::new(crate::i18n::tr("局部视图"))
-
+            .id(egui::Id::unique("atlas-focus"))
             .open(&mut open)
             .collapsible(true)
             .resizable(false)

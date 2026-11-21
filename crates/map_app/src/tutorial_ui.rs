@@ -169,6 +169,7 @@ impl App {
         let body_height = (ctx.content_rect().height() - 264.0).clamp(240.0, 590.0);
         egui::Window::new(crate::i18n::tr("创作教程"))
             .id(egui::Id::unique("creative-tutorial"))
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .open(&mut open)
             .default_size([1005.0, 760.0])
             .min_size([530.0, 395.0])

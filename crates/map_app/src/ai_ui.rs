@@ -159,10 +159,7 @@ impl App {
         });
     }
 
-    pub fn assistant_window(&mut self, ctx: &egui::Context) {
-        if !self.ai.open {
-            return;
-        }
+    pub(crate) fn poll_assistant(&mut self, ctx: &egui::Context) {
         // what the running task sent
         if let Some(rx) = &self.ai.job {
             loop {
@@ -201,18 +198,44 @@ impl App {
                 }
             }
         }
+    }
+
+    pub(crate) fn assistant_footer(&mut self, ui: &mut egui::Ui) {
+        let height = ui.available_height();
+        let body_height = (height * 0.38).clamp(72.0, 380.0).min((height - 130.0).max(0.0));
+        let open = self.ai.open;
+        let total = if open { body_height + 32.0 } else { 32.0 };
+        egui::Panel::bottom("properties-assistant")
+            .exact_size(total.min(height.max(0.0)))
+            .show(ui, |ui| {
+                if open {
+                    ui.horizontal(|ui| {
+                        ui.strong(crate::i18n::tr("Atlas Forge · AI 助手"));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("×").on_hover_text(crate::i18n::tr("关闭")).clicked() {
+                                self.ai.open = false;
+                            }
+                        });
+                    });
+                    ui.separator();
+                    if body_height > 0.0 {
+                        self.assistant_contents(ui, body_height);
+                    }
+                } else {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(crate::i18n::tr("AI 助手…")).clicked() {
+                            self.ai.open = true;
+                        }
+                    });
+                }
+            });
+    }
+
+    fn assistant_contents(&mut self, ui: &mut egui::Ui, max_height: f32) {
         let (mut run, mut apply, mut drop) = (false, false, false);
         let (mut advise, mut action) = (false, None);
-        let max_height = (ctx.content_rect().height() - 110.0).clamp(140.0, 580.0);
-        let mut open = self.ai.open;
-        egui::Window::new(crate::i18n::tr("Atlas Forge · AI 助手"))
-            .id(egui::Id::unique("atlas-assistant-dock"))
-            .open(&mut open)
-            .anchor(egui::Align2::RIGHT_BOTTOM, [-12.0, -42.0])
-            .default_width(402.0)
-            .max_height(max_height)
-            .show(ctx, |ui| {
-            egui::ScrollArea::vertical().id_salt("assistant-window-content").max_height(max_height).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("assistant-panel-content")
+            .max_height(max_height).show(ui, |ui| {
             let a = &mut self.ai;
             let busy = a.job.is_some();
             ui.horizontal(|ui| {
@@ -233,23 +256,23 @@ impl App {
                     });
                 });
                 let profile = &mut a.connections[a.provider as usize];
-                ui.horizontal(|ui| {
+                ui.vertical(|ui| {
                     ui.label(crate::i18n::tr("API 地址"));
-                    ui.add(egui::TextEdit::singleline(&mut profile.endpoint).desired_width(375.0)
+                    ui.add(egui::TextEdit::singleline(&mut profile.endpoint).desired_width(f32::INFINITY)
                         .hint_text(crate::i18n::tr("https://服务地址/v1")));
                 });
-                ui.horizontal(|ui| {
-                    ui.label(crate::i18n::tr("模型"));
-                    ui.add(egui::TextEdit::singleline(&mut profile.model).desired_width(240.0)
-                        .hint_text(crate::i18n::tr("填写支持工具调用的模型")));
-                    if a.provider.api() != map_ai::Api::Anthropic {
+                ui.label(crate::i18n::tr("模型"));
+                ui.add(egui::TextEdit::singleline(&mut profile.model).desired_width(f32::INFINITY)
+                    .hint_text(crate::i18n::tr("填写支持工具调用的模型")));
+                if a.provider.api() != map_ai::Api::Anthropic {
+                    ui.horizontal(|ui| {
                         ui.label(crate::i18n::tr("思考强度"));
-                        ui.add(egui::TextEdit::singleline(&mut profile.effort).desired_width(60.0).hint_text(crate::i18n::tr("默认")));
-                    }
-                });
-                ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut profile.effort).desired_width(70.0).hint_text(crate::i18n::tr("默认")));
+                    });
+                }
+                ui.vertical(|ui| {
                     ui.label(crate::i18n::tr("密钥"));
-                    ui.add(egui::TextEdit::singleline(&mut profile.key).password(true).desired_width(300.0)
+                    ui.add(egui::TextEdit::singleline(&mut profile.key).password(true).desired_width(f32::INFINITY)
                         .hint_text(crate::trf!("留空读取 {}", a.provider.key_env())))
                         .on_hover_text(crate::i18n::tr("密钥保存在内存中。本机回环服务可以留空。"));
                 });
@@ -299,11 +322,12 @@ impl App {
                             ui.label(format!("· {e}"));
                         }
                         if a.textures.len() == 2 {
+                            let width = ((ui.available_width() - ui.spacing().item_spacing.x) * 0.5).clamp(40.0, 175.0);
                             ui.horizontal(|ui| {
                                 for (t, name) in a.textures.iter().zip(["之前", "之后"]) {
                                     ui.vertical(|ui| {
                                         ui.weak(name);
-                                        ui.image((t.id(), egui::vec2(175.0, 93.0)));
+                                        ui.image((t.id(), egui::vec2(width, width * 93.0 / 175.0)));
                                     });
                                 }
                             });
@@ -319,7 +343,6 @@ impl App {
                     }
                 }
             }
-            });
             });
         if run {
             self.start_assistant();
@@ -363,9 +386,6 @@ impl App {
         if drop {
             self.ai.done = None;
             self.ai.textures.clear();
-        }
-        if !open {
-            self.ai.open = false;
         }
     }
 }

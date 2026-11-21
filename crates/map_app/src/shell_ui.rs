@@ -13,6 +13,8 @@ impl App {
         use crate::i18n::tr;
         if !self.about_open { return; }
         egui::Window::new(tr("关于 Atlas Forge"))
+            .id(egui::Id::unique("about-atlas-forge"))
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .open(&mut self.about_open)
             .collapsible(false)
             .resizable(false)
@@ -73,6 +75,11 @@ impl App {
         if self.prefs == self.prefs_saved || ctx.input(|i| i.pointer.any_down()) {
             return;
         }
+        let language = crate::i18n::Lang::from_code(&self.prefs.language);
+        if language != crate::i18n::get() {
+            crate::i18n::set(language);
+            ctx.request_repaint();
+        }
         self.history.limit = self.prefs.undo_limit;
         if let Some(e) = self.autosave.configure(&self.prefs) {
             self.set_status(crate::trf!("整理自动保存历史失败：{e}"),true);
@@ -123,18 +130,22 @@ impl App {
         if !self.prefs_open { return; }
         let mut open = true;
         let mut pick = None;
+        let mut pick_location = None;
+        let mut pick_test = false;
         let mut jump = None;
         let id = egui::Id::unique("settings-section");
         let mut section = ctx.data(|data| data.get_temp::<u8>(id)).unwrap_or(0);
         egui::Window::new(tr("设置")).id(egui::Id::unique("atlas-settings"))
-            .open(&mut open).collapsible(false).default_width(530.0)
+            .open(&mut open).collapsible(false).default_size([720.0, 460.0])
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
+                egui::Panel::left("settings-navigation").exact_size(142.0).show(ui, |ui| {
                     ui.selectable_value(&mut section, 0, tr("界面与启动"));
                     ui.selectable_value(&mut section, 1, tr("保存与云同步"));
+                    ui.selectable_value(&mut section, 3, tr("文件与缓存"));
                     ui.selectable_value(&mut section, 2, tr("工作流程"));
                 });
-                ui.separator();
+                egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 150.0).max(180.0)).show(ui, |ui| {
                 let p = &mut self.prefs;
                 match section {
                     1 => {
@@ -178,6 +189,38 @@ impl App {
                         }
                         if ui.button(tr("保存点与自动保存…")).clicked() { jump=Some(Act::Checkpoints); }
                     }
+                    3 => {
+                        for (label, slot, cache) in [
+                            ("默认保存目录", &mut p.save_directory, false),
+                            ("恢复与缓存目录", &mut p.cache_directory, true),
+                        ] {
+                            ui.group(|ui| {
+                                ui.strong(tr(label));
+                                if let Some(path) = slot.as_ref() {
+                                    ui.label(path.display().to_string());
+                                } else {
+                                    ui.weak(tr("系统默认位置"));
+                                }
+                                ui.horizontal(|ui| {
+                                    if ui.button(tr("选择目录…")).clicked() { pick_location = Some(cache); }
+                                    if slot.is_some() && ui.button(tr("使用默认目录")).clicked() { *slot = None; }
+                                });
+                            });
+                        }
+                        ui.weak(tr("恢复文件、未命名工程版本和崩溃报告的目录在下次启动时生效。"));
+                        ui.group(|ui| {
+                            ui.strong(tr("默认测试工程"));
+                            if let Some(path) = &p.test_project {
+                                ui.label(path.display().to_string());
+                            } else {
+                                ui.weak(tr("伊瑟尔三国工程"));
+                            }
+                            ui.horizontal(|ui| {
+                                if ui.button(tr("选择工程…")).clicked() { pick_test = true; }
+                                if p.test_project.is_some() && ui.button(tr("恢复默认")).clicked() { p.test_project = None; }
+                            });
+                        });
+                    }
                     2 => {
                         ui.horizontal(|ui| {
                             ui.label(tr("撤销步数上限"));
@@ -206,10 +249,6 @@ impl App {
                             });
                             if lang.code()!=p.language {
                                 p.language=lang.code().to_string();
-                                crate::i18n::set(lang);
-                                crate::install_fonts(ui.ctx(),self.font.clone(),lang);
-                                self.fonts_loaded.clear();
-                                self.fonts_missing.clear();
                             }
                         });
                         ui.horizontal(|ui| {
@@ -228,6 +267,7 @@ impl App {
                     }
                     ui.weak(crate::trf!("保存在 {}",self.prefs_path.display()));
                 });
+                });
             });
         ctx.data_mut(|data|data.insert_temp(id,section));
         self.prefs_open=open;
@@ -237,6 +277,19 @@ impl App {
                 .or_else(||(provider==Provider::OneDrive).then(map_io::cloud::suggested_onedrive).flatten());
             if let Some(directory)=directory {dialog=dialog.set_directory(directory);}
             if let Some(folder)=dialog.pick_folder() {*self.prefs.cloud_backup.folder_mut(provider)=Some(folder);}
+        }
+        if let Some(cache) = pick_location {
+            let current = if cache { &self.prefs.cache_directory } else { &self.prefs.save_directory };
+            let mut dialog = self.file_dialog().set_title(tr("选择目录…"));
+            if let Some(path) = current { dialog = dialog.set_directory(path); }
+            if let Some(path) = dialog.pick_folder() {
+                if cache { self.prefs.cache_directory = Some(path); } else { self.prefs.save_directory = Some(path); }
+            }
+        }
+        if pick_test {
+            if let Some(path) = self.file_dialog().add_filter("Atlas", &["atlas"]).pick_file() {
+                self.prefs.test_project = Some(path);
+            }
         }
         if let Some(action)=jump {
             self.prefs_open=false;

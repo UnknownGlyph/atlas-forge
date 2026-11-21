@@ -30,7 +30,14 @@ pub fn to_bytes(doc: &Document) -> Result<Vec<u8>, String> {
     let requires_six = |d: &Document| d.paper.is_some() || d.diplomacy.is_some();
     let requires_seven = |d: &Document| d.star_chart.as_ref().is_some_and(|s| s.requires_extended_format());
     let needs_eight = |d: &Document| d.environment.is_some() || d.visualization.is_some();
-    let version = if needs_eight(&stored) || stored.book.as_ref().is_some_and(|book| {
+    let needs_nine = |d: &Document| {
+        use map_core::{area::Pattern, styles::Look};
+        d.areas.values().any(|area| area.pattern == Pattern::Solid)
+            || d.styles.iter().any(|style| matches!(&style.look, Look::Area(area) if area.pattern == Pattern::Solid))
+    };
+    let version = if needs_nine(&stored) || stored.book.as_ref().is_some_and(|book| {
+        book.boards.values().filter_map(|b| b.doc.as_deref()).any(needs_nine)
+    }) { 9 } else if needs_eight(&stored) || stored.book.as_ref().is_some_and(|book| {
         book.worldview.is_some() || book.boards.values().filter_map(|b| b.doc.as_deref()).any(needs_eight)
     }) { 8 } else if requires_seven(&stored) || stored.book.as_ref().is_some_and(|b| {
         b.boards.values().filter_map(|x| x.doc.as_deref()).any(requires_seven)
@@ -255,4 +262,21 @@ mod tests {
         doc.home_view = Some(HomeView { central_meridian: f64::NAN, ..view });
         assert!(from_bytes(&to_bytes(&doc).unwrap()).is_err());
     }
+}
+
+
+/// The local authoring fixture used for desktop performance testing.
+pub fn ithaer_test_project() -> Option<std::path::PathBuf> {
+    let name = "伊瑟尔星2897_远洋洲与伊瑟尔三国.atlas";
+    let path = std::env::current_dir().ok().into_iter()
+        .chain(std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)));
+    for directory in path {
+        for ancestor in directory.ancestors() {
+            let candidate = ancestor.join("worlds").join("ithaer-2897").join("revised").join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }

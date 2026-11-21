@@ -33,21 +33,33 @@ impl App {
         let ink = Color32::from_gray(30);
         let paper = Color32::from_rgba_unmultiplied(255, 255, 255, 200);
         let base = pos2(r.left() + 16.0, r.bottom() - 18.0);
-        // a box behind, the bar in four black and white parts, the length
-        let label = if len_km >= 1.0 { format!("{len_km:.0} km") } else { format!("{len_km} km") };
-        let back = Rect::from_min_max(base + vec2(-8.0, -30.0), base + vec2(len_px + 48.0, 8.0));
+        let label = if len_km >= 1.0 { format!("{len_km:.0} km") } else { format!("{:.0} m", len_km * 1000.0) };
+        let font = FontId::proportional(11.0);
+        let left = painter.layout_no_wrap("0".into(), font.clone(), ink);
+        let right = painter.layout_no_wrap(label, font, ink);
+        let center_only = (r.width() as f64 * km_per_px > 8000.0).then(|| painter.layout_no_wrap(
+            crate::i18n::tr("图中心").into(), FontId::proportional(9.5), Color32::from_gray(90),
+        ));
+        let body_w = len_px.max(left.size().x + right.size().x + 12.0)
+            .max(center_only.as_ref().map_or(0.0, |g| g.size().x));
+        let note_h = center_only.as_ref().map_or(0.0, |g| g.size().y + 3.0);
+        let label_h = left.size().y.max(right.size().y);
+        let box_height = 8.0 + label_h + 9.0 + note_h;
+        let back = Rect::from_min_size(base + vec2(-8.0, -box_height + 8.0), vec2(body_w + 16.0, box_height));
         painter.rect_filled(back, 4.0, paper);
+        let label_area = back.left_top() + vec2(8.0, 4.0);
+        painter.galley(label_area, left, Color32::WHITE);
+        painter.galley(label_area + vec2(body_w - right.size().x, 0.0), right, Color32::WHITE);
+        let bar = pos2(back.center().x - len_px * 0.5, label_area.y + label_h + 3.0);
         for i in 0..4 {
-            let x0 = base.x + len_px * i as f32 / 4.0;
-            let seg = Rect::from_min_max(pos2(x0, base.y - 5.0), pos2(x0 + len_px / 4.0, base.y));
+            let x = bar.x + len_px * i as f32 / 4.0;
+            let seg = Rect::from_min_size(pos2(x, bar.y), vec2(len_px / 4.0, 5.0));
             painter.rect_filled(seg, 0.0, if i % 2 == 0 { ink } else { Color32::WHITE });
         }
-        painter.rect_stroke(Rect::from_min_max(pos2(base.x, base.y - 5.0), pos2(base.x + len_px, base.y)), 0.0, Stroke::new(1.0, ink), egui::StrokeKind::Middle);
-        painter.text(base + vec2(0.0, -8.0), Align2::LEFT_BOTTOM, "0", FontId::proportional(11.0), ink);
-        painter.text(base + vec2(len_px, -8.0), Align2::CENTER_BOTTOM, label, FontId::proportional(11.0), ink);
-        // on a map of much of the world the scale holds near the middle only
-        if r.width() as f64 * km_per_px > 8000.0 {
-            painter.text(base + vec2(len_px + 40.0, -2.0), Align2::RIGHT_BOTTOM, crate::i18n::tr("图中心"), FontId::proportional(9.5), Color32::from_gray(90));
+        painter.rect_stroke(Rect::from_min_size(bar, vec2(len_px, 5.0)), 0.0, Stroke::new(1.0, ink), egui::StrokeKind::Middle);
+        if let Some(note) = center_only {
+            let note_pos = pos2(back.center().x - note.size().x / 2.0, bar.y + 7.0);
+            painter.galley(note_pos, note, Color32::WHITE);
         }
         // north: from the middle of the view towards the pole
         let north = LonLat::new(here.lon, (here.lat + 0.5).min(89.9));
@@ -55,7 +67,7 @@ impl App {
             (Some(a), Some(b)) if (b - a).length() > 1e-3 => (b - a).normalized(),
             _ => Vec2::new(0.0, -1.0),
         };
-        let c = pos2(back.right() + 26.0, base.y - 12.0);
+        let c = pos2(back.right() + 27.0, back.center().y);
         painter.circle_filled(c, 15.0, paper);
         let side = Vec2::new(-dir.y, dir.x);
         let tip = c + dir * 11.0;

@@ -44,6 +44,21 @@ impl App {
         let Some(ll) = ll else {
             return self.set_status(crate::i18n::tr("画笔超出了地图范围，请在地图内涂抹"), true);
         };
+        if self.brush_color_mode {
+            let color = self.brush_color.to_srgba_unmultiplied();
+            if let Some(id) = self.edit("绘制彩色笔触", |doc| {
+                let id = map_core::doc::LineId(doc.topo.alloc());
+                let mut area = map_core::area::AreaMark::new(ll);
+                area.color = color;
+                area.pattern = map_core::area::Pattern::Solid;
+                area.from = doc.year;
+                doc.areas.insert(id, area);
+                Ok(id)
+            }) {
+                self.selected_area = Some(id);
+            }
+            return;
+        }
         self.clear_draft();
         self.draft_snap = vec![false; ll.len()];
         self.draft = ll;
@@ -53,7 +68,7 @@ impl App {
 
     /// The stroke being painted and the brush under the cursor.
     pub fn draw_brush(&self, painter: &egui::Painter, vg: &ViewGeom, hover: Option<LonLat>) {
-        let fill = self.preview_fill();
+        let fill = if self.brush_color_mode { self.brush_color } else { self.preview_fill() };
         let r = self.brush_px;
         for w in self.brush_stroke.windows(2) {
             painter.line_segment([w[0], w[1]], Stroke::new(r * 2.0, fill));

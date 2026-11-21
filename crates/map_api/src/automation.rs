@@ -40,7 +40,54 @@ pub struct BatchReport {
     pub failed_at: Option<usize>,
 }
 
+/// State of the draft immediately after a numbered command.
+pub struct VisualStep {
+    pub number: usize,
+    pub operation: String,
+    pub document: map_core::Document,
+}
+
+pub fn run_visual_steps(session: &mut Session, requests: &[Value]) -> (BatchReport, Vec<VisualStep>) {
+    let mut steps = vec![VisualStep {
+        number: 0,
+        operation: String::new(),
+        document: session.doc().clone(),
+    }];
+    let report = run_batch_observed(session, requests, |index, request, world| {
+        steps.push(VisualStep {
+            number: index,
+            operation: request["op"].as_str().unwrap_or_default().to_owned(),
+            document: world.clone(),
+        });
+    });
+    (report, steps)
+}
+
+impl VisualStep {
+    pub fn preview(&self, width: u32, height: u32, font: Option<&[u8]>) -> Result<Vec<u8>, String> {
+        use map_io::scene::{build_scene, ExportOptions};
+        let options = ExportOptions {
+            width,
+            height,
+            projection: self.document.home_view.map_or(map_core::projection::Projection::EqualEarth, |view| view.projection),
+            lon0: self.document.home_view.map_or(0.0, |view| view.central_meridian),
+            ..ExportOptions::default()
+        };
+        let theme = map_core::theme::evaluate(&self.document);
+        let scene = build_scene(&self.document, &theme, &options);
+        map_io::png::render(&scene, font)?.encode_png().map_err(|error| error.to_string())
+    }
+}
+
 pub fn run_batch(session: &mut Session, requests: &[Value]) -> BatchReport {
+    run_batch_observed(session, requests, |_, _, _| {})
+}
+
+fn run_batch_observed(
+    session: &mut Session,
+    requests: &[Value],
+    mut observe: impl FnMut(usize, &Value, &map_core::Document),
+) -> BatchReport {
     let original_draft = session.draft.clone();
     let original_log = session.log.clone();
     let mut results = Vec::with_capacity(requests.len());
@@ -64,6 +111,7 @@ pub fn run_batch(session: &mut Session, requests: &[Value]) -> BatchReport {
                 failed_at: Some(index + 1),
             };
         }
+        observe(index + 1, req, session.doc());
     }
     BatchReport {
         ok: true,

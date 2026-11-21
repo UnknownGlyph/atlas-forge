@@ -25,7 +25,7 @@ A world from the new-world wizard (seed 7), exported straight to PNG: hill shadi
 
 Atlas Forge 把陆地、国家、河流与城市画在**同一张共享边界的矢量拓扑**上：两国之间的边界只有一条，改一处，两边一起变。边界、海岸与归属**逐年变化**——在某一年做的修改从那一年起生效，更早的年份保持原样。画好的世界可以直接导出成**成品地图**。二维多投影地图与三维地球共用同一份数据，**完全离线**；可选的 **AI 助手**能在一份草稿上与你共同创作。
 
-> **v0.2.1-alpha** 提供 Windows 便携版。专业界面和创作工作室共用同一工程，新增世界观设定、环境生成、数据可视化、云同步备份和时间视频。[创作工作区](docs/CREATION_WORKSPACES.md)
+> **v0.2.2-alpha** 提供 Windows 便携版。可在同一窗口切换专业界面与羊皮纸创作工作室。新增脚本步骤回放、创作模板和地图涂色，减少放大地图时的屏外渲染开销。[创作工作区](docs/CREATION_WORKSPACES.md)
 
 ### 功能
 
@@ -46,7 +46,7 @@ Atlas Forge 把陆地、国家、河流与城市画在**同一张共享边界的
 
 ### 下载与运行
 
-1. 从 [Releases](https://github.com/UnknownGlyph/atlas-forge/releases) 下载 `AtlasForge-0.2.1-alpha-windows-x64.zip`，解压后运行 `atlas.exe`，无需安装。
+1. 从 [Releases](https://github.com/UnknownGlyph/atlas-forge/releases) 下载 `AtlasForge-0.2.2-alpha-windows-x64.zip`，解压后运行 `atlas.exe`，无需安装。
 2. 需要 Windows 10/11 x64，以及支持 DirectX 12、Vulkan 或 OpenGL 的显卡。
 3. 检查程序：`atlas.exe --self-test <文件夹>` 会生成世界、划分国家、修路、保存读回并导出 PNG/SVG/PDF，把报告写到该文件夹的 `自检报告.txt`。
 4. 打开工程：把 `.atlas` 文件拖到 `atlas.exe` 上，或 `atlas.exe 世界.atlas`。压缩包里带一个示例世界。
@@ -117,7 +117,7 @@ assets/fonts       随附字体 Noto Sans SC（SIL OFL 1.1）
 
 Atlas Forge draws land, countries, rivers and cities on **one shared-border vector topology**: there is one border between two countries, and moving it changes both. Borders, coasts and ownership **change year by year**: an edit made in a year takes effect from that year on, and earlier years stay as they were. A finished world exports straight to **finished maps**. The flat map, in several projections, and the 3D globe share the same data, and everything works **offline**; an optional **AI assistant** can co-create with you on a draft.
 
-> **v0.2.1-alpha** is available as a portable Windows build, with switchable workspaces, linked worldbuilding, environment generation, data visualization, cloud-folder backups, and timeline video.
+> **v0.2.2-alpha** is available as a portable Windows build, with a single-window parchment studio, script replay, worldbuilding starters, colored brush strokes, and faster map zooming.
 
 ### Features
 
@@ -131,7 +131,7 @@ Atlas Forge draws land, countries, rivers and cities on **one shared-border vect
 
 ### Download and run
 
-1. Download `AtlasForge-0.2.1-alpha-windows-x64.zip` from [Releases](https://github.com/UnknownGlyph/atlas-forge/releases), unzip it and run `atlas.exe`; nothing is installed.
+1. Download `AtlasForge-0.2.2-alpha-windows-x64.zip` from [Releases](https://github.com/UnknownGlyph/atlas-forge/releases), unzip it and run `atlas.exe`; nothing is installed.
 2. It needs Windows 10/11 x64 and a graphics card with DirectX 12, Vulkan or OpenGL.
 3. Checking the program: `atlas.exe --self-test <folder>` makes a world, partitions a country, builds roads, saves and reads back, exports PNG/SVG/PDF, and writes its report to `自检报告.txt` in that folder.
 4. Opening a project: drop a `.atlas` file on `atlas.exe`, or run `atlas.exe world.atlas`. A sample world comes in the zip.

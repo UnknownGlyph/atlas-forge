@@ -193,7 +193,7 @@ fn color_edit(ui: &mut egui::Ui, c: &mut [u8; 4]) -> bool {
 
 impl App {
     pub fn inspector(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (t, n) in [(Tab::Countries, "国家"), (Tab::Data, "数据表"), (Tab::Fields, "字段"), (Tab::Theme, "专题图"), (Tab::Style, "样式"), (Tab::Underlay, "参考图"), (Tab::Features, "图层")] {
                 ui.selectable_value(&mut self.tab, t, crate::i18n::tr(n));
             }
@@ -220,7 +220,7 @@ impl App {
         use map_core::doc::POLITICAL;
         let cur = self.doc.active_layer;
         let mut pick = None;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(crate::i18n::tr("分区层")).strong());
             let label = |d: &map_core::Document, l| {
                 let mut n = d.layer_name(l);

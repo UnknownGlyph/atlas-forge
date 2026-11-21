@@ -96,6 +96,13 @@ pub fn set(l: Lang) {
     LANG.store(l as u8, Ordering::Relaxed);
 }
 
+pub(crate) fn warm() {
+    let _ = catalogue();
+    for language in Lang::ALL {
+        let _ = messages(language);
+    }
+}
+
 pub fn get() -> Lang {
     Lang::ALL[usize::from(LANG.load(Ordering::Relaxed))]
 }
@@ -381,6 +388,10 @@ pub const EN: &[(&str, &str)] = &[
     ("生成地形、水文、气候、生态及自定义资源图层。", "Generate terrain, drainage, climate, ecosystems, and custom resource layers."),
     ("数据可视化…", "Data visualization…"),
     ("从地图、世界观和表格数据创建曲线、关系网络、剖面和专题图。", "Create curves, relationship networks, profiles, and thematic maps from atlas data."),
+    ("打开伊瑟尔三国测试工程", "Open Ithaer test project"),
+    ("打开本地伊瑟尔三国工程的测试副本。", "Open a test copy of the local Ithaer project."),
+    ("脚本可视步骤", "Script replay"),
+    ("在草稿中执行脚本并播放步骤。", "Run a script on a draft and play its steps."),
     ("时间播放与视频", "Timeline playback and video"),
     ("切换创作工作室", "Switch to Creative Studio"),
     ("在专业界面与创作工作室窗口之间切换，继续编辑同一份工程。", "Switch windows between the professional editor and the Creative Studio while editing the same project."),

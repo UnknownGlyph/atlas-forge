@@ -16,6 +16,8 @@ atlas-script --blank --request '{"op":"automation.capabilities"}'
 
 `--file` 接受 JSON 请求数组，或带 `schema: 1` 和 `requests` 的 JSON 对象。通过 `--out` 保存时，也可以把 JSON Lines 整批送到 stdin，或用 `--request` 运行一步。整批成功后才另存目标工程。失败回滚草稿，并返回非零退出码、`failed_at`（从 1 开始）和已经得到的 `results`。批次内的 `preview.render` 和 `draft.save` 需要移到成功之后单独调用。输出路径由调用方提供，保存采用原子替换，原始工程受到覆盖保护。
 
+为脚本增加 `--steps NEW_DIR` 可保存运行前和每条成功指令后的 PNG。目录中的 `steps.json` 按执行顺序记录图片、操作名称与失败位置。例如 `atlas-script world.atlas --file plan.json --out final.atlas --steps replay`。
+
 `plan.json` 示例：
 
 ```json

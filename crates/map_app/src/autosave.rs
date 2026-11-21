@@ -23,6 +23,7 @@ fn cloud_copies(config:&cloud::Config,name:&str,bytes:&[u8])->[Option<Result<Pat
 
 pub struct Autosave {
     recovery: Option<Arc<Recovery>>,
+    recovery_directory: PathBuf,
     job: Option<(u64, JoinHandle<Snapshot>)>,
     last: Instant,
     /// History generation captured by the last snapshot.
@@ -46,17 +47,20 @@ pub struct Autosave {
 }
 
 impl Autosave {
-    pub fn start() -> Self {
-        let recovery = Recovery::start(&map_io::recovery::default_dir())
+    pub fn start(prefs: &map_io::prefs::Prefs) -> Self {
+        let recovery_directory = prefs.recovery_directory();
+        let recovery = Recovery::start(&recovery_directory)
             .ok()
             .map(Arc::new);
-        crate::crash::install(recovery.clone());
+        crate::crash::install(recovery.clone(), prefs.crash_directory());
         let offers = recovery.as_ref().map(|r| r.orphans()).unwrap_or_default();
         let env: Option<u64> = std::env::var("ATLAS_AUTOSAVE_SECS")
             .ok()
             .and_then(|s| s.parse().ok());
         Self {
+            store: Store::draft_in(&recovery_directory),
             recovery,
+            recovery_directory,
             job: None,
             last: Instant::now(),
             saved_gen: None,
@@ -70,7 +74,6 @@ impl Autosave {
             cloud_result: [None,None],
             steps: 10,
             keep: 20,
-            store: Store::draft(),
             revision: 0,
             offers,
         }
@@ -147,7 +150,7 @@ impl Autosave {
 
     pub fn open_project(&mut self, path: Option<&std::path::Path>, generation: u64) {
         self.mark_clean(generation);
-        self.store = path.map_or_else(Store::draft, Store::for_project);
+        self.store = path.map_or_else(|| Store::draft_in(&self.recovery_directory), Store::for_project);
         self.cloud_result = [None,None];
         self.revision += 1;
     }
@@ -176,8 +179,8 @@ impl Autosave {
             .original
             .as_deref()
             .map(Store::for_project)
-            .or_else(|| info.draft_history.as_deref().and_then(Store::from_draft))
-            .unwrap_or_else(Store::draft);
+            .or_else(|| info.draft_history.as_deref().and_then(|key| Store::from_draft_in(&self.recovery_directory, key)))
+            .unwrap_or_else(|| Store::draft_in(&self.recovery_directory));
         self.revision += 1;
         self.mark_unsaved();
         let rec = self.recovery.as_ref().ok_or("恢复目录不可用")?;

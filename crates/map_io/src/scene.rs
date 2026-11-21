@@ -629,7 +629,7 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
                     rings.extend(part.iter().map(|x| densify(x, true, 1.0).iter().map(|p| m.px(*p)).collect::<Vec<P2>>()));
                 }
             }
-            if a.tint && !rings.is_empty() {
+            if a.fills() && !rings.is_empty() {
                 to.polys.push(ScenePoly { fill: a.tint_color(), rings: rings.clone() });
             }
             let f: Vec<Vec<[f32; 2]>> = rings.iter().map(|r| r.iter().map(|p| [p[0] as f32, p[1] as f32]).collect()).collect();
@@ -640,6 +640,7 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
             for p in dots {
                 to.fills.push((dot_poly(p, map_core::area::DOT_RADIUS * k), a.color));
             }
+            if a.pattern == map_core::area::Pattern::Solid { continue; }
             // the outlines along the rings themselves, broken at the seam (not along the cut)
             let width = map_core::area::OUTLINE_WIDTH * k;
             for r in &all {

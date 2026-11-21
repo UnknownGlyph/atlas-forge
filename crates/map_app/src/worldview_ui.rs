@@ -126,6 +126,7 @@ impl WorldviewUi {
 }
 
 enum Action {
+    Starter(map_core::worldview::Starter),
     Save,
     Remove,
     Associate(Id),
@@ -162,7 +163,7 @@ impl App {
                 let current = self.current_book_node();
                 let empty = Catalog::default();
                 let catalog = Catalog::get(&self.doc).unwrap_or(&empty);
-                let mut action = None;
+                let mut action = starter_picker(ui);
                 ui.columns(2, |columns| {
                     index(
                         &mut columns[0],
@@ -176,7 +177,7 @@ impl App {
                         catalog,
                         &self.doc,
                         current,
-                    );
+                    ).or(action.take());
                 });
                 self.apply_worldview(action);
             });
@@ -186,11 +187,13 @@ impl App {
     pub(crate) fn studio_worldview(&mut self, ui: &mut egui::Ui) {
         let empty = Catalog::default();
         let catalog = Catalog::get(&self.doc).unwrap_or(&empty);
+        let mut starter = None;
         egui::Panel::left("studio-worldview-index")
             .size_range(185.0..=350.0)
             .default_size(250.0)
             .show(ui, |ui| {
                 ui.heading(tr("世界观设定"));
+                starter = starter_picker(ui);
                 modes(ui, &mut self.worldview_ui, true);
                 ui.separator();
                 index(ui, &mut self.worldview_ui, catalog, self.doc.year);
@@ -201,12 +204,32 @@ impl App {
             ui.heading(self.worldview_ui.category.name());
             action = detail(ui, &mut self.worldview_ui, catalog, &self.doc, current);
         });
-        self.apply_worldview(action);
+        self.apply_worldview(action.or(starter));
+    }
+
+    pub(crate) fn delete_worldview_selection(&mut self) {
+        if self.worldview_ui.id.is_some() {
+            self.apply_worldview(Some(Action::Remove));
+        }
     }
 
     fn apply_worldview(&mut self, action: Option<Action>) {
         let Some(action) = action else { return };
         match action {
+            Action::Starter(starter) => {
+                if let Some(schema) = self.edit("安装世界观模板", |doc| {
+                    let catalog = Catalog::edit(doc);
+                    let schema = starter.install(catalog)?;
+                    catalog.validate()?;
+                    Ok(schema)
+                }) {
+                    self.worldview_ui.category = Category::Types;
+                    self.worldview_ui.id = Some(schema);
+                    self.worldview_ui.draft = Catalog::get(&self.doc)
+                        .and_then(|catalog| catalog.schemas.get(&schema))
+                        .map(|schema| Draft::Schema(schema.as_ref().clone()));
+                }
+            }
             Action::Save | Action::Remove => {
                 let Some(draft) = self.worldview_ui.draft.clone() else {
                     return;
@@ -452,6 +475,19 @@ fn index(ui: &mut egui::Ui, state: &mut WorldviewUi, catalog: &Catalog, year: Op
                 }
             }
         });
+}
+
+fn starter_picker(ui: &mut egui::Ui) -> Option<Action> {
+    let mut result = None;
+    ui.menu_button(tr("从内置模板开始"), |ui| {
+        for starter in map_core::worldview::Starter::ALL {
+            if ui.button(tr(starter.name())).clicked() {
+                result = Some(Action::Starter(starter));
+                ui.close();
+            }
+        }
+    });
+    result
 }
 
 fn detail(

@@ -189,6 +189,11 @@ impl App {
                     crate::i18n::tr("按住拖动把陆地涂成水域（橡皮），松开即应用；单击点一笔；[ ] 调整大小。")
                 });
                 if self.brush_paint {
+                    ui.checkbox(&mut self.brush_color_mode, crate::i18n::tr("涂色模式"))
+                        .on_hover_text(crate::i18n::tr("笔触作为可编辑的彩色区域存入当前要素图层。"));
+                    if self.brush_color_mode {
+                        ui.color_edit_button_srgba(&mut self.brush_color);
+                    }
                     ui.spacing_mut().slider_width = 90.0;
                     ui.add(egui::Slider::new(&mut self.brush_px, 3.0..=150.0).suffix(" px")).on_hover_text(crate::i18n::tr("画笔半径；[ 与 ] 调整"));
                 }

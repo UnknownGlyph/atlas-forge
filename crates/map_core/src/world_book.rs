@@ -548,6 +548,74 @@ impl WorldBook {
     pub fn descendants(&self, root: BookId) -> Vec<BookId> {
         self.descendants_except(root, None)
     }
+    /// Drop relationships, anchors and metadata belonging to the removed object.
+    pub fn unlink(&mut self, node: Node) {
+        let matches = |item: Node| {
+            item == node || matches!(node, Node::Map(id) if item.board() == Some(id))
+        };
+        remove_matching(&mut self.links, |_, link| matches(link.from) || matches(link.to));
+        remove_matching(&mut self.anchors, |node, _| matches(*node));
+        match node {
+            Node::Map(id) => {
+                remove_matching(&mut self.places, |_, place| place.board == id);
+                remove_matching(&mut self.event_meta, |(board, _), _| *board == id);
+            }
+            Node::Event(board, event) => { self.event_meta.remove(&(board, event)); }
+            _ => {}
+        }
+    }
+
+    /// Delete a library item and its links without deleting linked objects.
+    pub fn remove_item(doc: &mut Document, node: Node) -> Result<(), String> {
+        let book = doc.book.as_deref().ok_or("工程没有资料库")?;
+        if book.label(doc, node).is_none() {
+            return Err("资料项目已不存在".into());
+        }
+        if matches!(node, Node::Map(id) if id != ROOT && book.current == id) {
+            Self::switch(doc, ROOT, None)?;
+        }
+        let current = Self::current(doc);
+        if let Node::Event(board, event) = node {
+            if board == current {
+                doc.remove_event(event)?;
+            } else {
+                let map = Self::edit(doc).boards.get_mut(&board)
+                    .and_then(|entry| entry.doc.as_mut()).ok_or("找不到画板")?;
+                Arc::make_mut(map).remove_event(event)?;
+            }
+        }
+        if let Node::Asset(id) = node {
+            clear_model(doc, id);
+        }
+        let archive = Self::edit(doc);
+        match node {
+            Node::Article(id) => { archive.articles.remove(&id); }
+            Node::Map(id) if id != ROOT => { archive.boards.remove(&id); }
+            Node::Event(_, _) => {}
+            Node::Place(_, id) => { archive.places.remove(&id); }
+            Node::Asset(id) => {
+                archive.assets.remove(&id);
+                let referencing: Vec<_> = archive.articles.iter()
+                    .filter_map(|(key, a)| a.attachments.contains(&id).then_some(*key)).collect();
+                for key in referencing {
+                    Arc::make_mut(archive.articles.get_mut(&key).unwrap()).attachments.remove(&id);
+                }
+                let boards: Vec<_> = archive.boards.keys().copied().collect();
+                for board in boards {
+                    let entry = archive.boards.get_mut(&board).unwrap();
+                    if let Some(map) = &mut entry.doc {
+                        if map.star_chart.is_some() {
+                            clear_model(Arc::make_mut(map), id);
+                        }
+                    }
+                }
+            }
+            _ => return Err("请在此项目的编辑面板中删除。".into()),
+        }
+        archive.unlink(node);
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if !self.boards.contains_key(&ROOT) || !self.boards.contains_key(&self.current) {
             return Err("资料工程缺少活动画板或顶层地图".into());
@@ -578,5 +646,31 @@ impl WorldBook {
             return Err("资料工程标识序列无效".into());
         }
         Ok(())
+    }
+}
+
+
+fn clear_model(doc: &mut Document, asset: BookId) {
+    let Some(chart) = &mut doc.star_chart else { return };
+    let chart = Arc::make_mut(chart);
+    let clear = |model: &mut Option<BookId>| {
+        if *model == Some(asset) {
+            *model = None;
+        }
+    };
+    clear(&mut chart.star.model);
+    clear(&mut chart.home.model);
+    for body in &mut chart.planets { clear(&mut body.model); }
+    clear(&mut chart.moon.model);
+    for moon in &mut chart.satellites { clear(&mut moon.model); }
+    for star in &mut chart.companions { clear(&mut star.star.model); }
+    for star in &mut chart.galaxy.stars { clear(&mut star.model); }
+}
+
+
+fn remove_matching<K: Clone + Ord, V: Clone>(items: &mut OrdMap<K, V>, mut matches: impl FnMut(&K, &V) -> bool) {
+    let removed: Vec<_> = items.iter().filter(|(key, value)| matches(key, value)).map(|(key, _)| key.clone()).collect();
+    for key in removed {
+        items.remove(&key);
     }
 }

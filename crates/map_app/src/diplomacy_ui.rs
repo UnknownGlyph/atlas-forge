@@ -28,6 +28,12 @@ fn date(ui: &mut egui::Ui, value: &mut Option<i32>, label: &str, hint: i32) {
 }
 
 impl App {
+    pub(crate) fn request_diplomacy_delete(&mut self) {
+        if let Some((Some(id), _)) = &self.diplomacy_ui.edit {
+            self.diplomacy_ui.delete = Some(*id);
+        }
+    }
+
     pub(crate) fn diplomacy_window(&mut self, ctx: &egui::Context) {
         if !self.diplomacy_ui.open {
             return;
@@ -39,6 +45,7 @@ impl App {
         let mut remove = None;
         let mut related_event = None;
         egui::Window::new(crate::i18n::tr("外交关系"))
+            .id(egui::Id::unique("atlas-diplomacy"))
             .open(&mut open)
             .default_width(585.0)
             .scroll(true)

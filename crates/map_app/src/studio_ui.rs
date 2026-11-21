@@ -30,6 +30,7 @@ struct Navigation {
     fit: bool,
     touched: bool,
     layout: Layout,
+    stars: bool,
 }
 
 impl Navigation {
@@ -39,9 +40,10 @@ impl Navigation {
             globe: app.globe,
             spin: Default::default(),
             rect: app.last_flat_rect,
-            fit: true,
-            touched: false,
+            fit: app.fit_pending,
+            touched: app.nav_touched,
             layout: app.layout,
+            stars: false,
         }
     }
     fn swap(&mut self, app: &mut App) {
@@ -53,20 +55,24 @@ impl Navigation {
         swap(&mut self.fit, &mut app.fit_pending);
         swap(&mut self.touched, &mut app.nav_touched);
         swap(&mut self.layout, &mut app.layout);
+        swap(&mut self.stars, &mut app.star_map.open);
     }
 }
 
 #[derive(Default)]
 pub(crate) struct Studio {
-    pub open: bool,
     pub foreground: bool,
-    raise: bool,
+    switch_pending: bool,
+    professional_visuals: Option<egui::Visuals>,
     page: Page,
     navigation: Option<Navigation>,
     inspector: bool,
 }
 
 impl Studio {
+    pub(crate) fn worldview_visible(&self) -> bool { self.foreground && self.page == Page::Worldview }
+    pub(crate) fn visualizations_visible(&self) -> bool { self.foreground && self.page == Page::Visualizations }
+    pub(crate) fn environment_visible(&self) -> bool { self.foreground && self.page == Page::Environment }
     pub(crate) fn show_worldview(&mut self) {
         self.page = Page::Worldview;
     }
@@ -81,23 +87,60 @@ impl Studio {
     }
 }
 
-fn viewport() -> egui::ViewportId {
-    egui::ViewportId::from_hash_of("atlas-studio-window")
+fn parchment_visuals() -> egui::Visuals {
+    let mut v = egui::Visuals::light();
+    let ink = Color32::from_rgb(57, 41, 26);
+    let line = Color32::from_rgb(173, 139, 94);
+    v.override_text_color = Some(ink);
+    v.panel_fill = Color32::from_rgb(243, 231, 204);
+    v.window_fill = Color32::from_rgb(249, 239, 216);
+    v.extreme_bg_color = Color32::from_rgb(252, 244, 224);
+    v.faint_bg_color = Color32::from_rgb(235, 218, 183);
+    v.window_stroke = egui::Stroke::new(1.0, line);
+    v.hyperlink_color = Color32::from_rgb(117, 70, 35);
+    v.selection.bg_fill = Color32::from_rgb(221, 188, 132);
+    v.selection.stroke = egui::Stroke::new(1.0, ink);
+    for (widget, color) in [
+        (&mut v.widgets.noninteractive, Color32::from_rgb(243, 231, 204)),
+        (&mut v.widgets.inactive, Color32::from_rgb(236, 220, 187)),
+        (&mut v.widgets.hovered, Color32::from_rgb(224, 200, 154)),
+        (&mut v.widgets.active, Color32::from_rgb(215, 185, 130)),
+        (&mut v.widgets.open, Color32::from_rgb(229, 208, 169)),
+    ] {
+        widget.bg_fill = color;
+        widget.weak_bg_fill = color;
+        widget.bg_stroke = egui::Stroke::new(1.0, line);
+        widget.fg_stroke.color = ink;
+    }
+    v
 }
 
 impl App {
     pub(crate) fn switch_workspace(&mut self) {
+        self.studio.switch_pending = !self.studio.switch_pending;
+    }
+
+    pub(crate) fn apply_workspace_switch(&mut self, ctx: &egui::Context) {
+        if !std::mem::take(&mut self.studio.switch_pending) {
+            return;
+        }
+        self.finish_pending_settings();
+        let mut nav = self.studio.navigation.take().unwrap_or_else(|| {
+            let mut nav = Navigation::initial(self);
+            nav.fit = true;
+            nav.stars = !self.studio.foreground && self.studio.page == Page::Stars;
+            nav
+        });
+        nav.swap(self);
+        self.globe_inertia.stop();
+        self.studio.navigation = Some(nav);
+        self.studio.foreground = !self.studio.foreground;
         if self.studio.foreground {
-            self.studio.foreground = false;
-            self.studio.raise = false;
-            self.professional_raise = true;
-        } else {
-            if !self.studio.open {
-                self.studio.inspector = true;
-            }
-            self.studio.open = true;
-            self.studio.foreground = true;
-            self.studio.raise = true;
+            self.studio.professional_visuals = Some(ctx.global_style().visuals.clone());
+            self.studio.inspector = true;
+            ctx.set_visuals(parchment_visuals());
+        } else if let Some(visuals) = self.studio.professional_visuals.take() {
+            ctx.set_visuals(visuals);
         }
     }
 
@@ -105,113 +148,33 @@ impl App {
         self.studio.navigation = None;
     }
 
-    pub(crate) fn studio_window(&mut self, ctx: &egui::Context) {
-        if !self.studio.open {
-            return;
+    pub(crate) fn studio_workspace(&mut self, ui: &mut egui::Ui) {
+        if self.star_map.open {
+            self.studio.page = Page::Stars;
+        } else if self.studio.page == Page::Stars {
+            self.studio.page = Page::Map;
         }
-        let title = format!(
-            "Atlas Forge · {} · {}{}",
-            tr("创作工作室"),
-            self.doc.meta.name,
-            if self.dirty { " *" } else { "" }
-        );
-        let builder = egui::ViewportBuilder::default()
-            .with_title(title)
-            .with_inner_size([1520.0, 915.0])
-            .with_min_inner_size([870.0, 580.0]);
-        let open = ctx.show_viewport_immediate(viewport(), builder, |ui, class| {
-            let studio_ctx = ui.ctx().clone();
-            if ui.input(|i| i.viewport().close_requested()) {
-                return false;
-            }
-            if ui.input(|i| i.viewport().focused == Some(true))
-                || class == egui::ViewportClass::EmbeddedWindow
-            {
-                self.studio.foreground = true;
-            }
-            if std::mem::take(&mut self.studio.raise)
-                && class != egui::ViewportClass::EmbeddedWindow
-            {
-                studio_ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            }
-            let mut style = (**ui.style()).clone();
-            style.spacing.item_spacing = egui::vec2(9.0, 6.0);
-            style.visuals = egui::Visuals::dark();
-            style.visuals.panel_fill = Color32::from_rgb(24, 34, 44);
-            style.visuals.extreme_bg_color = Color32::from_rgb(13, 20, 28);
-            style.visuals.selection.bg_fill = Color32::from_rgb(35, 79, 95);
-            style.visuals.selection.stroke.color = Color32::from_rgb(208, 249, 253);
-            style.visuals.widgets.active.bg_fill = Color32::from_rgb(37, 97, 111);
-            ui.set_style(style);
-
-            if !self.studio.foreground {
-                egui::CentralPanel::default().show(ui, |ui| {
-                    ui.heading(tr("创作工作室"));
-                    ui.label(&self.doc.meta.name);
-                    if ui.button(tr("在工作室继续")).clicked() {
-                        self.switch_workspace();
-                    }
-                });
-                return true;
-            }
-            let mut nav = self
-                .studio
-                .navigation
-                .take()
-                .unwrap_or_else(|| Navigation::initial(self));
-            let epoch = self.workspace_camera_epoch;
-            nav.swap(self);
-            let classic_star = self.star_map.open;
-            self.star_map.open = self.studio.page == Page::Stars;
-            self.read_workspace_input(&studio_ctx);
-            if (self.studio.page == Page::Stars) != self.star_map.open {
-                self.studio.page = if self.star_map.open {
-                    Page::Stars
-                } else {
-                    Page::Map
-                };
-            }
-            self.studio_header(ui);
-            if self.studio.page != Page::Environment {
-                self.environment_ui.stop_picking();
-            }
-            self.studio_project(ui);
-            if matches!(self.studio.page, Page::Worldview | Page::Visualizations) {
-                egui::Panel::bottom("studio-study-timeline").show(ui, |ui| self.timeline_bar(ui));
-            }
-            match self.studio.page {
-                Page::Stars => {
-                    self.star_map.open = true;
-                    self.star_chart(ui);
-                    if !self.star_map.open {
-                        self.studio.page = Page::Map;
-                    }
-                }
-                Page::Sources => self.studio_sources(ui),
-                Page::Worldview => self.studio_worldview(ui),
-                Page::Visualizations => self.studio_visualizations(ui),
-                Page::Map | Page::History | Page::Environment => self.studio_map(ui),
-            }
-            self.show_workspace_editors(&studio_ctx);
-            self.star_map.open = classic_star;
-            nav.swap(self);
-            self.studio.navigation = Some(nav);
-            if epoch != self.workspace_camera_epoch {
-                self.apply_home_view();
-            }
-            true
-        });
-        if !open {
-            self.studio.open = false;
-            self.studio.foreground = false;
-            self.professional_raise = true;
+        self.studio_header(ui);
+        if self.studio.page != Page::Environment {
+            self.environment_ui.stop_picking();
+        }
+        self.studio_project(ui);
+        if matches!(self.studio.page, Page::Worldview | Page::Visualizations) {
+            egui::Panel::bottom("studio-study-timeline").show(ui, |ui| self.timeline_bar(ui));
+        }
+        match self.studio.page {
+            Page::Stars => self.star_chart(ui),
+            Page::Sources => self.studio_sources(ui),
+            Page::Worldview => self.studio_worldview(ui),
+            Page::Visualizations => self.studio_visualizations(ui),
+            Page::Map | Page::History | Page::Environment => self.studio_map(ui),
         }
     }
 
     fn studio_header(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("studio-header").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.heading(RichText::new("Atlas Forge").color(Color32::from_rgb(181, 226, 233)));
+                ui.heading(RichText::new("Atlas Forge").color(Color32::from_rgb(96, 56, 29)));
                 ui.separator();
                 for (page, title) in [
                     (Page::Map, "地图"),
@@ -235,9 +198,6 @@ impl App {
                 }
                 if ui.button(tr("设置")).clicked() {
                     self.run(Act::Prefs);
-                }
-                if ui.button(tr("AI 助手…")).clicked() {
-                    self.run(Act::Assistant);
                 }
                 if ui.button(tr("切回专业界面")).clicked() {
                     self.switch_workspace();
@@ -305,7 +265,6 @@ impl App {
                     });
                 ui.separator();
                 for (act, label) in [
-                    (Act::WorldBook, "世界资料"),
                     (Act::Events, "事件时间线…"),
                     (Act::TimelinePlayback, "时间播放与视频"),
                     (Act::Diplomacy, "外交关系…"),
@@ -444,12 +403,20 @@ impl App {
                 .default_size(406.0)
                 .size_range(320.0..=590.0)
                 .resizable(true)
-                .show(ui, |ui| self.environment_panel(ui, true));
-        } else if self.studio.inspector {
+                .show(ui, |ui| {
+                    self.assistant_footer(ui);
+                    self.environment_panel(ui, true);
+                });
+        } else if self.studio.inspector || self.ai.open {
             egui::Panel::right("studio-properties")
                 .resizable(true)
                 .default_size(340.0)
-                .show(ui, |ui| self.inspector(ui));
+                .show(ui, |ui| {
+                    self.assistant_footer(ui);
+                    if self.studio.inspector {
+                        self.inspector(ui);
+                    }
+                });
         }
         if crate::toolbar_ui::has_side_panel(self.tool) {
             egui::Panel::right("studio-tool-detail").show(ui, |ui| self.tool_side_panel(ui));

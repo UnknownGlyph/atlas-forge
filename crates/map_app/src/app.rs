@@ -59,6 +59,8 @@ pub struct PendingEdit {
     pub changed: bool,
 }
 
+type TestWorld = Result<(Document, Option<map_core::testworld::TestWorldReport>), String>;
+
 pub struct App {
     pub doc: Document,
     pub history: History,
@@ -113,6 +115,8 @@ pub struct App {
     pub route_mode: bool,
     pub route_style: map_core::doc::RouteStyle,
     pub brush_px: f32,
+    pub brush_color_mode: bool,
+    pub brush_color: egui::Color32,
     pub brush_stroke: Vec<egui::Pos2>,
     /// The selected river, a river point being dragged, and the name being typed.
     pub selected_river: Option<map_core::doc::LineId>,
@@ -132,8 +136,7 @@ pub struct App {
     pub(crate) playback: crate::playback_ui::TimelinePlayback,
     pub(crate) study_year_cache: std::cell::RefCell<Option<crate::timeline_ui::StudyYearCache>>,
     pub(crate) studio: crate::studio_ui::Studio,
-    pub(crate) professional_raise: bool,
-    pub(crate) workspace_camera_epoch: u64,
+    pub(crate) replay: crate::replay_ui::Replay,
     pub focus_name: Option<String>,
     /// The territory brush fills whole connected patches.
     pub assign_fill: bool,
@@ -297,7 +300,7 @@ pub struct App {
     pub autosave: crate::autosave::Autosave,
     pub checkpoints: crate::checkpoint_ui::Panel,
     /// The large test world being made in the background.
-    test_world: Option<std::thread::JoinHandle<(Document, map_core::testworld::TestWorldReport)>>,
+    test_world: Option<std::thread::JoinHandle<TestWorld>>,
     pub last_flat_rect: egui::Rect,
     pub(crate) frame_ms: f32,
     pub(crate) ui_ms: f32,
@@ -339,7 +342,9 @@ pub struct App {
     pub new_swatch: [u8; 4],
     /// Fonts the map uses that egui has (by `fonts_ui::font_key`), and
     /// those this computer does not have.
-    pub fonts_loaded: std::collections::BTreeSet<String>,
+    pub fonts_loaded: std::collections::BTreeMap<String, Arc<egui::FontData>>,
+    pub(crate) interface_font: Option<Arc<egui::FontData>>,
+    pub(crate) font_locale: crate::fonts_ui::LocaleFont,
     pub fonts_missing: std::collections::BTreeSet<String>,
     /// The window title last sent (sending one asks for a repaint, so it
     /// is only sent when it changes; the window then rests while idle).
@@ -360,7 +365,9 @@ impl App {
         let prefs = map_io::prefs::load(&prefs_path);
         let language = crate::i18n::Lang::from_code(&prefs.language);
         crate::i18n::set(language);
-        crate::install_fonts(&cc.egui_ctx, font.clone(), language);
+        let font_locale = crate::fonts_ui::LocaleFont::for_language(language);
+        let interface_font = font.as_ref().map(|bytes| Arc::new(egui::FontData::from_owned((**bytes).clone())));
+        cc.egui_ctx.set_fonts(crate::fonts_ui::definitions(interface_font.as_ref(), font_locale));
         cc.egui_ctx.set_zoom_factor(prefs.ui_scale);
         // Ctrl + plus and minus zoom the map; the interface's size is a preference
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
@@ -400,6 +407,8 @@ impl App {
             route_mode: false,
             route_style: Default::default(),
             brush_px: 18.0,
+            brush_color_mode: false,
+            brush_color: egui::Color32::from_rgba_unmultiplied(165, 79, 35, 220),
             brush_stroke: Vec::new(),
             selected_river: None,
             drag_city: None,
@@ -411,8 +420,7 @@ impl App {
             playback: Default::default(),
             study_year_cache: Default::default(),
             studio: Default::default(),
-            professional_raise: false,
-            workspace_camera_epoch: 0,
+            replay: Default::default(),
             focus_name: None,
             assign_fill: false,
             query: None,
@@ -522,7 +530,7 @@ impl App {
             import_dialog: None,
             import_report: None,
             parent: None,
-            autosave: crate::autosave::Autosave::start(),
+            autosave: crate::autosave::Autosave::start(&prefs),
             checkpoints: Default::default(),
             test_world: None,
             last_flat_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 700.0)),
@@ -552,6 +560,8 @@ impl App {
             style_rename: None,
             new_swatch: [180, 60, 40, 255],
             fonts_loaded: Default::default(),
+            interface_font,
+            font_locale,
             fonts_missing: Default::default(),
         };
         app.history.limit = app.prefs.undo_limit;
@@ -570,7 +580,10 @@ impl App {
     /// Native file dialog parented to the main window, so it is modal and
     /// cannot open behind it.
     pub fn file_dialog(&self) -> rfd::FileDialog {
-        let d = rfd::FileDialog::new();
+        let mut d = rfd::FileDialog::new();
+        if let Some(directory) = self.prefs.save_directory.as_ref().filter(|dir| dir.is_dir()) {
+            d = d.set_directory(directory);
+        }
         match &self.parent {
             Some(p) => d.set_parent(p),
             None => d,
@@ -654,7 +667,7 @@ impl App {
     pub(crate) fn reset_board_view(&mut self) {
         self.stop_timeline_playback();
         self.reset_studio_navigation();
-        self.workspace_camera_epoch = self.workspace_camera_epoch.wrapping_add(1);
+        self.replay = Default::default();
         self.diplomacy_ui = Default::default();
         self.tab = if self.doc.paper.is_some() { crate::panels::Tab::Features } else { crate::panels::Tab::Countries };
         self.globe_inertia.stop();
@@ -709,7 +722,7 @@ impl App {
             return;
         }
         match self.test_world.take().unwrap().join() {
-            Ok((doc, r)) => {
+            Ok(Ok((doc, Some(r)))) => {
                 self.new_doc(doc);
                 self.set_status(
                     crate::trf!(
@@ -726,6 +739,11 @@ impl App {
                     false,
                 );
             }
+            Ok(Ok((doc, None))) => {
+                self.new_doc(doc);
+                self.set_status(crate::i18n::tr("已将伊瑟尔三国工程载入为测试副本。"), false);
+            }
+            Ok(Err(error)) => self.set_status(error, true),
             Err(_) => self.set_status(crate::i18n::tr("生成测试世界失败"), true),
         }
     }
@@ -1047,9 +1065,25 @@ impl App {
 
     /// Start making the test world in the background.
     pub fn new_test_world(&mut self, detailed: bool) {
-        let spec = if detailed { map_core::testworld::TestWorldSpec::detailed() } else { map_core::testworld::TestWorldSpec::default() };
-        self.test_world = Some(std::thread::spawn(move || map_core::testworld::history_world(&spec)));
-        self.set_status(if detailed { crate::i18n::tr("正在生成精细测试世界…") } else { crate::i18n::tr("正在生成测试世界…") }, false);
+        if detailed {
+            self.test_world = Some(std::thread::spawn(|| {
+                let (world, report) = map_core::testworld::history_world(&map_core::testworld::TestWorldSpec::detailed());
+                Ok((world, Some(report)))
+            }));
+            self.set_status(crate::i18n::tr("正在生成精细测试世界…"), false);
+            return;
+        }
+        let configured = self.prefs.test_project.as_ref().filter(|path| path.is_file()).cloned();
+        let path = configured.or_else(map_io::project::ithaer_test_project).or_else(|| {
+            let path = self.file_dialog().set_title(crate::i18n::tr("选择伊瑟尔三国测试工程"))
+                .add_filter("Atlas", &["atlas"]).pick_file()?;
+            self.prefs.test_project = Some(path.clone());
+            Some(path)
+        });
+        if let Some(path) = path {
+            self.test_world = Some(std::thread::spawn(move || map_io::project::load(&path).map(|doc| (doc, None))));
+            self.set_status(crate::i18n::tr("正在读取伊瑟尔三国工程…"), false);
+        }
     }
 
     pub fn making_test_world(&self) -> bool {
@@ -1084,6 +1118,7 @@ impl App {
             if ui.small_button(crate::i18n::tr("设置")).clicked() { self.run(Act::Prefs); }
             if ui.small_button(crate::i18n::tr("创作工作室")).clicked() { self.run(Act::Studio); }
             ui.separator();
+            self.book_bar(ui);
             if let Some(paper) = self.doc.paper {
                 ui.label(crate::trf!("平面画布 · {} × {} px", paper.width, paper.height));
                 return;
@@ -1400,6 +1435,7 @@ impl App {
         self.shortcuts_window(ctx);
         self.about_window(ctx);
         self.tutorial_window(ctx);
+        self.replay_window(ctx);
         self.prefs_window(ctx);
         self.welcome_window(ctx);
         self.history_window(ctx);
@@ -1408,7 +1444,6 @@ impl App {
         self.query_window(ctx);
         self.names_window(ctx);
         self.roads_window(ctx);
-        self.assistant_window(ctx);
         self.geographic_guides_window(ctx);
         self.plugin_window(ctx);
         self.book_window(ctx);
@@ -1447,13 +1482,8 @@ impl eframe::App for App {
         }
         // `stable_dt` leaves out the time the window rested between repaints
         self.frame_ms = self.frame_ms * 0.9 + ctx.input(|i| i.stable_dt).min(1.0) * 1000.0 * 0.1;
-        if ctx.input(|i| i.viewport().focused==Some(true)) {
-            self.studio.foreground=false;
-        }
-        if std::mem::take(&mut self.professional_raise) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-        }
-        if !self.studio.foreground { self.read_workspace_input(&ctx); }
+        self.read_workspace_input(&ctx);
+        self.apply_workspace_switch(&ctx);
         let mut lap = Instant::now();
         let mut laps = [0.0f32; 4];
         let mut mark = |i: usize, lap: &mut Instant| {
@@ -1485,16 +1515,9 @@ impl eframe::App for App {
         }
 
         if self.studio.foreground {
-            egui::CentralPanel::default().show(ui, |ui| {
-                ui.heading("Atlas Forge");
-                ui.label(&self.doc.meta.name);
-                if ui.button(crate::i18n::tr("切回专业界面")).clicked() {
-                    self.switch_workspace();
-                }
-            });
+            self.studio_workspace(ui);
         } else {
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
-        egui::Panel::top("world-book-navigation").show(ui, |ui| self.book_bar(ui));
         if self.star_map.open {
             self.star_chart(ui);
         } else {
@@ -1511,7 +1534,10 @@ impl eframe::App for App {
             if crate::toolbar_ui::has_side_panel(self.tool) {
                 egui::Panel::left("tool-panel").resizable(false).show(ui, |ui| self.tool_side_panel(ui));
             }
-            egui::Panel::right("inspector").default_size(360.0).show(ui, |ui| self.inspector(ui));
+            egui::Panel::right("inspector").default_size(360.0).show(ui, |ui| {
+                self.assistant_footer(ui);
+                self.inspector(ui);
+            });
             mark(1, &mut lap);
             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
                 // The panel's clip rect is the visible area; the layout rect can be
@@ -1531,8 +1557,9 @@ impl eframe::App for App {
         }
         }
         mark(2, &mut lap);
-        if !self.studio.foreground { self.show_workspace_editors(&ctx); }
-        self.studio_window(&ctx);
+        self.show_workspace_editors(&ctx);
+        self.poll_assistant(&ctx);
+        self.apply_workspace_switch(&ctx);
         self.model_viewer_window(&ctx);
         self.focus_play_tick(&ctx);
         self.playback_tick(&ctx);

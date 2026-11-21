@@ -70,6 +70,7 @@ pub enum Act {
     Timeline,
     TimelinePlayback,
     Studio,
+    Replay,
     PrevChange,
     NextChange,
     PrevYear,
@@ -166,7 +167,7 @@ fn table_with(translate: bool) -> Vec<Action> {
         a(Act::NewBlank, Menu::File, "新建空白世界", None, "从空白开始；用“绘制陆地”画出第一块大陆。"),
         a(Act::NewDemo, Menu::File, "新建示例世界", None, "一个带国家、城市、河流与人口数据的小世界。"),
         a(Act::NewWorldWizard, Menu::File, "新世界向导…", None, "按星球大小、陆地比例、大陆数、国家与河流数量和名称风格生成大陆、地形、河流、国家、首都，可选一段随机历史；结果都可以继续编辑。"),
-        a(Act::NewTestWorld, Menu::File, "新建测试世界（多层、长历史）", None, "约 60 个国家、1000–2000 年间 240 次边界与海岸变化、建国与终止、文化层与宗教比例层、人口数据、河流与符号。用于检查功能与性能。"),
+        a(Act::NewTestWorld, Menu::File, "打开伊瑟尔三国测试工程", None, "打开本地伊瑟尔三国工程的测试副本。"),
         a(Act::NewDetailedWorld, Menu::File, "新建测试世界（精细边界，约百万三角形）", None, "同上，边界与海岸再细化到约 3 km 一段（约 40 万个顶点、100 万个三角形），用于检查大地图的性能。"),
         g(Act::Open, Menu::File, "打开…", key(CMD, Key::O), ""),
         a(Act::Save, Menu::File, "保存", key(CMD, Key::S), ""),
@@ -184,6 +185,7 @@ fn table_with(translate: bool) -> Vec<Action> {
         a(Act::Copy, Menu::Edit, "复制", key(CMD, Key::C), "把所选的线、区域、符号或文字复制到剪贴板；可粘贴到另一个窗口。"),
         a(Act::Paste, Menu::Edit, "粘贴", key(CMD, Key::V), "粘贴到鼠标所在位置；鼠标不在地图上时放在原位置旁边。"),
         a(Act::Duplicate, Menu::Edit, "原处再制", key(CMD, Key::D), "在原处旁边复制所选要素。"),
+        a(Act::Replay, Menu::Tools, "脚本可视步骤", None, "在草稿中执行脚本并播放步骤。"),
         a(Act::Delete, Menu::Edit, "删除所选要素", key(NONE, Key::Delete), "删除所选的线、区域、符号或文字。"),
         g(Act::SelectAll, Menu::Edit, "全选要素", key(CMD, Key::A), "选中全部未隐藏、未锁定的线、区域、符号与文字。"),
         a(Act::Deselect, Menu::Edit, "取消选择", key(cmd_shift, Key::A), ""),
@@ -535,6 +537,7 @@ impl App {
             Act::NewFocus => self.new_focus(),
             Act::TimelinePlayback => self.open_playback(self.focus.is_some()),
             Act::Studio => self.switch_workspace(),
+            Act::Replay => self.replay.open = true,
             Act::ExitFocus => self.exit_focus(),
             Act::Prefs => self.prefs_open = true,
             Act::ZoomSelection => self.zoom_to_selection(),
@@ -588,9 +591,37 @@ impl App {
                 continue;
             }
             if ctx.input_mut(|i| i.consume_shortcut(&k)) {
+                if act == Act::Delete && self.delete_in_workspace(ctx) {
+                    continue;
+                }
                 self.run(act);
             }
         }
+    }
+
+    fn delete_in_workspace(&mut self, ctx: &egui::Context) -> bool {
+        let layer = ctx.input(|i| i.pointer.hover_pos())
+            .and_then(|at| ctx.layer_id_at(at)).or_else(|| ctx.top_layer_id());
+        let targeted = |id| layer.is_some_and(|layer| layer.id == egui::Id::unique(id));
+        if targeted("atlas-world-library") {
+            return self.request_library_delete();
+        }
+        if targeted("atlas-events") && self.events_open {
+            self.delete_event_selection();
+        } else if targeted("atlas-diplomacy") && self.diplomacy_ui.open {
+            self.request_diplomacy_delete();
+        } else if targeted("atlas-focus") && self.focus.is_some() {
+            self.delete_focused_view();
+        } else if targeted("worldview-inspector") || self.studio.worldview_visible() {
+            self.delete_worldview_selection();
+        } else if targeted("atlas-charts") || self.studio.visualizations_visible() {
+            self.delete_chart_selection();
+        } else if targeted("environment-workspace") || self.studio.environment_visible() {
+            self.delete_environment_selection(ctx);
+        } else {
+            return false;
+        }
+        true
     }
 
     /// One action as a menu entry; true when it was chosen.
@@ -686,6 +717,9 @@ impl App {
         let (up, down, enter, esc) = ctx.input_mut(|i| {
             (i.consume_key(NONE, Key::ArrowUp), i.consume_key(NONE, Key::ArrowDown), i.consume_key(NONE, Key::Enter), i.consume_key(NONE, Key::Escape))
         });
+        if esc {
+            return;
+        }
         if !found.is_empty() {
             if down {
                 p.at = (p.at + 1) % found.len();
@@ -696,8 +730,8 @@ impl App {
             p.at = p.at.min(found.len() - 1);
         }
         let mut run: Option<Act> = None;
-        let mut open = !esc;
-        egui::Window::new(crate::i18n::tr("命令面板")).title_bar(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0.0, 60.0]).min_width(460.0).max_width(460.0).show(ctx, |ui| {
+        let mut open = true;
+        egui::Window::new(crate::i18n::tr("命令面板")).id(egui::Id::unique("command-palette")).open(&mut open).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0.0, 60.0]).min_width(460.0).max_width(460.0).show(ctx, |ui| {
             let edit = ui.add(egui::TextEdit::singleline(&mut p.query).hint_text(crate::i18n::tr("输入命令名称… （↑↓ 选择，回车执行，Esc 关闭）")).desired_width(f32::INFINITY));
             if p.focus {
                 edit.request_focus();
@@ -727,7 +761,7 @@ impl App {
                 }
             });
         });
-        if enter {
+        if enter && open {
             run = found.get(p.at).filter(|a| self.can(a.act)).map(|a| a.act);
             open = run.is_none();
         }
@@ -744,7 +778,8 @@ impl App {
             return;
         }
         let mut open = true;
-        egui::Window::new(crate::i18n::tr("快捷键一览")).open(&mut open).resizable(false).show(ctx, |ui| {
+        egui::Window::new(crate::i18n::tr("快捷键一览")).id(egui::Id::unique("keyboard-shortcuts"))
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO).open(&mut open).resizable(false).show(ctx, |ui| {
             egui::ScrollArea::vertical().max_height(520.0).min_scrolled_height(420.0).show(ui, |ui| {
                 let all = table();
                 for m in Menu::ALL {

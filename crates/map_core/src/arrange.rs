@@ -242,13 +242,20 @@ impl Document {
     /// Delete features; returns how many there were.
     pub fn delete_features(&mut self, fs: &[FeatureRef]) -> usize {
         let mut n = 0;
+        let board = crate::world_book::WorldBook::current(self);
         for f in fs {
-            n += match f {
+            let removed = match f {
                 FeatureRef::Text(id) => self.annotations.remove(id).is_some(),
                 FeatureRef::Symbol(id) => self.symbols.remove(id).is_some(),
                 FeatureRef::Route(id) | FeatureRef::River(id) => self.rivers.remove(id).is_some(),
                 FeatureRef::Area(id) => self.areas.remove(id).is_some(),
-            } as usize;
+            };
+            if removed {
+                n += 1;
+                if let Some(book) = &mut self.book {
+                    std::sync::Arc::make_mut(book).unlink(crate::world_book::feature(board, *f));
+                }
+            }
             self.locked.remove(&f.id());
             self.group_of.remove(&f.id());
             self.curves.remove(&f.id());
