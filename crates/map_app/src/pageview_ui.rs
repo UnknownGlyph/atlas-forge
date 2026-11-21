@@ -70,7 +70,7 @@ impl App {
             } else {
                 let (tx, rx) = mpsc::channel();
                 let (doc, font, opts) = (self.doc.clone(), self.font.clone(), o.clone());
-                std::thread::spawn(move || {
+                crate::perf_ui::spawn("版式渲染", move || {
                     let th = map_core::theme::evaluate(&doc);
                     let s = map_io::scene::build_scene(&doc, &th, &opts);
                     let r = map_io::png::render(&s, font.as_deref().map(|v| v.as_slice())).map(|pm| (egui::ColorImage::from_rgba_premultiplied([pm.width() as usize, pm.height() as usize], pm.data()), s.furniture.clone()));

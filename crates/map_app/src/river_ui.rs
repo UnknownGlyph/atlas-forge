@@ -202,7 +202,7 @@ impl App {
 
     /// Names written along their rivers and routes (where switched on and
     /// the line is long enough on screen); `taken` gets their glyphs' boxes.
-    pub fn draw_line_names(&self, painter: &egui::Painter, vg: &ViewGeom, taken: &mut Vec<egui::Rect>) {
+    pub fn draw_line_names(&self, painter: &egui::Painter, vg: &ViewGeom, taken: &mut crate::label_boxes::LabelBoxes) {
         use map_core::path_text::{along_path, NAME_PX};
         let detail = self.map_detail(vg);
         for (id, r) in self.doc.rivers.iter().filter(|(id, r)| r.show_name && !r.name.is_empty() && !r.hidden

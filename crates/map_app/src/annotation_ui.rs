@@ -7,10 +7,6 @@ use crate::view::{Tool, ViewGeom};
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Stroke, Vec2};
 use map_core::doc::{Annotation, LineId};
 
-fn view_index(vg: &ViewGeom) -> usize {
-    usize::from(vg.kind != crate::view::ViewKind::Flat)
-}
-
 /// The longest stretch of a curve that is on screen in one piece.
 fn screen_path(vg: &ViewGeom, path: &[map_core::geom::LonLat]) -> Option<Vec<[f32; 2]>> {
     let mut pieces: Vec<Vec<[f32; 2]>> = vec![Vec::new()];
@@ -36,7 +32,7 @@ fn rotate(v: Vec2, a: f32) -> Vec2 {
 impl App {
     /// Draw every annotation, recording where each is for the label tool.
     /// `taken` collects their boxes so labels drawn after keep clear.
-    pub fn draw_annotations(&self, painter: &egui::Painter, vg: &ViewGeom, taken: &mut Vec<Rect>, pass: map_core::stack::DrawPass) {
+    pub fn draw_annotations(&self, painter: &egui::Painter, vg: &ViewGeom, taken: &mut crate::label_boxes::LabelBoxes, pass: map_core::stack::DrawPass) {
         let editing = self.tool == Tool::Label;
         let zoom = (vg.px_per_deg() / Annotation::REF_PX_PER_DEG) as f32;
         let mut rects = Vec::new();
@@ -114,7 +110,7 @@ impl App {
             }
         }
         // the first pass starts the list anew; later layers lie on top
-        let slot = &mut self.ann_rects.borrow_mut()[view_index(vg)];
+        let slot = &mut self.ann_rects.borrow_mut()[vg.kind.index()];
         if pass.group.is_none() {
             slot.clear();
         }
@@ -167,7 +163,7 @@ impl App {
         }
         if resp.drag_started_by(Primary) {
             let origin = resp.ctx.input(|i| i.pointer.press_origin());
-            let found = origin.and_then(|o| hit(&self.ann_rects.borrow()[view_index(vg)], o).map(|(id, c)| (id, c - o)));
+            let found = origin.and_then(|o| hit(&self.ann_rects.borrow()[vg.kind.index()], o).map(|(id, c)| (id, c - o)));
             if let Some((id, off)) = found {
                 self.begin_pending("移动文字");
                 self.drag_ann = Some((id, off));
@@ -192,7 +188,7 @@ impl App {
             return true;
         }
         let at = resp.interact_pointer_pos();
-        let under = at.and_then(|p| hit(&self.ann_rects.borrow()[view_index(vg)], p)).map(|x| x.0);
+        let under = at.and_then(|p| hit(&self.ann_rects.borrow()[vg.kind.index()], p)).map(|x| x.0);
         if resp.clicked_by(Secondary) {
             if let Some(id) = under {
                 self.selected_ann = Some(id);

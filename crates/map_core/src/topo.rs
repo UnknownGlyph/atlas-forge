@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 #[path = "region_geometry.rs"]
 mod region_geometry;
-pub use region_geometry::{GeoOffset, LandBlock, LandTransform};
+pub use region_geometry::{GeoOffset, GlobeRotation, LandBlock, LandTransform, land_group_center};
 
 macro_rules! id_type {
     ($name:ident) => {

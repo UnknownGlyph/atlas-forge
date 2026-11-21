@@ -8,10 +8,6 @@ use eframe::egui::{self, Color32, Pos2, Rect, RichText, Shape, Stroke, Vec2};
 use map_core::doc::LineId;
 use map_core::symbol::{marks, MapSymbol, Mark, SymbolKind};
 
-fn view_index(vg: &ViewGeom) -> usize {
-    usize::from(vg.kind != crate::view::ViewKind::Flat)
-}
-
 fn c32(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
 }
@@ -86,7 +82,7 @@ impl App {
     /// Draw the symbols shown in the current year (all of them, the others
     /// faint, with the symbol tool), recording where each is. `taken`
     /// collects their boxes so labels drawn after keep clear.
-    pub fn draw_symbols(&self, painter: &egui::Painter, vg: &ViewGeom, taken: &mut Vec<Rect>, pass: map_core::stack::DrawPass) {
+    pub fn draw_symbols(&self, painter: &egui::Painter, vg: &ViewGeom, taken: &mut crate::label_boxes::LabelBoxes, pass: map_core::stack::DrawPass) {
         let editing = self.tool == Tool::Symbol;
         let detail = self.map_detail(vg);
         let mut rects = Vec::new();
@@ -102,7 +98,14 @@ impl App {
             }
             let Some(pos) = vg.to_screen(s.at) else { continue };
             let fade = if shown { 1.0 } else { 0.35 };
-            if s.kind == SymbolKind::Glyph {
+            let rect = if let Some(art) = &s.pixels {
+                let [w, h] = s.drawn_size(1.0);
+                let rect = Rect::from_center_size(pos, egui::vec2(w, h));
+                self.pixel_tools.paint(painter, art, rect, fade);
+                rect
+            } else {
+                let rect = Rect::from_center_size(pos, Vec2::splat(s.size * 2.0));
+                if s.kind == SymbolKind::Glyph {
                 // a character symbol: its character with a halo, centred on its point
                 let font = egui::FontId::proportional(map_core::symbol::glyph_px(s.size));
                 let galley = painter.layout_no_wrap(s.glyph.clone(), font.clone(), c32(s.color).gamma_multiply(fade));
@@ -115,11 +118,17 @@ impl App {
             } else {
                 paint_marks(painter, &marks(s.kind, [pos.x, pos.y], s.size, s.color), fade);
             }
-            let mut r = Rect::from_center_size(pos, Vec2::splat(s.size * 2.0 + 4.0));
+                rect
+            };
+            let mut r = rect.expand(2.0);
             if !s.name.is_empty() {
                 let font = egui::FontId::proportional((s.size * 1.5).max(9.0));
                 let galley = painter.layout_no_wrap(s.name.clone(), font.clone(), c32(s.color).gamma_multiply(fade));
-                let [x, y] = s.name_place.top_left([pos.x, pos.y], s.size, galley.size().x, galley.size().y, 3.0);
+                let extent = match s.name_place {
+                    map_core::symbol::NamePlace::Left | map_core::symbol::NamePlace::Right => rect.width(),
+                    _ => rect.height(),
+                } * 0.5;
+                let [x, y] = s.name_place.top_left([pos.x, pos.y], extent, galley.size().x, galley.size().y, 3.0);
                 let tl = egui::pos2(x, y);
                 let halo = painter.layout_no_wrap(s.name.clone(), font, Color32::from_rgba_unmultiplied(255, 255, 255, 190));
                 for o in [Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, -1.0), Vec2::new(0.0, 1.0)] {
@@ -135,7 +144,7 @@ impl App {
                 painter.rect_stroke(r, 2.0, Stroke::new(if strong { 2.0 } else { 0.8 }, Color32::from_rgb(40, 110, 200)), egui::StrokeKind::Outside);
             }
         }
-        let slot = &mut self.sym_rects.borrow_mut()[view_index(vg)];
+        let slot = &mut self.sym_rects.borrow_mut()[vg.kind.index()];
         if pass.group.is_none() {
             slot.clear();
         }
@@ -145,10 +154,12 @@ impl App {
     /// The symbol tool.
     pub fn symbol_input(&mut self, resp: &egui::Response, vg: &ViewGeom) {
         use egui::PointerButton::{Primary, Secondary};
-        let hit = |rects: &[(LineId, Rect)], at: Pos2| rects.iter().rev().find(|(_, r)| r.contains(at)).map(|(id, _)| *id);
+        let hit = |rects: &[(LineId, Rect)], at: Pos2, doc: &map_core::Document| rects
+            .iter().rev().find(|(id, r)| r.contains(at) && doc.pickable(map_core::features::FeatureRef::Symbol(*id)))
+            .map(|(id, _)| *id);
         if resp.drag_started_by(Primary) {
             let origin = resp.ctx.input(|i| i.pointer.press_origin());
-            let found = origin.and_then(|o| hit(&self.sym_rects.borrow()[view_index(vg)], o).map(|id| (id, o)));
+            let found = origin.and_then(|o| hit(&self.sym_rects.borrow()[vg.kind.index()], o, &self.doc).map(|id| (id, o)));
             // keep the grab offset from the symbol's own point, not its box
             if let Some((id, off)) = found.and_then(|(id, o)| self.doc.symbols.get(&id).and_then(|s| vg.to_screen(s.at)).map(|c| (id, c - o))) {
                 self.begin_pending("移动符号");
@@ -174,7 +185,7 @@ impl App {
             return;
         }
         let at = resp.interact_pointer_pos();
-        let under = at.and_then(|p| hit(&self.sym_rects.borrow()[view_index(vg)], p));
+        let under = at.and_then(|p| hit(&self.sym_rects.borrow()[vg.kind.index()], p, &self.doc));
         if resp.clicked_by(Secondary) {
             if let Some(id) = under {
                 self.selected_sym = Some(id);
@@ -189,20 +200,30 @@ impl App {
             }
             let Some(ll) = at.and_then(|p| vg.to_lonlat(p)) else { return };
             let kind = self.symbol_kind;
+            let stamp = self.pixel_tools.stamp.as_ref().filter(|_| self.pixel_tools.placing).cloned();
+            let mut symbol = MapSymbol::new(kind, ll);
+            symbol.pixels = stamp;
+            if symbol.pixels.is_some() { symbol.size = 12.0; }
+            let name = symbol.kind_name();
             let id = LineId(self.doc.topo.alloc());
             if self.edit("添加符号", |d| {
-                d.symbols.insert(id, MapSymbol::new(kind, ll));
+                d.symbols.insert(id, symbol);
                 Ok(())
             }).is_some() {
                 self.style_new(map_core::features::FeatureRef::Symbol(id));
                 self.selected_sym = Some(id);
-                self.set_status(crate::trf!("已添加{}符号：可在左侧面板命名、设置年份范围", kind.name()), false);
+                self.set_status(crate::trf!("已添加{}符号：可在左侧面板命名、设置年份范围", name), false);
             }
         }
     }
 
     pub fn delete_selected_symbol(&mut self) {
         if let Some(id) = self.selected_sym.take() {
+            if self.doc.locked_in_effect(map_core::features::FeatureRef::Symbol(id)) {
+                self.selected_sym = Some(id);
+                self.set_status(crate::i18n::tr("请先解锁这个符号。"), true);
+                return;
+            }
             if self.edit("删除符号", |d| (d.delete_features(&[map_core::features::FeatureRef::Symbol(id)]) > 0).then_some(()).ok_or_else(|| "符号不存在".to_string())).is_some() {
                 self.set_status(crate::i18n::tr("已删除符号（Ctrl+Z 撤销）"), false);
             }
@@ -216,9 +237,18 @@ impl App {
         ui.label(RichText::new(crate::i18n::tr("新符号")).strong());
         ui.horizontal_wrapped(|ui| {
             for k in SymbolKind::ALL {
-                ui.radio_value(&mut self.symbol_kind, k, k.name());
+                if ui.selectable_label(!self.pixel_tools.placing && self.symbol_kind == k, crate::i18n::tr(k.name())).clicked() {
+                    self.symbol_kind = k;
+                    self.pixel_tools.placing = false;
+                }
             }
         });
+        if ui.button(crate::i18n::tr("彩色像素画笔…")).clicked() {
+            self.open_pixel_editor(None);
+        }
+        if self.pixel_tools.stamp.is_some() {
+            ui.toggle_value(&mut self.pixel_tools.placing, crate::i18n::tr("放置像素标志"));
+        }
         ui.weak(crate::i18n::tr("单击地图空白处放置；单击符号选中，拖动移动，右键或 Delete 删除。"));
         let Some(id) = self.selected_sym.filter(|id| self.doc.symbols.contains_key(id)) else {
             self.selected_sym = None;
@@ -226,6 +256,10 @@ impl App {
         };
         ui.separator();
         ui.label(RichText::new(crate::i18n::tr("所选符号")).strong());
+        if self.doc.locked_in_effect(map_core::features::FeatureRef::Symbol(id)) {
+            ui.weak(crate::i18n::tr("请先解锁这个符号。"));
+            return;
+        }
         self.style_row(ui, &[map_core::features::FeatureRef::Symbol(id)]);
         let old = self.doc.symbols[&id].clone();
         let mut v = old.clone();
@@ -239,9 +273,26 @@ impl App {
             v.name = buf.trim().to_string();
             label = "命名符号";
         }
-        egui::ComboBox::from_label("类型").selected_text(v.kind.name()).show_ui(ui, |ui| {
+        if v.pixels.is_some() {
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(crate::i18n::tr("编辑像素图…")).clicked() {
+                    self.open_pixel_editor(Some(id));
+                }
+                if ui.button(crate::i18n::tr("用作新标志")).clicked() {
+                    self.pixel_tools.stamp = v.pixels.clone();
+                    self.pixel_tools.placing = true;
+                }
+                if ui.button(crate::i18n::tr("移除像素图")).clicked() {
+                    v.pixels = None;
+                }
+            });
+        } else if ui.button(crate::i18n::tr("绘制标志像素图…")).clicked() {
+            self.open_pixel_editor(Some(id));
+        }
+        egui::ComboBox::from_label("类型").selected_text(crate::i18n::tr(v.kind_name())).show_ui(ui, |ui| {
             for k in SymbolKind::ALL {
                 if ui.selectable_value(&mut v.kind, k, k.name()).changed() {
+                    v.pixels = None;
                     v.color = if old.color == old.kind.default_color() { k.default_color() } else { old.color };
                     if k == SymbolKind::Glyph && v.glyph.is_empty() {
                         v.glyph = "◆".into();
@@ -249,7 +300,7 @@ impl App {
                 }
             }
         });
-        if v.kind == SymbolKind::Glyph {
+        if v.pixels.is_none() && v.kind == SymbolKind::Glyph {
             // follow the symbol's character unless it is being typed (it may
             // have just been set by choosing this kind)
             if self.sym_glyph.as_ref().is_none_or(|(x, t, typing)| *x != id || (!typing && *t != v.glyph)) {
@@ -280,7 +331,7 @@ impl App {
                 }
             });
         }
-        let rs = ui.add(egui::Slider::new(&mut v.size, 3.0..=30.0).suffix(" px").text(crate::i18n::tr("大小")));
+        let rs = ui.add(egui::Slider::new(&mut v.size, 3.0..=if v.pixels.is_some() { 96.0 } else { 30.0 }).suffix(" px").text(crate::i18n::tr("大小")));
         ui.horizontal(|ui| {
             let mut c = c32(v.color);
             if ui.color_edit_button_srgba(&mut c).changed() {

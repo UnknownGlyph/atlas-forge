@@ -78,6 +78,26 @@ impl ChangeSet {
         let mut rivers = BTreeSet::new();
         diff_map(&a.rivers, &b.rivers, &mut rivers, &mut bytes, |r| r.pts.capacity() * 16);
         c.rivers = !rivers.is_empty();
+        if !a.symbols.ptr_eq(&b.symbols) {
+            let mut symbols = BTreeSet::new();
+            diff_map(&a.symbols, &b.symbols, &mut symbols, &mut bytes, |s| {
+                s.name.capacity() + s.glyph.capacity() + s.legend.capacity()
+            });
+            // Count replaced pixel data once per edit, even when several marks
+            // shared it. Moving a mark retains the same art and costs no pixels.
+            if symbols.iter().any(|id| a.symbols.get(id).and_then(|s| s.pixels.as_ref())
+                .is_some_and(|art| b.symbols.get(id).and_then(|s| s.pixels.as_ref())
+                    .is_none_or(|next| !std::sync::Arc::ptr_eq(art, next))))
+            {
+                let mut retained: BTreeSet<_> = b.symbols.values().filter_map(|s| s.pixels.as_ref())
+                    .map(std::sync::Arc::as_ptr).collect();
+                for art in symbols.iter().filter_map(|id| a.symbols.get(id)?.pixels.as_ref()) {
+                    if retained.insert(std::sync::Arc::as_ptr(art)) {
+                        bytes += std::mem::size_of_val(art.pixels());
+                    }
+                }
+            }
+        }
         c.settings = a.style != b.style || a.theme != b.theme || a.meta != b.meta || a.year != b.year;
         if let Some(old) = &a.climate {
             if b.climate.as_ref().is_none_or(|p| !std::sync::Arc::ptr_eq(old,p)) {

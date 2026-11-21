@@ -45,6 +45,17 @@ fn fill_path(poly: &[[f64; 2]], c: [u8; 4]) -> String {
     format!(r#"<path d="{d}Z" fill="{}" fill-opacity="{:.3}" stroke="none"/>"#, col(c), c[3] as f32 / 255.0)
 }
 
+fn pixel_rects(out: &mut String, marks: &[crate::scene::PixelMark]) {
+    if marks.is_empty() { return; }
+    out.push_str("<g shape-rendering=\"crispEdges\" stroke=\"none\">\n");
+    for mark in marks {
+        for ([x, y, w, h], color) in mark.runs() {
+            let _ = writeln!(out, r#"<rect x="{x:.4}" y="{y:.4}" width="{w:.4}" height="{h:.4}" fill="{}"{}/>"#, col(color), op(color));
+        }
+    }
+    out.push_str("</g>\n");
+}
+
 pub fn render(s: &Scene) -> String {
     let mut o = String::new();
     let _ = writeln!(
@@ -97,6 +108,7 @@ pub fn render(s: &Scene) -> String {
     for (poly, c) in &s.fills {
         let _ = writeln!(o, "{}", fill_path(poly, *c));
     }
+    pixel_rects(&mut o, &s.pixels);
     // the layers of drawn features, each a group of its own, the top one last
     for layer in &s.layers {
         let _ = writeln!(o, r#"<g class="layer" data-name="{}">"#, esc(&layer.name));
@@ -116,6 +128,7 @@ pub fn render(s: &Scene) -> String {
         for (poly, c) in &layer.fills {
             let _ = writeln!(o, "{}", fill_path(poly, *c));
         }
+        pixel_rects(&mut o, &layer.pixels);
         o.push_str("</g>\n");
     }
     o.push_str("</g>\n<g id=\"cities\">\n");

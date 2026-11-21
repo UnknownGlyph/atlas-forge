@@ -73,3 +73,9 @@ Projects are `.atlas` files. Each save keeps the file it replaces as `.atlas.bak
 ## 13. Planetary environment and climate
 
 Open **Tools → Planetary environment and climate…**, then select **运行模拟** to calculate one reference or **实时更新** to update it as the geography changes. The climate panel uses Chinese labels. It includes month and season selectors, a point inspector, editable and lockable fields, saved scenarios and PNG/CSV export. Visible climate overlays are included in map exports. The physical grid has 96 × 48 cells (3.75 degrees). Projects with climate data require a reader supporting file format 2. [Climate guide in Chinese](CLIMATE.md)
+
+### Pixel brush
+
+Open **Tools → Pixel brush…**, paint on the transparent grid, and choose **Place as a new symbol**. Click on the map or artboard to place the artwork. Right-click the grid to sample a color. Existing pixel symbols can be edited or reused via the symbol panel.
+
+Canvases default to 32 × 32 and accept 1–128 pixels per side. PNG files retain transparency and native resolution. Placed artwork is stored in the project (format 11).

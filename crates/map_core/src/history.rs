@@ -9,6 +9,7 @@
 use crate::change::ChangeSet;
 use crate::doc::Document;
 use crate::world_book::WorldBook;
+use std::collections::VecDeque;
 
 struct Entry {
     label: String,
@@ -17,7 +18,7 @@ struct Entry {
 }
 
 pub struct History {
-    undo: Vec<Entry>,
+    undo: VecDeque<Entry>,
     redo: Vec<Entry>,
     /// Maximum number of undo steps.
     pub limit: usize,
@@ -31,7 +32,7 @@ pub struct History {
 
 impl Default for History {
     fn default() -> Self {
-        Self { undo: vec![], redo: vec![], limit: 500, budget_bytes: 512 << 20, min_keep: 20, undo_bytes: 0, generation: 0 }
+        Self { undo: VecDeque::new(), redo: vec![], limit: 500, budget_bytes: 512 << 20, min_keep: 20, undo_bytes: 0, generation: 0 }
     }
 }
 
@@ -62,7 +63,7 @@ impl History {
     pub fn push(&mut self, label: &str, before: Document, after: &Document) {
         self.generation += 1;
         let bytes = ChangeSet::between(&before, after).old_bytes + WorldBook::retained_bytes(&before, after);
-        self.undo.push(Entry { label: label.to_string(), doc: before, bytes });
+        self.undo.push_back(Entry { label: label.to_string(), doc: before, bytes });
         self.undo_bytes += bytes;
         self.redo.clear();
         self.enforce_limits();
@@ -70,13 +71,13 @@ impl History {
 
     fn enforce_limits(&mut self) {
         while self.undo.len() > self.limit || (self.undo_bytes > self.budget_bytes && self.undo.len() > self.min_keep) {
-            let e = self.undo.remove(0);
+            let Some(e) = self.undo.pop_front() else { break };
             self.undo_bytes -= e.bytes;
         }
     }
 
     pub fn undo(&mut self, doc: &mut Document) -> Option<String> {
-        let e = self.undo.pop()?;
+        let e = self.undo.pop_back()?;
         self.undo_bytes -= e.bytes;
         self.generation += 1;
         let cur = std::mem::replace(doc, e.doc);
@@ -89,7 +90,8 @@ impl History {
         self.generation += 1;
         let cur = std::mem::replace(doc, e.doc);
         self.undo_bytes += e.bytes;
-        self.undo.push(Entry { label: e.label.clone(), doc: cur, bytes: e.bytes });
+        self.undo.push_back(Entry { label: e.label.clone(), doc: cur, bytes: e.bytes });
+        self.enforce_limits();
         Some(e.label)
     }
 
@@ -129,7 +131,7 @@ impl History {
         self.redo.iter().rev().map(|e| e.label.as_str()).collect()
     }
     pub fn undo_label(&self) -> Option<&str> {
-        self.undo.last().map(|e| e.label.as_str())
+        self.undo.back().map(|e| e.label.as_str())
     }
 }
 

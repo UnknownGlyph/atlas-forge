@@ -182,3 +182,16 @@ fn a_shared_model_is_saved_with_its_links_in_each_part_of_the_star_chart() {
         1
     );
 }
+
+#[test]
+fn three_dimensional_orbital_elements_and_oblateness_roundtrip() {
+    let mut doc = map_core::Document::default();
+    let mut chart = map_core::star_chart::StarChart::default();
+    chart.home_j2 = 0.00108263;
+    chart.moon.orbit.ascending_node = 73.25;
+    chart.moon.orbit.periapsis_argument = 120.0;
+    doc.star_chart = Some(std::sync::Arc::new(chart));
+    let bytes = map_io::project::to_bytes(&doc).unwrap();
+    assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 10);
+    assert_eq!(map_io::project::from_bytes(&bytes).unwrap().star_chart, doc.star_chart);
+}

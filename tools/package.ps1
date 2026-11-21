@@ -18,7 +18,7 @@ if (-not $NoBuild) {
     $flags = @("--remap-path-prefix=$root=atlas-forge", "--remap-path-prefix=$cargoHome=cargo", "-Clink-arg=/PDBALTPATH:%_PDB%")
     $env:CARGO_ENCODED_RUSTFLAGS = $flags -join [char]0x1f
     $env:CARGO_TARGET_DIR = $target
-    & "$PSScriptRoot\cargo-msvc.cmd" build --locked --release -p map_app -p map_api -p map_ai
+    & "$PSScriptRoot\cargo-msvc.cmd" build --locked --release -p map_app -p map_api -p map_ai -p map_perf
     $code = $LASTEXITCODE
     Remove-Item Env:\CARGO_ENCODED_RUSTFLAGS, Env:\CARGO_TARGET_DIR
     if ($code -ne 0) { throw "构建失败" }
@@ -29,7 +29,7 @@ $dist = Join-Path $root "dist"
 $run = Join-Path $target ("stage-" + [Guid]::NewGuid().ToString("N"))
 $out = Join-Path $run $name
 New-Item -ItemType Directory -Force (Join-Path $out "示例"), (Join-Path $out "fonts") | Out-Null
-$programs = "atlas.exe", "atlas-query.exe", "atlas-mcp.exe", "atlas-agent.exe", "atlas-script.exe"
+$programs = "atlas.exe", "atlas-query.exe", "atlas-mcp.exe", "atlas-agent.exe", "atlas-script.exe", "atlas-perf.exe"
 foreach ($exe in $programs) {
     if (-not (Test-Path "$bin\$exe")) { throw "没有 $bin\$exe" }
     Copy-Item "$bin\$exe" $out
@@ -41,7 +41,7 @@ Copy-Item "$root\docs\USER_GUIDE.md" (Join-Path $out "使用说明.md")
 Copy-Item "$root\docs\USER_GUIDE.en.md" (Join-Path $out "USER_GUIDE.en.md")
 Copy-Item "$root\docs\CLIMATE.md" (Join-Path $out "CLIMATE.md")
 Copy-Item "$root\docs\API.md", "$root\docs\PLUGINS.md" $out
-Copy-Item "$root\docs\WORLD_BOOK.md" $out
+Copy-Item "$root\docs\WORLD_BOOK.md", "$root\docs\PERFORMANCE_RECORDER.md" $out
 Copy-Item "$root\docs\CREATION_WORKSPACES.md", "$root\docs\ASTRONOMY.md" $out
 Copy-Item "$root\docs\tutorial" (Join-Path $out "tutorial") -Recurse
 Copy-Item "$root\docs\examples\create-city.atlas-plugin.json" (Join-Path $out "示例")

@@ -153,7 +153,7 @@ impl App {
                 let (tx, rx) = mpsc::channel();
                 state.pending_preview = Some(rx);
                 let ctx = ctx.clone();
-                std::thread::spawn(move || {
+                crate::perf_ui::spawn("加载脚本动作", move || {
                     let image = step.preview(900, 500, font.as_deref().map(Vec::as_slice)).and_then(|png| {
                         let rgba = image::load_from_memory(&png).map_err(|e| e.to_string())?.to_rgba8();
                         Ok(ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw()))
@@ -181,7 +181,7 @@ impl App {
                 run: Some(rx),
                 ..Default::default()
             };
-            std::thread::spawn(move || {
+            crate::perf_ui::spawn("生成脚本预览", move || {
                 let result = automation::load_script(&path).map(|requests| {
                     let mut session = map_api::Session::new(world, "Atlas Forge");
                     let (report, steps) = automation::run_visual_steps(&mut session, &requests);

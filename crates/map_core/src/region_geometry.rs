@@ -14,6 +14,7 @@ pub struct GeoOffset {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LandTransform {
     Translate(GeoOffset),
+    Rotate(GlobeRotation),
     Scale { pivot: LonLat, factor: f64 },
 }
 
@@ -21,6 +22,7 @@ impl LandTransform {
     pub fn apply(self, point: LonLat) -> LonLat {
         match self {
             Self::Translate(offset) => offset.apply(point),
+            Self::Rotate(rotation) => rotation.apply(point),
             Self::Scale { pivot, factor } => LonLat::new(
                 geom::wrap_lon(pivot.lon + geom::lon_delta(pivot.lon, point.lon) * factor),
                 pivot.lat + (point.lat - pivot.lat) * factor,
@@ -31,6 +33,7 @@ impl LandTransform {
     pub fn is_identity(self) -> bool {
         match self {
             Self::Translate(offset) => offset == GeoOffset::default(),
+            Self::Rotate(rotation) => rotation.0 == glam::DQuat::IDENTITY,
             Self::Scale { factor, .. } => factor == 1.0,
         }
     }
@@ -51,6 +54,78 @@ impl LandTransform {
             _ => Ok(()),
         }
     }
+}
+
+/// A rigid rotation of all selected coordinates on the planet.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlobeRotation(glam::DQuat);
+
+impl GlobeRotation {
+    pub fn between(from: LonLat, to: LonLat) -> TResult<Self> {
+        let valid = |p: LonLat| p.lon.is_finite() && (-90.0..=90.0).contains(&p.lat);
+        if !valid(from) || !valid(to) {
+            return Err("移动起点和终点必须位于行星表面。".into());
+        }
+        let from = unit(from);
+        let to = unit(to);
+        let axis = from.cross(to);
+        let dot = from.dot(to).clamp(-1.0, 1.0);
+        let angle = axis.length().atan2(dot);
+        let rotation = if angle < 1e-14 {
+            glam::DQuat::IDENTITY
+        } else if axis.length_squared() < 1e-28 {
+            // Exactly antipodal endpoints admit multiple rotations. Use a
+            // fixed orthogonal axis so preview and commit take the same path.
+            let reference = if from.z.abs() < 0.9 { glam::DVec3::Z } else { glam::DVec3::X };
+            glam::DQuat::from_axis_angle(from.cross(reference).normalize(), angle)
+        } else {
+            glam::DQuat::from_axis_angle(axis.normalize(), angle)
+        };
+        Ok(Self(rotation))
+    }
+
+    fn apply(self, point: LonLat) -> LonLat {
+        if self.0 == glam::DQuat::IDENTITY {
+            return point;
+        }
+        let p = self.0 * unit(point);
+        LonLat::new(
+            geom::wrap_lon(p.y.atan2(p.x).to_degrees()),
+            p.z.atan2(p.x.hypot(p.y)).to_degrees(),
+        )
+    }
+}
+
+fn unit(point: LonLat) -> glam::DVec3 {
+    let (sin_lon, cos_lon) = point.lon.to_radians().sin_cos();
+    let (sin_lat, cos_lat) = point.lat.to_radians().sin_cos();
+    glam::DVec3::new(cos_lat * cos_lon, cos_lat * sin_lon, sin_lat)
+}
+
+/// Center the group in the smallest continuous longitude interval covering
+/// its coordinates. Sampling a coastline more densely does not change it.
+pub fn land_group_center(points: impl IntoIterator<Item = LonLat>) -> Option<LonLat> {
+    let mut longitudes = Vec::new();
+    let mut south = f64::INFINITY;
+    let mut north = f64::NEG_INFINITY;
+    for point in points {
+        longitudes.push(point.lon.rem_euclid(360.0));
+        south = south.min(point.lat);
+        north = north.max(point.lat);
+    }
+    let first = *longitudes.first()?;
+    longitudes.sort_unstable_by(f64::total_cmp);
+    let mut west = longitudes[0];
+    let mut gap = west + 360.0 - longitudes[longitudes.len() - 1];
+    for pair in longitudes.windows(2) {
+        let next_gap = pair[1] - pair[0];
+        if next_gap > gap {
+            west = pair[1];
+            gap = next_gap;
+        }
+    }
+    let lon = if longitudes.len() == 1 { first } else { west + (360.0 - gap) * 0.5 };
+    Some(LonLat::new(geom::wrap_lon(lon), (south + north) * 0.5))
 }
 
 impl GeoOffset {
@@ -159,8 +234,8 @@ impl Topology {
                         "所选陆块包围极点。南北平移会改变极区的闭合关系，可以只沿经度移动。".into(),
                     )
                 }
-                LandTransform::Scale { .. } => {
-                    return Err("所选陆块包围极点，等比缩放会改变极区的闭合关系。".into())
+                LandTransform::Scale { .. } | LandTransform::Rotate(_) => {
+                    return Err("所选陆块包含环绕极点的边界，请在移动工具中选择仅沿经度偏移。".into())
                 }
                 _ => {}
             }
@@ -209,6 +284,13 @@ impl Topology {
                 *point = transform.apply(*point);
             }
             next.put_edge(id, edge);
+        }
+        if matches!(transform, LandTransform::Rotate(_))
+            && next.faces[&BACKGROUND].holes.iter().any(|ring| {
+                ring.iter().any(|edge| block.edges.contains(&edge.edge)) && next.is_polar(ring)
+            })
+        {
+            return Err("移动会让选中陆块包围极点并改变海岸闭合方式，请调整移动方向。".into());
         }
         next.touch(BACKGROUND);
         for &id in &block.faces {

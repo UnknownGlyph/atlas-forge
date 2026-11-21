@@ -113,8 +113,9 @@ impl App {
     }
 
     pub(crate) fn cancel_video_on_exit(&mut self) {
-        if let Some(job) = &self.playback.video {
+        if let Some(job) = self.playback.video.take() {
             job.cancel.store(true, Ordering::Relaxed);
+            crate::shutdown::defer(move || { let _ = job.worker.join(); });
         }
     }
 
@@ -343,7 +344,7 @@ impl App {
         let progress = Arc::new(AtomicUsize::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
         let (d, c) = (progress.clone(), cancel.clone());
-        let worker = std::thread::spawn(move || {
+        let worker = crate::perf_ui::spawn("导出时间轴视频", move || {
             map_io::batch::export_scheduled(&doc, &job, &samples, &d, &c)
         });
         self.playback.video = Some(Video {

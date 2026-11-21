@@ -1,5 +1,6 @@
 //! Independent star chart workspace. Navigation and playback are transient;
 //! template edits are normal project edits with undo and save support.
+mod comparison;
 mod extended;
 mod render;
 
@@ -68,6 +69,7 @@ pub struct StarMap {
     draft: Option<(Option<Arc<StarChart>>, StarChart)>,
     driver: Option<extended::Driver>,
     gravity_error: Option<String>,
+    gravity_comparison: comparison::GravityComparison,
     actual_step: f64,
     models: extended::Models,
     gaia_center: GaiaCenter,
@@ -102,6 +104,7 @@ impl Default for StarMap {
             draft: None,
             driver: None,
             gravity_error: None,
+            gravity_comparison: Default::default(),
             actual_step: 0.0,
             models: Default::default(),
             gaia_center: GaiaCenter::Galaxy,
@@ -182,7 +185,7 @@ impl StarMap {
             let wake = ctx.clone();
             let (tx, rx) = mpsc::channel();
             self.surface_job = Some(rx);
-            std::thread::spawn(move || {
+            crate::perf_ui::spawn("生成主体星球地表纹理", move || {
                 let result = make_surface(&source);
                 let _ = tx.send((source, result));
                 wake.request_repaint();
@@ -230,7 +233,7 @@ impl App {
                 if state.mode != Mode::Galaxy {
                     let (_, chart) = state.draft.as_mut().unwrap();
                     ui.checkbox(&mut chart.gravity, tr("相互引力"))
-                        .on_hover_text(tr("计算天体间的牛顿引力。关闭时沿各自设定的轨道运行。"));
+                        .on_hover_text(tr("用质量和轨道形状初始化多体运动。关闭时使用面板所设公转周期。"));
                     ui.checkbox(&mut state.orbits, crate::i18n::tr("轨道"));
                     ui.checkbox(&mut state.lighting, crate::i18n::tr("光照"));
                     if ui
@@ -406,11 +409,13 @@ impl App {
                                                 &mut draft.home.orbit.phase,
                                                 0.0..=360.0,
                                             );
+                                            edit_orbital_orientation(ui, &mut draft.home.orbit);
+                                            ui.label(format!("{} {:.3} M⊕", tr("质量"), home.effective_mass_earth()));
                                         } else {
-                                            edit_body(ui, &mut draft.home, false);
+                                            edit_body(ui, &mut draft.home, Some(home.effective_mass_earth()));
                                         }
                                     } else {
-                                        edit_body(ui, &mut draft.home, true);
+                                        edit_body(ui, &mut draft.home, None);
                                     }
                                 }
                                 Target::Planet(i) => {
@@ -420,7 +425,7 @@ impl App {
                                         draft.planets[i].mass_earth = Some(mass);
                                     }
                                     ui.text_edit_singleline(&mut draft.planets[i].category).on_hover_text(tr("自定义天体类别"));
-                                    edit_body(ui, &mut draft.planets[i], true);
+                                    edit_body(ui, &mut draft.planets[i], None);
                                     if ui.button(crate::i18n::tr("移除此行星")).clicked() {
                                         draft.planets.remove(i);
                                         state.target = Target::Home;
@@ -452,7 +457,7 @@ impl App {
                                 star.temperature = 4600.0;
                                 star.model = None;
                                 let period = std::f64::consts::TAU * (au*au*au / (map_core::star_chart::G * (star.mass_solar + draft.star.mass_solar))).sqrt();
-                                draft.companions.push(Companion { star, orbit: map_core::star_chart::Orbit { au, days:period, eccentricity:0.05, inclination:5.0, phase:110.0 } });
+                                draft.companions.push(Companion { star, orbit: map_core::star_chart::Orbit { au, days:period, eccentricity:0.05, inclination:5.0, ascending_node:0.0, periapsis_argument:0.0, phase:110.0 } });
                                 state.target = Target::Companion(draft.companions.len()-1);
                             }
                             if ui
@@ -634,6 +639,16 @@ impl App {
                         }
                     }
                     ui.separator();
+                    if draft.gravity && state.mode != Mode::Galaxy {
+                        let selected = if state.mode == Mode::Lunar { state.lunar_target.key() } else { state.target.key() };
+                        if state.mode == Mode::Lunar || selected == BodyKey::Home {
+                            ui.horizontal(|ui| {
+                                ui.label(tr("主体星球 J₂")).on_hover_text(tr("扁率引起的非球形引力。地球参考值为 0.00108263。"));
+                                ui.add(egui::DragValue::new(&mut draft.home_j2).speed(0.00001).range(0.0..=0.30).fixed_decimals(8));
+                            });
+                        }
+                        state.gravity_comparison.ui(ui, selected, state.driver.as_ref().map(|d| &d.simulation));
+                    }
                     let changed = chart
                         .as_deref()
                         .map_or_else(|| *draft != StarChart::default(), |old| old != draft);
@@ -790,7 +805,13 @@ fn edit_moon(ui: &mut egui::Ui, moon: &mut Moon) {
         .mass_kg
         .unwrap_or(7.342e22 * (moon.radius_km / 1737.4).powi(3));
     let mut kg = mass;
-    number(ui, tr("质量 kg"), &mut kg, 0.0..=6.0e25);
+    let mass_input_speed = (kg.abs() * 0.01).max(1.0);
+    ui.horizontal(|ui| {
+        ui.label(tr("质量 kg"));
+        ui.add(egui::DragValue::new(&mut kg).range(0.0..=6.0e25)
+            .speed(mass_input_speed)
+            .custom_formatter(|value, _| format!("{value:.5e}")));
+    });
     if kg != mass {
         moon.mass_kg = Some(kg);
     }
@@ -814,6 +835,7 @@ fn edit_moon(ui: &mut egui::Ui, moon: &mut Moon) {
         0.001..=100_000.0,
     );
     number(ui, "初始相位 °", &mut moon.orbit.phase, 0.0..=360.0);
+    edit_orbital_orientation(ui, &mut moon.orbit);
     ui.checkbox(&mut moon.synchronous, crate::i18n::tr("同步自转"));
     if !moon.synchronous {
         number(ui, "自转周期（日）", &mut moon.spin_days, 0.01..=100_000.0);
@@ -843,11 +865,11 @@ fn edit_star(ui: &mut egui::Ui, star: &mut Star) {
     );
     number(ui, "温度 K", &mut star.temperature, 2200.0..=50000.0);
 }
-fn edit_body(ui: &mut egui::Ui, body: &mut Body, allow_radius: bool) {
-    if allow_radius {
+fn edit_body(ui: &mut egui::Ui, body: &mut Body, linked_mass: Option<f64>) {
+    if linked_mass.is_none() {
         number(ui, "半径 R⊕", &mut body.radii_earth, 0.000000001..=50.0);
     }
-    let before = body.effective_mass_earth();
+    let before = linked_mass.unwrap_or_else(|| body.effective_mass_earth());
     let mut mass = before;
     number(ui, tr("质量 M⊕"), &mut mass, 0.0..=30000.0);
     if mass != before {
@@ -884,4 +906,10 @@ fn edit_orbit(
     number(ui, "轨道倾角 °", &mut orbit.inclination, -180.0..=180.0);
     number(ui, "公转周期（日）", &mut orbit.days, duration);
     number(ui, "初始轨道相位 °", &mut orbit.phase, 0.0..=360.0);
+    edit_orbital_orientation(ui, orbit);
+}
+
+fn edit_orbital_orientation(ui: &mut egui::Ui, orbit: &mut map_core::star_chart::Orbit) {
+    number(ui, "升交点黄经 °", &mut orbit.ascending_node, 0.0..=360.0);
+    number(ui, "近心点幅角 °", &mut orbit.periapsis_argument, 0.0..=360.0);
 }

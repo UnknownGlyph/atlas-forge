@@ -161,7 +161,7 @@ impl Autosave {
             self.cloud_saved_file=Some((generation,path.to_path_buf()));
             let cloud=self.cloud.clone();
             let source=path.to_path_buf();
-            self.job=Some((generation,std::thread::spawn(move||match std::fs::read(&source) {
+            self.job=Some((generation,crate::perf_ui::spawn("迁移恢复快照", move||match std::fs::read(&source) {
                 Ok(bytes)=>Snapshot {archived:false,error:None,cloud:cloud_copies(
                     &cloud,source.file_stem().and_then(|s|s.to_str()).unwrap_or("World"),&bytes)},
                 Err(e)=>Snapshot {archived:false,error:Some(e.to_string()),cloud:[None,None]},
@@ -249,7 +249,7 @@ impl Autosave {
         let keep = self.keep;
         self.job = Some((
             gen,
-            std::thread::spawn(move || {
+            crate::perf_ui::spawn("写入自动保存", move || {
                 let label = original.as_deref()
                     .and_then(|path| path.file_stem().and_then(|name| name.to_str()))
                     .unwrap_or(&doc.meta.name)
@@ -318,16 +318,23 @@ impl Autosave {
         self.offers.retain(|o| o.session != session);
     }
 
-    /// Clean shutdown: no snapshot should survive.
-    pub fn finish(&mut self) {
-        let _ = self.wait_job();
-        if let Some(r) = self.recovery.take() {
-            // the crash hook holds the session too: the lock file goes with the process
-            match Arc::try_unwrap(r) {
-                Ok(r) => r.finish(),
-                Err(r) => r.clear(),
+    /// Finish any atomic writes and clear the clean session once the window
+    /// has closed. The session lock lasts until these writes have stopped.
+    pub fn defer_finish(&mut self) {
+        let job = self.job.take();
+        let recovery = self.recovery.take();
+        crate::shutdown::defer(move || {
+            if let Some((_, worker)) = job {
+                let _ = worker.join();
             }
-        }
+            crate::crash::release_recovery();
+            if let Some(recovery) = recovery {
+                match Arc::try_unwrap(recovery) {
+                    Ok(recovery) => recovery.finish(),
+                    Err(recovery) => recovery.clear(),
+                }
+            }
+        });
     }
 }
 

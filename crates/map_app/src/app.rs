@@ -187,6 +187,7 @@ pub struct App {
     /// being dragged (with the grab offset), where each is on screen per
     /// view, and the name being typed.
     pub symbol_kind: map_core::symbol::SymbolKind,
+    pub(crate) pixel_tools: crate::pixel_ui::PixelTools,
     pub selected_sym: Option<map_core::doc::LineId>,
     pub drag_sym: Option<(map_core::doc::LineId, egui::Vec2)>,
     pub sym_rects: std::cell::RefCell<[Vec<(map_core::doc::LineId, egui::Rect)>; 2]>,
@@ -225,6 +226,7 @@ pub struct App {
     pub measure_closed: bool,
     /// The 要素 tab's filter.
     pub feature_filter: String,
+    pub(crate) feature_catalog: map_core::features::FeatureCatalog,
     pub area_legend: Option<(map_core::doc::LineId, String)>,
     /// The other area chosen for combining with the selected one.
     pub area_partner: Option<map_core::doc::LineId>,
@@ -306,7 +308,8 @@ pub struct App {
     pub(crate) ui_ms: f32,
     /// What is remembered between runs, as last stored, and where.
     pub prefs: map_io::prefs::Prefs,
-    pub prefs_saved: map_io::prefs::Prefs,
+    pub prefs_applied: map_io::prefs::Prefs,
+    pub(crate) prefs_writer: crate::prefs_writer::PrefsWriter,
     pub prefs_path: PathBuf,
     pub prefs_open: bool,
     pub welcome_open: bool,
@@ -352,10 +355,13 @@ pub struct App {
     /// With ATLAS_PROFILE set: smoothed ms per part of the frame (derived
     /// data, panels, map views, the rest), shown in the status bar.
     pub(crate) prof: Option<[f32; 4]>,
+    pub(crate) performance: crate::perf_ui::Performance,
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, font: Option<Arc<Vec<u8>>>, open: Option<PathBuf>) -> Self {
+        let performance = crate::perf_ui::Performance::new(cc);
+        let _startup = crate::perf_ui::span("启动", "初始化编辑器");
         let max_tex = cc.wgpu_render_state.as_ref().map_or(8192, |rs| rs.device.limits().max_texture_dimension_2d);
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             let gpu = MapGpu::new(&rs.device, rs.target_format, crate::MSAA);
@@ -455,6 +461,7 @@ impl App {
             ann_focus: false,
             ann_path: None,
             symbol_kind: map_core::symbol::SymbolKind::Peak,
+            pixel_tools: Default::default(),
             selected_sym: None,
             drag_sym: None,
             sym_rects: Default::default(),
@@ -476,6 +483,7 @@ impl App {
             measure_pts: Vec::new(),
             measure_closed: false,
             feature_filter: String::new(),
+            feature_catalog: Default::default(),
             area_legend: None,
             area_partner: None,
             drag_river: None,
@@ -538,7 +546,9 @@ impl App {
             ui_ms: 0.0,
             title: String::new(),
             prof: std::env::var_os("ATLAS_PROFILE").map(|_| [0.0; 4]),
-            prefs_saved: prefs.clone(),
+            performance,
+            prefs_applied: prefs.clone(),
+            prefs_writer: Default::default(),
             prefs,
             prefs_path,
             prefs_open: false,
@@ -597,6 +607,7 @@ impl App {
 
     /// Run an undoable edit and report the outcome in the status bar.
     pub fn edit<T>(&mut self, label: &str, f: impl FnOnce(&mut Document) -> Result<T, String>) -> Option<T> {
+        let _measurement = crate::perf_ui::span("编辑", "工程修改与撤销记录");
         // with a layer in hand, what the edit adds goes into it
         let had = self.active_group.map(|_| self.doc.feature_ids());
         match self.history.apply(&mut self.doc, label, f) {
@@ -639,6 +650,8 @@ impl App {
     }
 
     fn reset_view_state(&mut self) {
+        self.pixel_tools.close_target();
+        self.feature_catalog = Default::default();
         self.history.clear();
         self.book_ui=Default::default();
         self.worldview_ui=Default::default();
@@ -757,6 +770,7 @@ impl App {
     }
 
     pub fn open_path(&mut self, p: PathBuf) {
+        let _measurement = crate::perf_ui::span("工程", "载入工程与重置视图");
         let t = Instant::now();
         match map_io::project::load(&p) {
             Ok(doc) => {
@@ -797,6 +811,7 @@ impl App {
             }
         };
         let t = Instant::now();
+        let _measurement = crate::perf_ui::span("工程", "写入工程与备份");
         // the file being replaced kept as .bak1 (and two older ones)
         match map_io::project::save_with_backups(&path, &self.doc, 3) {
             Ok(()) => {
@@ -1066,7 +1081,7 @@ impl App {
     /// Start making the test world in the background.
     pub fn new_test_world(&mut self, detailed: bool) {
         if detailed {
-            self.test_world = Some(std::thread::spawn(|| {
+            self.test_world = Some(crate::perf_ui::spawn("生成高密度测试世界", || {
                 let (world, report) = map_core::testworld::history_world(&map_core::testworld::TestWorldSpec::detailed());
                 Ok((world, Some(report)))
             }));
@@ -1081,7 +1096,7 @@ impl App {
             Some(path)
         });
         if let Some(path) = path {
-            self.test_world = Some(std::thread::spawn(move || map_io::project::load(&path).map(|doc| (doc, None))));
+            self.test_world = Some(crate::perf_ui::spawn("载入伊瑟尔测试工程", move || map_io::project::load(&path).map(|doc| (doc, None))));
             self.set_status(crate::i18n::tr("正在读取伊瑟尔三国工程…"), false);
         }
     }
@@ -1412,6 +1427,9 @@ impl App {
 
 impl App {
     pub(crate) fn read_workspace_input(&mut self,ctx:&egui::Context) {
+        if self.pixel_tools.open {
+            return;
+        }
         self.shortcuts(ctx);
         ctx.input(|i| {
             for e in &i.events {
@@ -1461,13 +1479,36 @@ impl App {
         self.reshape_window(ctx);
         self.recovery_window(ctx);
         self.import_windows(ctx);
+        self.performance_window(ctx);
+        self.pixel_window(ctx);
     }
 }
 
 impl eframe::App for App {
     fn on_exit(&mut self) {
         self.cancel_video_on_exit();
-        self.autosave.finish();
+        if let Some(mut batch) = self.batch.take() {
+            use std::sync::atomic::Ordering;
+            batch.cancel.store(true, Ordering::Relaxed);
+            if let Some(worker) = batch.handle.take() {
+                crate::shutdown::defer(move || { let _ = worker.join(); });
+            }
+        }
+        self.autosave.defer_finish();
+        self.performance.defer_finish();
+        if self.prefs_writer.writing() {
+            let mut writer = std::mem::take(&mut self.prefs_writer);
+            let path = self.prefs_path.clone();
+            crate::shutdown::defer(move || {
+                if let Err(error) = writer.finish(&path) {
+                    eprintln!("Atlas Forge preferences: {error}");
+                }
+            });
+        }
+    }
+
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
+        self.performance.mark_key(input);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -1476,6 +1517,7 @@ impl eframe::App for App {
             self.parent = ParentWindow::of(frame);
         }
         let ctx = ui.ctx().clone();
+        let trace_frame = self.performance.begin_frame();
         if self.doc.paper.is_some() {
             self.cam2d.proj = Projection::Equirectangular;
             self.cam2d.lon0 = 0.0;
@@ -1485,6 +1527,7 @@ impl eframe::App for App {
         self.read_workspace_input(&ctx);
         self.apply_workspace_switch(&ctx);
         let mut lap = Instant::now();
+        let input_ms = (lap - t0).as_secs_f32() * 1000.0;
         let mut laps = [0.0f32; 4];
         let mut mark = |i: usize, lap: &mut Instant| {
             laps[i] += lap.elapsed().as_secs_f32() * 1000.0;
@@ -1573,6 +1616,9 @@ impl eframe::App for App {
         self.sync_fonts(&ctx);
         self.coalesce_settings(&ctx, &frame_start, gen_start);
         self.handle_close(&ctx);
+        if self.allow_close || (!self.dirty && ctx.input(|i| i.viewport().close_requested())) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
         let busy = self.pending.is_some() || self.settings_pending.is_some();
         crate::crash::remember(&self.doc, &self.path, self.history.generation(), self.dirty);
         // for testing the crash handling: ATLAS_DEBUG_PANIC makes the
@@ -1580,8 +1626,11 @@ impl eframe::App for App {
         if self.dirty && std::env::var_os("ATLAS_DEBUG_PANIC").is_some() {
             panic!("ATLAS_DEBUG_PANIC: deliberate crash with unsaved work");
         }
-        if let Some(e) = self.autosave.tick(&ctx, &self.doc, self.path.clone(), self.history.generation(), self.dirty, busy) {
-            self.set_status(crate::trf!("自动保存失败：{e}"), true);
+        let closing = self.confirm_close || self.allow_close || ctx.input(|i| i.viewport().close_requested());
+        if !closing {
+            if let Some(e) = self.autosave.tick(&ctx, &self.doc, self.path.clone(), self.history.generation(), self.dirty, busy) {
+                self.set_status(crate::trf!("自动保存失败：{e}"), true);
+            }
         }
         mark(3, &mut lap);
         if let Some(p) = &mut self.prof {
@@ -1591,6 +1640,54 @@ impl eframe::App for App {
             // each frame's own parts too, for measuring (stderr)
             eprintln!("FRAME ui {:.2} derived {:.2} panels {:.2} views {:.2} rest {:.2} dt {:.2}", t0.elapsed().as_secs_f32() * 1000.0, laps[0], laps[1], laps[2], laps[3], ctx.input(|i| i.unstable_dt) * 1000.0);
         }
-        self.ui_ms = self.ui_ms * 0.9 + t0.elapsed().as_secs_f32() * 1000.0 * 0.1;
+        let ui_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        self.ui_ms = self.ui_ms * 0.9 + ui_ms * 0.1;
+        if let Some(number) = trace_frame {
+            // A release can arrive in the same input batch as drag movement.
+            let ui_drag = ctx.dragged_id().is_some() || ctx.drag_stopped_id().is_some();
+            let (input, interval_ms, focused, viewport) = ctx.input(|i| {
+                let mut input = map_perf::Input {
+                    dragging: ui_drag || i.pointer.is_decidedly_dragging(),
+                    ..Default::default()
+                };
+                for event in &i.events {
+                    match event {
+                        egui::Event::MouseWheel { .. } | egui::Event::Zoom(_) => input.wheel += 1,
+                        egui::Event::Key { .. } => input.keys += 1,
+                        egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } => input.pointer += 1,
+                        egui::Event::Touch { .. } => input.touch += 1,
+                        egui::Event::MouseMoved(_) => input.raw_motion += 1,
+                        _ => input.other += 1,
+                    }
+                }
+                (input, i.unstable_dt * 1000.0, i.focused, i.viewport_rect().size())
+            });
+            let (workspace, layout) = if self.studio.foreground {
+                ("Studio", "Studio")
+            } else if self.star_map.open {
+                ("Star chart", "3D")
+            } else if self.doc.paper.is_some() {
+                ("Artboard", "2D")
+            } else {
+                ("Map", match self.layout { Layout::Flat => "2D", Layout::Globe => "3D", Layout::Split => "2D + 3D" })
+            };
+            let phases = [
+                ("输入与切换 · ms", input_ms),
+                ("地图派生数据 · ms", laps[0]),
+                ("面板与任务轮询 · ms", laps[1]),
+                ("工作区绘图 · ms", laps[2]),
+                ("窗口、时间与保存管理 · ms", laps[3]),
+            ].into_iter().map(|(name, ms)| map_perf::Phase { name, ms }).collect();
+            self.performance.end_frame(map_perf::Frame {
+                number, ui_ms, interval_ms, input, phases, workspace, layout,
+                tool: if self.land_move.active { self.land_move.mode_name() } else { self.tool.name() },
+                year: self.doc.year, viewport: [viewport.x, viewport.y],
+                pixels_per_point: ctx.pixels_per_point(), zoom: self.cam2d.zoom,
+                globe_distance: self.globe.dist, faces: self.doc.topo.faces.len(),
+                edges: self.doc.topo.edges.len(), entities: self.doc.entities.len(),
+                triangles: self.scene.vertex_count() / 3, lines: self.scene.line_count(),
+                history_generation: self.history.generation(), dirty: self.dirty, focused,
+            });
+        }
     }
 }

@@ -200,7 +200,7 @@ impl Advisor {
             })
             .collect::<Vec<_>>()
             .join("\n\n");
-        std::thread::spawn(move || {
+        crate::perf_ui::spawn("帮助助手请求", move || {
             let mut answer = local_answer(&doc, &question);
             if let Some(config) = config {
                 let prompt = format!("软件实际菜单和操作：\n{catalog}\n\n近期对话（历史答复仅供参考）：\n{history}\n\n本地检查与建议：\n{}\n\n用户问题：{question}", answer.text);

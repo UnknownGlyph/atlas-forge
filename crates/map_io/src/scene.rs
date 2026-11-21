@@ -129,6 +129,7 @@ pub enum LegendKey {
     Symbol(map_core::symbol::SymbolKind, [u8; 4]),
     /// A character symbol: the character and its colour.
     Glyph(String, [u8; 4]),
+    Pixels(std::sync::Arc<map_core::pixel_art::PixelArt>),
 }
 
 /// One drawn part of a legend swatch.
@@ -147,6 +148,28 @@ pub struct LegendRow {
     pub label: String,
 }
 
+/// One screen-space pixel mark, retaining its shared pixels until rendering.
+pub struct PixelMark {
+    pub art: std::sync::Arc<map_core::pixel_art::PixelArt>,
+    pub rect: [f32; 4],
+    pub opacity: f32,
+}
+
+impl PixelMark {
+    pub fn runs(&self) -> impl Iterator<Item = ([f32; 4], [u8; 4])> + '_ {
+        pixel_rects(&self.art, self.rect).map(|(rect, color)| (rect, faded(color, self.opacity)))
+    }
+}
+
+fn pixel_rects(art: &map_core::pixel_art::PixelArt, rect: [f32; 4]) -> impl Iterator<Item = ([f32; 4], [u8; 4])> + '_ {
+    let [x, y, w, h] = rect;
+    let [cols, rows] = art.size().map(f32::from);
+    let (dx, dy) = (w / cols, h / rows);
+    art.runs().map(move |([start, end, row], color)| (
+        [x + f32::from(start) * dx, y + f32::from(row) * dy, f32::from(end - start) * dx, dy], color
+    ))
+}
+
 /// The shapes of one layer of drawn features, its opacity already in
 /// their colours.
 pub struct SceneLayer {
@@ -154,6 +177,7 @@ pub struct SceneLayer {
     pub polys: Vec<ScenePoly>,
     pub lines: Vec<SceneLine>,
     pub fills: Vec<(Vec<P2>, [u8; 4])>,
+    pub pixels: Vec<PixelMark>,
 }
 
 /// A colour made more see-through (`k` from 0 to 1).
@@ -178,6 +202,7 @@ pub struct Scene {
     /// Filled polygons over the lines (route arrowheads, symbols); any
     /// shape, filled with the nonzero rule.
     pub fills: Vec<(Vec<P2>, [u8; 4])>,
+    pub pixels: Vec<PixelMark>,
     /// The layers of drawn features, from the bottom of the stack up:
     /// laid over everything above, each whole (its washes, then its
     /// lines, then its filled shapes) before the next.
@@ -212,6 +237,7 @@ pub fn empty_scene(width: u32, height: u32, background: [u8; 4]) -> Scene {
         labels: vec![],
         dots: vec![],
         fills: vec![],
+        pixels: vec![],
         layers: vec![],
         legend: None,
         title: String::new(),
@@ -406,27 +432,9 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
     let m = Mapper::new(o);
     let (w, h, scale) = (m.w, m.h, m.scale);
     let st = &doc.style;
-    let blank = || Scene {
-        width: o.width,
-        height: o.height,
-        background: o.background,
-        polys: vec![],
-        glow: vec![],
-        shade: None,
-        lines: vec![],
-        labels: vec![],
-        dots: vec![],
-        fills: vec![],
-        layers: vec![],
-        legend: None,
-        title: o.title.clone(),
-        title_at: None,
-        legend_at: None,
-        furniture: vec![],
-        insets: vec![],
-        top: None,
-    };
+    let blank = || empty_scene(o.width, o.height, o.background);
     let mut s = blank();
+    s.title.clone_from(&o.title);
 
     // ocean = whole projected world
     let world = densify(&[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0]], true, 1.0);
@@ -655,6 +663,14 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
         // symbols shown in the document's year, drawn from the shared marks
         for (_, sym) in doc.symbols.iter().filter(|(id, x)| x.shown_in(doc.year) && in_pass(id)) {
             let p = m.px([geom::wrap_lon(sym.at.lon - o.lon0), sym.at.lat]);
+            if let Some(art) = &sym.pixels {
+                let [w, h] = sym.drawn_size(k);
+                to.pixels.push(PixelMark {
+                    art: art.clone(), rect: [p[0] as f32 - w * 0.5, p[1] as f32 - h * 0.5, w, h],
+                    opacity: 1.0,
+                });
+                continue;
+            }
             if sym.kind == map_core::symbol::SymbolKind::Glyph {
                 // a character symbol is text, centred on its point
                 let size = map_core::symbol::glyph_px(sym.size * k);
@@ -683,6 +699,7 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
                 polys: own.polys.into_iter().map(|p| ScenePoly { fill: faded(p.fill, k), rings: p.rings }).collect(),
                 lines: own.lines.into_iter().map(|l| SceneLine { color: faded(l.color, k), ..l }).collect(),
                 fills: own.fills.into_iter().map(|(p, c)| (p, faded(c, k))).collect(),
+                pixels: own.pixels.into_iter().map(|item| PixelMark { opacity: k, ..item }).collect(),
             });
             // character symbols are text: with the other labels, on top
             s.labels.extend(own.labels.into_iter().map(|l| SceneLabel { color: faded(l.color, k), ..l }));
@@ -774,14 +791,19 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
         for (id, sym) in doc.symbols.iter().filter(|(id, x)| x.shown_in(doc.year) && !doc.group_hides(**id)) {
             fades.push((s.labels.len(), doc.group_opacity(*id)));
             let p = m.px([geom::wrap_lon(sym.at.lon - o.lon0), sym.at.lat]);
-            let (cx, cy, r) = (p[0] as f32, p[1] as f32, sym.size * k);
-            boxes.push([cx - r - 2.0, cy - r - 2.0, cx + r + 2.0, cy + r + 2.0]);
+            let (cx, cy) = (p[0] as f32, p[1] as f32);
+            let [rx, ry] = sym.drawn_size(k).map(|v| v * 0.5);
+            boxes.push([cx - rx - 2.0, cy - ry - 2.0, cx + rx + 2.0, cy + ry + 2.0]);
             if sym.name.is_empty() {
                 continue;
             }
             let size = (sym.size * 1.5).max(9.0) * k;
             let (tw, th) = (text_width(&sym.name, size), size * 1.2);
-            let [x, y] = sym.name_place.top_left([cx, cy], r, tw, th, 3.0 * k);
+            let width_or_height = match sym.name_place {
+                map_core::symbol::NamePlace::Left | map_core::symbol::NamePlace::Right => rx,
+                _ => ry,
+            };
+            let [x, y] = sym.name_place.top_left([cx, cy], width_or_height, tw, th, 3.0 * k);
             boxes.push([x - 2.0, y, x + tw + 2.0, y + th]);
             s.labels.push(SceneLabel { text: sym.name.clone(), pos: [(x + tw * 0.5) as f64, (y + th * 0.5 + size * 0.35) as f64], size, color: sym.color, angle: 0.0, italic: false, font: None, bold: false });
         }
@@ -1088,7 +1110,13 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
         for kind in map_core::symbol::SymbolKind::ALL {
             for (_, sym) in doc.symbols.iter().filter(|(id, x)| x.kind == kind && x.shown_in(doc.year) && !doc.group_hides(**id)) {
                 let Some(label) = sym.legend_text() else { continue };
-                let key = if kind == map_core::symbol::SymbolKind::Glyph { LegendKey::Glyph(sym.glyph.clone(), sym.color) } else { LegendKey::Symbol(kind, sym.color) };
+                let key = if let Some(art) = &sym.pixels {
+                    LegendKey::Pixels(art.clone())
+                } else if kind == map_core::symbol::SymbolKind::Glyph {
+                    LegendKey::Glyph(sym.glyph.clone(), sym.color)
+                } else {
+                    LegendKey::Symbol(kind, sym.color)
+                };
                 push(&mut items, &label, key);
             }
         }
@@ -1453,6 +1481,11 @@ fn swatch(key: &LegendKey, r: [f32; 4], column: [f32; 4], k: f32) -> Vec<LegendP
             let size = (h * 1.1).min(map_core::symbol::glyph_px(h * 0.48));
             let tw = text_width(g, size);
             vec![LegendPart::Text(g.clone(), [x + w * 0.5 - tw * 0.5, y + h * 0.5 + size * 0.35], size, *color)]
+        }
+        LegendKey::Pixels(art) => {
+            let [pw, ph] = art.drawn_size(w.min(h) * 0.94);
+            pixel_rects(art, [x + (w - pw) * 0.5, y + (h - ph) * 0.5, pw, ph])
+                .map(|(rect, color)| LegendPart::Rect(rect, color)).collect()
         }
         LegendKey::Symbol(kind, color) => map_core::symbol::marks(*kind, [x + w * 0.5, y + h * 0.5], h * 0.48, *color)
             .into_iter()

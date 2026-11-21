@@ -26,6 +26,7 @@ mod fonts_ui;
 mod furniture_ui;
 mod help_advisor;
 mod guides_ui;
+mod label_boxes;
 mod label_ui;
 mod map_detail;
 mod layers_ui;
@@ -38,6 +39,9 @@ mod names_ui;
 mod pageview_ui;
 mod playback_ui;
 mod panels;
+mod perf_ui;
+mod pixel_ui;
+mod prefs_writer;
 mod replay_ui;
 mod screen_path;
 mod plugin_ui;
@@ -49,6 +53,7 @@ mod river_ui;
 mod select_ui;
 mod self_test;
 mod shell_ui;
+mod shutdown;
 mod star_map;
 mod styles_ui;
 mod studio_ui;
@@ -56,6 +61,8 @@ mod symbol_ui;
 mod view;
 mod visualization_ui;
 mod wizard_ui;
+#[cfg(windows)]
+mod windows_app;
 mod worldview_ui;
 mod timeline_ui;
 mod tutorial_ui;
@@ -93,7 +100,11 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default().with_title("Atlas Forge").with_inner_size([1500.0, 900.0]).with_min_inner_size([900.0, 560.0]),
         ..Default::default()
     };
-    eframe::run_native(
+    #[cfg(windows)]
+    let run = windows_app::run;
+    #[cfg(not(windows))]
+    let run = eframe::run_native;
+    let result = run(
         "Atlas Forge",
         options,
         Box::new(move |cc| {
@@ -116,8 +127,9 @@ fn main() -> eframe::Result<()> {
             }
             Ok(Box::new(app::App::new(cc, font, open_path)))
         }),
-    )
-    .inspect_err(|e| {
+    );
+    shutdown::finish();
+    result.inspect_err(|e| {
         // no window to show it in: a message box, with what to try
         let _ = rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)

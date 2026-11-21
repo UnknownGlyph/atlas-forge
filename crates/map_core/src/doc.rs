@@ -206,7 +206,7 @@ pub struct Layer {
     pub shares: ShareStore,
 }
 
-pub const FORMAT_VERSION: u32 = 9;
+pub const FORMAT_VERSION: u32 = 11;
 /// Built-in, geometry-derived field key.
 pub const AREA_KEY: &str = "area_km2";
 

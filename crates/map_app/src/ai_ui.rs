@@ -116,7 +116,7 @@ impl App {
         a.error = None;
         a.base = self.history.generation();
         a.job = Some(rx);
-        std::thread::spawn(move || {
+        crate::perf_ui::spawn("AI 助手请求", move || {
             let mut session = map_api::Session::new(doc, "当前地图");
             let net = map_ai::default_transport();
             let step_tx = tx.clone();

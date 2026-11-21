@@ -22,7 +22,8 @@ impl App {
         ui.push_id("line", |ui| self.river_panel(ui));
         ui.push_id("area", |ui| self.area_panel(ui));
         ui.separator();
-        ui.push_id("layers", |ui| self.layers_section(ui));
+        let all = self.feature_catalog.rows(&self.doc);
+        ui.push_id("layers", |ui| self.layers_section(ui, &all));
         ui.label(RichText::new(crate::i18n::tr("要素")).strong());
         ui.horizontal(|ui| {
             ui.label(crate::i18n::tr("筛选"));
@@ -31,7 +32,6 @@ impl App {
                 ui.checkbox(&mut self.layer_only, crate::i18n::tr("只列当前图层"));
             }
         });
-        let all = self.doc.features();
         if all.is_empty() {
             ui.weak(crate::i18n::tr("还没有绘制要素：地图文字（标注 T）、符号（Y）、河流与线路（R）、斜线区域（H）都会列在这里。"));
             return;
@@ -42,7 +42,7 @@ impl App {
         let only = self.active_group.filter(|_| self.layer_only);
         let q = self.feature_filter.trim().to_string();
         let shown: Vec<_> = all
-            .into_iter()
+            .iter()
             .filter(|f| {
                 let g = self.doc.group_of_feature(f.what);
                 (only.is_none() || g == only) && (matches(f, &q) || (!q.is_empty() && layer_name(g).is_some_and(|n| n.contains(&q))))
@@ -62,7 +62,7 @@ impl App {
         // (which, hide?) from the eye boxes and the per-kind buttons; (which, lock?)
         let mut visibility: Vec<(FeatureRef, bool)> = Vec::new();
         let mut locks: Vec<(FeatureRef, bool)> = Vec::new();
-        for f in &shown {
+        for &f in &shown {
             let kind = f.what.kind_name();
             if kind != heading {
                 heading = kind;

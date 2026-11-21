@@ -190,7 +190,7 @@ impl App {
         let input = self.doc.clone();
         let worker = input.clone();
         let repaint = ctx.clone();
-        let output = std::thread::spawn(move || {
+        let output = crate::perf_ui::spawn("环境与行星模拟", move || {
             let result = environment::generate(&worker, &project);
             repaint.request_repaint();
             result

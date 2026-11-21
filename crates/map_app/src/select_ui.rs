@@ -7,15 +7,11 @@
 //! `map_core::arrange`.
 
 use crate::app::App;
-use crate::view::{Tool, ViewGeom, ViewKind};
+use crate::view::{Tool, ViewGeom};
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Stroke};
 use map_core::arrange::{Align, Clip};
 use map_core::features::FeatureRef;
 use map_core::LonLat;
-
-fn view_index(vg: &ViewGeom) -> usize {
-    (vg.kind != ViewKind::Flat) as usize
-}
 
 const ACCENT: Color32 = Color32::from_rgb(40, 110, 200);
 
@@ -98,7 +94,7 @@ impl App {
     /// drawn boxes, lines and areas by their lines. Locked ones are passed over.
     pub fn feature_at(&self, o: Pos2, vg: &ViewGeom) -> Option<FeatureRef> {
         let free = |f: &FeatureRef| !self.doc.locked_in_effect(*f);
-        let i = view_index(vg);
+        let i = vg.kind.index();
         if let Some(f) = self.sym_rects.borrow()[i].iter().rev().find(|(_, r)| r.contains(o)).map(|(id, _)| FeatureRef::Symbol(*id)).filter(free) {
             return Some(f);
         }
@@ -171,7 +167,7 @@ impl App {
                 let sel = self.selection();
                 let on_selected = !sel.is_empty() && self.feature_at(o, vg).is_some_and(|h| sel.contains(&h));
                 if shift {
-                    self.marquee = Some((view_index(vg), o, o));
+                    self.marquee = Some((vg.kind.index(), o, o));
                 } else if let (true, Some(q)) = (on_selected, vg.to_lonlat(o)) {
                     self.begin_pending(if sel.len() == 1 { "移动要素" } else { "移动多个要素" });
                     let original = self.doc.copy_features(&sel);
@@ -183,7 +179,7 @@ impl App {
         }
         if let Some((view, from, _)) = self.marquee {
             // the other view leaves the box alone (and stays still)
-            if view != view_index(vg) {
+            if view != vg.kind.index() {
                 return true;
             }
             if let Some(p) = resp.interact_pointer_pos() {
@@ -250,7 +246,7 @@ impl App {
 
     /// Outline what is selected, and the selection box while it is drawn.
     pub fn draw_selection(&self, painter: &egui::Painter, vg: &ViewGeom) {
-        let i = view_index(vg);
+        let i = vg.kind.index();
         let stroke = Stroke::new(1.5, ACCENT);
         for f in self.selection() {
             match f {

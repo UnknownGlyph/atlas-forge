@@ -3,9 +3,10 @@ use crate::{
     view::{ViewGeom, ViewKind},
 };
 use eframe::egui::{self, Color32, PointerButton, Stroke};
+use std::collections::BTreeSet;
 use map_core::{
     geom::{self, LonLat},
-    topo::{GeoOffset, LandTransform},
+    topo::{land_group_center, GeoOffset, GlobeRotation, LandBlock, LandTransform},
     FaceId,
 };
 
@@ -14,7 +15,10 @@ pub(crate) struct LandMove {
     pub active: bool,
     seeds: Vec<FaceId>,
     coast: Vec<Vec<LonLat>>,
-    faces: usize,
+    faces: BTreeSet<FaceId>,
+    anchor: Option<LonLat>,
+    longitude_only: bool,
+    multi_pick: bool,
     drag: Option<(ViewKind, LonLat)>,
     offset: GeoOffset,
     generation: u64,
@@ -24,125 +28,132 @@ pub(crate) struct LandMove {
 }
 
 impl LandMove {
+    pub(crate) fn mode_name(&self) -> &'static str {
+        crate::i18n::tr(if self.scaling { "整体缩放陆块" } else { "整体移动陆块" })
+    }
+
     fn reset_input(&mut self) {
         self.offset = GeoOffset::default();
         self.percent = 100.0;
+        self.anchor = None;
     }
 
-    fn transform(&self) -> LandTransform {
+    fn transform(&self) -> Result<LandTransform, String> {
         if let (true, Some(pivot)) = (self.scaling, self.pivot) {
-            LandTransform::Scale {
-                pivot,
-                factor: self.percent / 100.0,
-            }
+            Ok(LandTransform::Scale { pivot, factor: self.percent / 100.0 })
+        } else if self.longitude_only {
+            Ok(LandTransform::Translate(GeoOffset { lon: self.offset.lon, lat: 0.0 }))
+        } else if let Some(anchor) = self.anchor.or(self.pivot) {
+            GlobeRotation::between(anchor, self.offset.apply(anchor)).map(LandTransform::Rotate)
         } else {
-            LandTransform::Translate(self.offset)
+            Ok(LandTransform::Translate(GeoOffset::default()))
         }
     }
+
 }
 
 impl App {
     pub(crate) fn start_land_move(&mut self) {
-        self.set_tool(crate::view::Tool::Select);
-        self.land_move.active = true;
-        self.hover_face = None;
-        self.set_status(
-            crate::i18n::tr("点选陆块或按住左键拖动。Shift+单击可加入其他陆块，Esc 退出。"),
-            false,
-        );
+        self.start_land_transform(false);
     }
 
     pub(crate) fn start_land_scale(&mut self) {
-        self.set_tool(crate::view::Tool::Select);
-        self.land_move = LandMove {
-            active: true,
-            scaling: true,
-            percent: 100.0,
-            ..Default::default()
-        };
+        self.start_land_transform(true);
+    }
+
+    fn start_land_transform(&mut self, scaling: bool) {
+        if self.tool != crate::view::Tool::Select {
+            self.set_tool(crate::view::Tool::Select);
+        }
+        self.land_move.active = true;
+        self.land_move.scaling = scaling;
+        self.land_move.drag = None;
+        self.land_move.reset_input();
         self.hover_face = None;
         self.set_status(
-            crate::i18n::tr("选中独立陆块。拖动或输入比例可围绕中心等比缩放。"),
+            crate::i18n::tr("单击选择陆块。Shift+单击添加或移除。拖动所选陆块可整体变换。"),
             false,
         );
     }
 
-    fn pick_land_move(&mut self, at: LonLat, add: bool) -> bool {
+    fn update_land_selection(&mut self, seeds: Vec<FaceId>, block: LandBlock) {
+        let coast = self.doc.topo.block_coastlines(&block);
+        self.land_move.pivot = land_group_center(coast.iter().flatten().copied());
+        self.land_move.seeds = seeds;
+        self.land_move.faces = block.faces;
+        self.land_move.coast = coast;
+        self.land_move.generation = self.history.generation();
+    }
+
+    fn pick_land_move(&mut self, at: LonLat, toggle: bool) -> bool {
         let face = self.doc.topo.face_at(at);
-        let mut seeds = if add && !self.land_move.scaling {
-            self.land_move.seeds.clone()
-        } else {
-            Vec::new()
-        };
-        seeds.push(face);
-        match self.doc.topo.land_block(&seeds) {
-            Ok(block) => {
-                self.land_move.seeds = seeds;
-                self.land_move.faces = block.faces.len();
-                self.land_move.coast = self.doc.topo.block_coastlines(&block);
-                if self.land_move.scaling {
-                    let points: Vec<_> = self.land_move.coast.iter().flatten().copied().collect();
-                    self.land_move.pivot = map_core::arrange::centre_of(&points).or(Some(at));
-                }
-                self.land_move.generation = self.history.generation();
-                true
-            }
+        let component = match self.doc.topo.land_block(&[face]) {
+            Ok(component) => component,
             Err(message) => {
                 self.set_status(message, true);
-                false
+                return false;
             }
+        };
+        if !toggle {
+            self.update_land_selection(vec![face], component);
+            return true;
         }
+        let mut seeds = self.land_move.seeds.clone();
+        if self.land_move.faces.contains(&face) {
+            seeds.retain(|seed| !component.faces.contains(seed));
+        } else {
+            seeds.push(face);
+        }
+        if seeds.is_empty() {
+            self.clear_land_selection();
+        } else if let Ok(block) = self.doc.topo.land_block(&seeds) {
+            self.update_land_selection(seeds, block);
+        }
+        true
+    }
+
+    fn clear_land_selection(&mut self) {
+        self.land_move = LandMove {
+            active: true,
+            scaling: self.land_move.scaling,
+            longitude_only: self.land_move.longitude_only,
+            multi_pick: self.land_move.multi_pick,
+            percent: 100.0,
+            ..Default::default()
+        };
     }
 
     fn apply_land_move(&mut self) {
-        let transform = self.land_move.transform();
-        if transform.is_identity() || self.land_move.seeds.is_empty() {
+        if self.land_move.seeds.is_empty() {
             return;
         }
         if self.land_move.generation != self.history.generation() {
-            self.land_move = LandMove {
-                active: true,
-                scaling: self.land_move.scaling,
-                percent: 100.0,
-                ..Default::default()
-            };
-            self.set_status(
-                crate::i18n::tr("地图在选取后发生了变化，请重新选择陆块。"),
-                true,
-            );
+            self.clear_land_selection();
+            self.set_status(crate::i18n::tr("地图在选取后发生了变化，请重新选择陆块。"), true);
             return;
         }
+        let transform = match self.land_move.transform() {
+            Ok(transform) if !transform.is_identity() => transform,
+            Ok(_) => return,
+            Err(error) => {
+                self.set_status(error, true);
+                return;
+            }
+        };
         let seeds = self.land_move.seeds.clone();
-        let label = crate::i18n::tr(if self.land_move.scaling {
-            "整体缩放陆块"
-        } else {
-            "整体移动陆块"
-        });
-        if let Some(count) = self.edit(label, |doc| {
-            let block = match transform {
-                LandTransform::Translate(offset) => doc.translate_land(&seeds, offset)?,
-                LandTransform::Scale { pivot, factor } => {
-                    doc.scale_land(seeds[0], pivot, factor)?
-                }
-            };
-            Ok(block.faces.len())
+        let label = self.land_move.mode_name();
+        if let Some(block) = self.edit(label, |doc| {
+            doc.transform_land(&seeds, transform)
         }) {
             self.land_move.reset_input();
-            self.land_move.generation = self.history.generation();
-            if let Ok(block) = self.doc.topo.land_block(&seeds) {
-                self.land_move.coast = self.doc.topo.block_coastlines(&block);
-                self.land_move.faces = block.faces.len();
-            }
+            self.update_land_selection(seeds, block);
             let status = match transform {
-                LandTransform::Translate(offset) => format!(
-                    "已移动 {count} 个地块。经度偏移 {:+.4}°，纬度偏移 {:+.4}°。",
-                    offset.lon, offset.lat
-                ),
-                LandTransform::Scale { factor, .. } => format!(
-                    "{} {count} · {:.2}%",
-                    crate::i18n::tr("整体缩放陆块"),
-                    factor * 100.0
-                ),
+                LandTransform::Translate(_) | LandTransform::Rotate(_) => {
+                    crate::trf!("已整体移动 {} 个地块。", self.land_move.faces.len())
+                }
+                LandTransform::Scale { factor, .. } => {
+                    crate::trf!("已将 {} 个地块整体缩放至 {:.2}%。", self.land_move.faces.len(), factor * 100.0)
+                }
             };
             self.set_status(status, false);
         } else {
@@ -157,20 +168,21 @@ impl App {
         if !self.land_move.seeds.is_empty()
             && self.land_move.generation != self.history.generation()
         {
-            self.land_move = LandMove {
-                active: true,
-                scaling: self.land_move.scaling,
-                percent: 100.0,
-                ..Default::default()
-            };
+            self.clear_land_selection();
         }
         ui.horizontal_wrapped(|ui| {
+            ui.label(crate::trf!("已选 {} 块大陆 / 岛屿", self.land_move.seeds.len()));
+            ui.checkbox(&mut self.land_move.multi_pick, crate::i18n::tr("多选陆块"))
+                .on_hover_text(crate::i18n::tr("Shift+单击增减陆块"));
+            if ui.add_enabled(!self.land_move.seeds.is_empty(), egui::Button::new(crate::i18n::tr("清除选择"))).clicked() {
+                self.clear_land_selection();
+            }
             if self.land_move.scaling {
                 ui.strong(crate::i18n::tr("整体缩放陆块"));
                 ui.label(format!(
                     "{}: {}",
                     crate::i18n::tr("地块"),
-                    self.land_move.faces
+                    self.land_move.faces.len()
                 ));
                 ui.add_enabled(
                     self.land_move.pivot.is_some(),
@@ -194,7 +206,8 @@ impl App {
                 return;
             }
             ui.strong(crate::i18n::tr("整体移动陆块"));
-            ui.label(crate::trf!("{} 个地块", self.land_move.faces));
+            ui.label(crate::trf!("{} 个地块", self.land_move.faces.len()));
+            ui.checkbox(&mut self.land_move.longitude_only, crate::i18n::tr("仅沿经度移动"));
             ui.add(
                 egui::DragValue::new(&mut self.land_move.offset.lon)
                     .range(-180.0..=180.0)
@@ -202,7 +215,8 @@ impl App {
                     .prefix(crate::i18n::tr("经度 Δ "))
                     .suffix("°"),
             );
-            ui.add(
+            ui.add_enabled(
+                !self.land_move.longitude_only,
                 egui::DragValue::new(&mut self.land_move.offset.lat)
                     .range(-180.0..=180.0)
                     .speed(0.1)
@@ -232,7 +246,7 @@ impl App {
     ) {
         if resp.clicked_by(PointerButton::Primary) {
             if let Some(at) = hover {
-                let add = resp.ctx.input(|input| input.modifiers.shift);
+                let add = self.land_move.multi_pick || resp.ctx.input(|input| input.modifiers.shift);
                 self.land_move.reset_input();
                 self.pick_land_move(at, add);
             }
@@ -245,29 +259,25 @@ impl App {
             if let Some(at) = at {
                 let face = self.doc.topo.face_at(at);
                 let already_selected = self.land_move.generation == self.history.generation()
-                    && self
-                        .doc
-                        .topo
-                        .land_block(&self.land_move.seeds)
-                        .is_ok_and(|block| block.faces.contains(&face));
+                    && self.land_move.faces.contains(&face);
                 if already_selected || self.pick_land_move(at, false) {
-                    self.land_move.drag = Some((vg.kind, at));
                     self.land_move.reset_input();
+                    self.land_move.drag = Some((vg.kind, at));
+                    self.land_move.anchor = Some(at);
                 }
             }
         }
-        if let Some((kind, from)) = self.land_move.drag.filter(|(kind, _)| *kind == vg.kind) {
-            let _ = kind;
+        if let Some((_, from)) = self.land_move.drag.filter(|(kind, _)| *kind == vg.kind) {
             let at = resp
                 .interact_pointer_pos()
                 .filter(|&p| vg.rect.contains(p))
                 .and_then(|p| vg.to_lonlat(p));
             if let Some(at) = at {
                 if let (true, Some(pivot)) = (self.land_move.scaling, self.land_move.pivot) {
-                    let from_distance = geom::geo_dist_deg(pivot, from);
+                    let distance = |p: LonLat| geom::lon_delta(pivot.lon, p.lon).hypot(p.lat - pivot.lat);
+                    let from_distance = distance(from);
                     if from_distance > 1e-7 {
-                        self.land_move.percent = (100.0 * geom::geo_dist_deg(pivot, at)
-                            / from_distance)
+                        self.land_move.percent = (100.0 * distance(at) / from_distance)
                             .clamp(1.0, 2000.0);
                     }
                 } else {
@@ -309,8 +319,8 @@ impl App {
             return;
         }
         let ink = Stroke::new(2.0, Color32::from_rgb(18, 148, 190));
-        let transform = self.land_move.transform();
-        if let Some(pivot) = self.land_move.pivot.and_then(|point| vg.to_screen(point)) {
+        let Ok(transform) = self.land_move.transform() else { return };
+        if let Some(pivot) = self.land_move.pivot.and_then(|point| vg.to_screen(transform.apply(point))) {
             painter.circle_stroke(pivot, 4.0, ink);
         }
         for ring in &self.land_move.coast {

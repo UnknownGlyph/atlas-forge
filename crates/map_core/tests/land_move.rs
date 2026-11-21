@@ -148,3 +148,79 @@ fn scaling_keeps_one_shared_boundary_and_rejects_conflicts_atomically() {
     assert_eq!(doc.owner_changes, before.owner_changes);
     doc.topo.validate().unwrap();
 }
+
+#[test]
+fn disconnected_land_uses_one_pivot_and_one_scale_factor() {
+    use map_core::topo::{land_group_center, LandTransform};
+
+    let (mut doc, [west, east, lake, island]) = map();
+    let west_city = doc.add_city(point(6.0, 4.0), "西大陆");
+    let island_city = doc.add_city(point(28.0, 6.0), "岛上");
+    let before = doc.clone();
+    let selected = doc.topo.land_block(&[west, island]).unwrap();
+    let pivot =
+        land_group_center(doc.topo.block_coastlines(&selected).into_iter().flatten()).unwrap();
+    assert_eq!(pivot, point(16.5, 5.0));
+    let moved = doc
+        .transform_land(
+            &[west, island],
+            LandTransform::Scale {
+                pivot,
+                factor: 1.25,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        moved.faces,
+        [west, east, lake, island].into_iter().collect()
+    );
+    let center = |doc: &Document, city| doc.entities[&city].pos.unwrap();
+    let a = center(&doc, west_city);
+    let b = center(&doc, island_city);
+    assert_eq!(a, point(3.375, 3.75));
+    assert_eq!(b, point(30.875, 6.25));
+    assert_eq!(
+        b.lon - a.lon,
+        1.25 * (center(&before, island_city).lon - center(&before, west_city).lon)
+    );
+    assert_eq!(
+        b.lat - a.lat,
+        1.25 * (center(&before, island_city).lat - center(&before, west_city).lat)
+    );
+    assert_eq!(doc.topo.edges.len(), before.topo.edges.len());
+    doc.topo.validate().unwrap();
+}
+
+#[test]
+fn dragging_a_group_preserves_spherical_distance() {
+    use map_core::topo::{GlobeRotation, LandTransform};
+
+    let (mut doc, [west, _, _, island]) = map();
+    let a = point(6.0, 4.0);
+    let b = point(28.0, 6.0);
+    let first = doc.add_city(a, "西大陆");
+    let second = doc.add_city(b, "岛上");
+    let target = point(57.0, 43.0);
+    let rotation = LandTransform::Rotate(GlobeRotation::between(a, target).unwrap());
+    doc.transform_land(&[west, island], rotation).unwrap();
+    let moved_a = doc.entities[&first].pos.unwrap();
+    let moved_b = doc.entities[&second].pos.unwrap();
+
+    fn cos_distance(a: LonLat, b: LonLat) -> f64 {
+        let (a_lat, b_lat) = (a.lat.to_radians(), b.lat.to_radians());
+        a_lat.sin() * b_lat.sin() + a_lat.cos() * b_lat.cos() * (a.lon - b.lon).to_radians().cos()
+    }
+    assert!((moved_a.lon - target.lon).abs() < 1e-10);
+    assert!((moved_a.lat - target.lat).abs() < 1e-10);
+    assert!((cos_distance(a, b) - cos_distance(moved_a, moved_b)).abs() < 1e-12);
+    doc.topo.validate().unwrap();
+}
+
+#[test]
+fn group_center_unwraps_a_selection_crossing_the_date_line() {
+    use map_core::topo::land_group_center;
+
+    let pivot =
+        land_group_center([point(166.0, 8.0), point(-174.0, 16.0), point(175.0, 20.0)]).unwrap();
+    assert_eq!(pivot, point(176.0, 14.0));
+}

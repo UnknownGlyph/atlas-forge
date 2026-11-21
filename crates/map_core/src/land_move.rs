@@ -16,7 +16,7 @@ impl Document {
         self.transform_land(&[seed], LandTransform::Scale { pivot, factor })
     }
 
-    fn transform_land(&mut self, seeds: &[FaceId], transform: LandTransform) -> TResult<LandBlock> {
+    pub fn transform_land(&mut self, seeds: &[FaceId], transform: LandTransform) -> TResult<LandBlock> {
         if self.paper.is_some() {
             return Err("纸面画板没有地理陆块。可以在选择工具中移动画板要素。".into());
         }

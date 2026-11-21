@@ -2,12 +2,13 @@
 //! days, radii in reference-body units. The renderer applies its own scale.
 use crate::climate::{Param, Planet as Environment};
 use crate::Document;
+use glam::{DQuat, DVec3};
 use serde::{Deserialize, Serialize};
 use std::f64::consts::TAU;
 
 pub mod gaia;
 mod gravity;
-pub use gravity::{BodyKey, Gravity, State, G};
+pub use gravity::{BodyKey, Gravity, OrbitReading, Perturbation, State, G};
 
 pub const AU_KM: f64 = 149_597_870.7;
 pub const SUN_RADIUS_KM: f64 = 695_700.0;
@@ -35,12 +36,29 @@ pub struct Orbit {
     pub au: f64,
     pub eccentricity: f64,
     pub inclination: f64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub ascending_node: f64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub periapsis_argument: f64,
     pub days: f64,
     /// Mean anomaly at the simulation's time origin.
     pub phase: f64,
 }
 
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
+}
+
 impl Orbit {
+    pub fn plane(&self) -> DQuat {
+        DQuat::from_rotation_y(-self.ascending_node.to_radians())
+            * DQuat::from_rotation_x(-self.inclination.to_radians())
+    }
+
+    pub fn kepler_period(&self, central_mass_solar: f64, orbiting_mass_solar: f64) -> f64 {
+        TAU * (self.au.powi(3) / (G * (central_mass_solar + orbiting_mass_solar))).sqrt()
+    }
+
     pub fn position(&self, days: f64) -> [f64; 3] {
         self.state(days).0
     }
@@ -60,8 +78,11 @@ impl Orbit {
         let change = TAU / (self.days * (1.0 - e * cos_e));
         let vx = -self.au * change * sin_e;
         let va = self.au * axis_ratio * change * cos_e;
-        let (sin, cos) = self.inclination.to_radians().sin_cos();
-        ([x, along * sin, along * cos], [vx, va * sin, va * cos])
+        let orientation = self.plane() * DQuat::from_rotation_y(-self.periapsis_argument.to_radians());
+        (
+            (orientation * DVec3::new(x, 0.0, along)).to_array(),
+            (orientation * DVec3::new(vx, 0.0, va)).to_array(),
+        )
     }
 }
 
@@ -110,6 +131,8 @@ impl Default for Moon {
                 au: 384_400.0 / AU_KM,
                 eccentricity: 0.0549,
                 inclination: 5.145,
+                ascending_node: 0.0,
+                periapsis_argument: 0.0,
                 days: 27.3217,
                 phase: 42.0,
             },
@@ -134,9 +157,7 @@ impl Moon {
     /// Moon relative to the project world. The moon's nominal orbital plane
     /// is inclined to the world's orbital plane around the star.
     pub fn position_km(&self, home: &Body, days: f64) -> [f64; 3] {
-        let [x, y, z] = self.orbit.position(days).map(|v| v * AU_KM);
-        let (sin, cos) = home.orbit.inclination.to_radians().sin_cos();
-        [x, y * cos + z * sin, z * cos - y * sin]
+        (home.orbit.plane() * DVec3::from(self.orbit.position(days)) * AU_KM).to_array()
     }
 }
 
@@ -187,6 +208,9 @@ pub struct StarChart {
     pub moon: Moon,
     #[serde(default)]
     pub gravity: bool,
+    /// Degree-two zonal harmonic of the home world's gravity.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub home_j2: f64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub companions: Vec<Companion>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -204,6 +228,8 @@ impl Default for StarChart {
                     au,
                     eccentricity,
                     inclination,
+                    ascending_node: 0.0,
+                    periapsis_argument: 0.0,
                     days,
                     phase,
                 },
@@ -290,6 +316,7 @@ impl Default for StarChart {
             galaxy: Galaxy::default(),
             moon: Moon::default(),
             gravity: false,
+            home_j2: 0.0,
             companions: Vec::new(),
             satellites: Vec::new(),
         }
@@ -317,6 +344,16 @@ impl StarChart {
             .chain(self.satellites.iter().map(|s| s.model))
             .chain(self.galaxy.stars.iter().map(|s| s.model))
             .flatten()
+    }
+
+    pub fn requires_orbital_elements_format(&self) -> bool {
+        let extra_angles = |o: &Orbit| !is_zero(&o.ascending_node) || !is_zero(&o.periapsis_argument);
+        !is_zero(&self.home_j2)
+            || extra_angles(&self.home.orbit)
+            || extra_angles(&self.moon.orbit)
+            || self.planets.iter().any(|b| extra_angles(&b.orbit))
+            || self.companions.iter().any(|b| extra_angles(&b.orbit))
+            || self.satellites.iter().any(|b| extra_angles(&b.orbit))
     }
 
     pub fn requires_extended_format(&self) -> bool {

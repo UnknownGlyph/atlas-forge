@@ -11,6 +11,7 @@ name = "atlas"
 path = "src/main.rs"
 
 [dependencies]
+map_perf = { path = "../map_perf" }
 map_core.workspace = true
 map_io.workspace = true
 map_render.workspace = true
@@ -25,3 +26,6 @@ rfd.workspace = true
 raw-window-handle = "0.6"
 bytemuck.workspace = true
 earcutr.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winit = { version = "0.30", default-features = false }

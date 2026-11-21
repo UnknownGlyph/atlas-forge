@@ -51,6 +51,57 @@ fn fill_poly(pm: &mut Pixmap, poly: &[[f64; 2]], c: [u8; 4]) {
 
 /// Rasterise a scene. `font` should contain CJK glyphs (e.g. Microsoft
 /// YaHei); without a font, text is skipped.
+fn paint_pixels(
+    pm: &mut Pixmap,
+    marks: &[crate::scene::PixelMark],
+    images: &mut std::collections::HashMap<*const map_core::pixel_art::PixelArt, Pixmap>,
+) {
+    for mark in marks {
+        let key = std::sync::Arc::as_ptr(&mark.art);
+        let image = images.entry(key).or_insert_with(|| {
+            let [w, h] = mark.art.size().map(u32::from);
+            let mut image = Pixmap::new(w, h).expect("validated pixel art dimensions");
+            for (dst, &[r, g, b, a]) in image.data_mut().chunks_exact_mut(4).zip(mark.art.pixels()) {
+                let premul = |c: u8| ((u16::from(c) * u16::from(a) + 127) / 255) as u8;
+                dst.copy_from_slice(&[premul(r), premul(g), premul(b), a]);
+            }
+            image
+        });
+        let [x, y, w, h] = mark.rect;
+        let transform = Transform::from_translate(x, y)
+            .pre_scale(w / image.width() as f32, h / image.height() as f32);
+        let paint = PixmapPaint { opacity: mark.opacity, quality: tiny_skia::FilterQuality::Nearest, ..Default::default() };
+        pm.draw_pixmap(0, 0, image.as_ref(), &paint, transform, None);
+    }
+}
+
+/// Export a stamp as a transparent PNG at its original resolution.
+pub fn save_pixel_art(art: &map_core::pixel_art::PixelArt, path: &std::path::Path) -> Result<(), String> {
+    use image::ImageEncoder as _;
+    let [width, height] = art.size().map(u32::from);
+    let mut png = Vec::new();
+    let rgba: Vec<_> = art.pixels().iter().flatten().copied().collect();
+    image::codecs::png::PngEncoder::new(&mut png)
+        .write_image(&rgba, width, height, image::ExtendedColorType::Rgba8)
+        .map_err(|e| e.to_string())?;
+    crate::recovery::write_atomic(path, &png).map_err(|e| e.to_string())
+}
+
+/// Open a transparent or opaque stamp without resampling the source pixels.
+pub fn load_pixel_art(path: &std::path::Path) -> Result<map_core::pixel_art::PixelArt, String> {
+    use image::ImageDecoder as _;
+    let source = image::ImageReader::open(path).map_err(|e| e.to_string())?;
+    let decoder = image::ImageReader::with_format(source.into_inner(), image::ImageFormat::Png)
+        .into_decoder().map_err(|e| e.to_string())?;
+    let (w, h) = decoder.dimensions();
+    let max = u32::from(map_core::pixel_art::MAX_SIDE);
+    if !(1..=max).contains(&w) || !(1..=max).contains(&h) {
+        return Err(format!("请使用宽高都在 1–{max} 像素范围内的 PNG。"));
+    }
+    let rgba = image::DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?.into_rgba8();
+    map_core::pixel_art::PixelArt::from_pixels(w as u16, h as u16, rgba.pixels().map(|p| p.0).collect())
+}
+
 pub fn render(s: &Scene, font: Option<&[u8]>) -> Result<Pixmap, String> {
     let font_bytes = font;
     let mut pm = Pixmap::new(s.width, s.height).ok_or("图片尺寸无效")?;
@@ -114,6 +165,8 @@ pub fn render(s: &Scene, font: Option<&[u8]>) -> Result<Pixmap, String> {
     for (poly, c) in &s.fills {
         fill_poly(&mut pm, poly, *c);
     }
+    let mut pixel_images = std::collections::HashMap::new();
+    paint_pixels(&mut pm, &s.pixels, &mut pixel_images);
     // the layers of drawn features, each whole, the top one last
     for layer in &s.layers {
         fill_polys(&mut pm, &layer.polys);
@@ -123,6 +176,7 @@ pub fn render(s: &Scene, font: Option<&[u8]>) -> Result<Pixmap, String> {
         for (poly, c) in &layer.fills {
             fill_poly(&mut pm, poly, *c);
         }
+        paint_pixels(&mut pm, &layer.pixels, &mut pixel_images);
     }
     for (p, r, c) in &s.dots {
         if let Some(path) = PathBuilder::from_circle(p[0] as f32, p[1] as f32, *r) {

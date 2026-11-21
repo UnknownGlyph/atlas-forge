@@ -122,7 +122,7 @@ impl App {
         if go {
             let mut spec = self.wizard.spec.clone();
             spec.history = self.wizard.with_history.then_some(self.wizard.history);
-            self.wizard.job = Some(std::thread::spawn(move || map_core::worldgen::generate(&spec)));
+            self.wizard.job = Some(crate::perf_ui::spawn("生成新世界", move || map_core::worldgen::generate(&spec)));
         }
         if !open {
             self.wizard.open = false;

@@ -316,19 +316,26 @@ fn sky(p: &Painter, rect: Rect, view: &View, star: &Star, sun_direction: Vec3, l
     }
 }
 
-fn displayed_moon(physical: DVec3, moon: &Moon) -> Vec3 {
-    (physical * (5.6 / moon.distance_km())).as_vec3()
+fn satellite_radius(planet_r: f64, satellite_r: f64, home_display: f32) -> f32 {
+    ((satellite_r / planet_r).powf(0.78) as f32 * home_display).clamp(0.063, 2.1)
 }
 
-fn satellite_display(physical: DVec3, planet_r: f64, moon: &Moon, baseline: bool) -> Vec3 {
-    if baseline {
-        return displayed_moon(physical, moon);
-    }
-    let unit = (planet_r * 0.45).max(250.0);
-    let height = (physical.length() - planet_r).max(0.0);
-    let horizon = (moon.distance_km() - planet_r).max(1.0);
-    let distance = 1.34 + 4.26 * (height / unit).ln_1p() / (horizon / unit).ln_1p();
-    (physical.normalize_or_zero() * distance).as_vec3()
+fn satellite_display(
+    physical: DVec3, planet_r: f64, satellite_r: f64, reference_km: f64,
+    home_display: f32, linear: bool,
+) -> Vec3 {
+    // The illustration exaggerates radii. Compress the clearance between
+    // surfaces, so a close pass can look close without drawing false contact.
+    let height = (physical.length() - planet_r - satellite_r).max(0.0);
+    let reference_height = (reference_km - planet_r - satellite_r).max(1.0);
+    let scale = if linear {
+        height / reference_height
+    } else {
+        let unit = (planet_r * 0.45).max(250.0);
+        (height / unit).ln_1p() / (reference_height / unit).ln_1p()
+    };
+    let contact = f64::from(home_display + satellite_radius(planet_r, satellite_r, home_display));
+    (physical.normalize_or_zero() * (contact + (5.6 - contact).max(0.5) * scale)).as_vec3()
 }
 
 fn spin(tilt: f64, turns: f64, locked_to: Option<Vec3>) -> Quat {
@@ -366,6 +373,7 @@ pub(in crate::star_map) fn local_system(
     };
     local.moon = satellite_km(LunarTarget::Moon, moon);
     let natural_only = satellites.is_empty();
+    let home_r = ((local.planet_r / EARTH_RADIUS_KM).powf(0.40) as f32 * 1.28).clamp(0.25, 3.2);
     let moons: Vec<_> = std::iter::once((LunarTarget::Moon, moon))
         .chain(
             satellites
@@ -379,7 +387,7 @@ pub(in crate::star_map) fn local_system(
                 target,
                 m,
                 physical,
-                satellite_display(physical, local.planet_r, moon, natural_only),
+                satellite_display(physical, local.planet_r, m.radius_km, moon.distance_km(), home_r, natural_only),
             )
         })
         .collect();
@@ -405,7 +413,9 @@ pub(in crate::star_map) fn local_system(
                 if let Some((at, _)) = view.project(satellite_display(
                     moon_km,
                     local.planet_r,
-                    moon,
+                    satellite.radius_km,
+                    moon.distance_km(),
+                    home_r,
                     natural_only,
                 )) {
                     path.push(at);
@@ -420,26 +430,25 @@ pub(in crate::star_map) fn local_system(
             }
         }
     }
-    let home_r = (local.planet_r / EARTH_RADIUS_KM).powf(0.40) as f32 * 1.28;
     let texture = state.surface.as_ref().map(|s| s.image.id());
     let mut objects = std::iter::once((
         LunarTarget::Home,
         &home.name,
         Vec3::ZERO,
-        home_r.clamp(0.25, 3.2),
+        home_r,
         home.color,
         texture,
         home.model,
         None,
     ))
     .chain(moons.iter().map(|&(target, satellite, _, pos)| {
-        let radius = (satellite.radius_km / local.planet_r).powf(0.78) as f32 * home_r;
+        let radius = satellite_radius(local.planet_r, satellite.radius_km, home_r);
         let artificial = satellite.mass_kg.is_some_and(|m| m < 1e10);
         (
             target,
             &satellite.name,
             pos,
-            radius.clamp(0.063, 2.1),
+            radius,
             if artificial {
                 [169, 192, 229]
             } else {

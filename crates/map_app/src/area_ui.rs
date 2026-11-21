@@ -16,7 +16,7 @@ impl App {
     /// Every hatched area shown in the current year (all of them, the
     /// others faint, with the hatch tool), under routes, symbols and text.
     /// `taken` collects the names' boxes so city names keep clear of them.
-    pub fn draw_areas(&self, painter: &egui::Painter, vg: &ViewGeom, taken: &mut Vec<egui::Rect>, pass: map_core::stack::DrawPass) {
+    pub fn draw_areas(&self, painter: &egui::Painter, vg: &ViewGeom, taken: &mut crate::label_boxes::LabelBoxes, pass: map_core::stack::DrawPass) {
         let editing = self.tool == Tool::Hatch;
         for (id, a) in self.doc.areas.iter().filter(|(id, _)| self.doc.group_of_id(**id) == pass.group) {
             let shown = a.shown_in(self.doc.year);

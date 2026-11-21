@@ -20,10 +20,6 @@ const MAX_PX: f32 = 38.0;
 const MIN_PX: f32 = 9.0;
 const MIN_FIT: f32 = 8.5;
 
-fn view_index(vg: &ViewGeom) -> usize {
-    usize::from(vg.kind != ViewKind::Flat)
-}
-
 /// A line drawn on the screen for a name to follow (straight on beyond
 /// its ends).
 struct Bent {
@@ -173,11 +169,11 @@ struct Laid {
 impl App {
     /// Draw the country labels, recording where each one is for the label
     /// tool. `taken` collects their glyphs' boxes so city names keep clear.
-    pub fn draw_country_labels(&self, painter: &egui::Painter, vg: &ViewGeom, taken: &mut Vec<Rect>) {
+    pub fn draw_country_labels(&self, painter: &egui::Painter, vg: &ViewGeom, taken: &mut crate::label_boxes::LabelBoxes) {
         let editing = self.tool == Tool::Label;
         let mut rects: Vec<(EntityId, Rect)> = Vec::new();
         if !self.doc.style.show_labels && !editing {
-            self.label_rects.borrow_mut()[view_index(vg)] = rects;
+            self.label_rects.borrow_mut()[vg.kind.index()] = rects;
             return;
         }
         let label_col = {
@@ -342,7 +338,7 @@ impl App {
                         continue;
                     }
                 }
-                if !vg.rect.contains_rect(all) || boxes.iter().any(|g| taken.iter().any(|t| t.intersects(*g))) {
+                if !vg.rect.contains_rect(all) || boxes.iter().any(|g| taken.intersects(*g)) {
                     continue;
                 }
             }
@@ -369,7 +365,7 @@ impl App {
                 painter.rect_stroke(all, 2.0, Stroke::new(if strong { 2.0 } else { 0.8 }, col), egui::StrokeKind::Outside);
             }
         }
-        self.label_rects.borrow_mut()[view_index(vg)] = rects;
+        self.label_rects.borrow_mut()[vg.kind.index()] = rects;
     }
 
     /// The label tool: drag a label to place it, click one to select its country.
@@ -382,7 +378,7 @@ impl App {
         let hit = |rects: &[(EntityId, Rect)], at: Pos2| rects.iter().rev().find(|(_, r)| r.contains(at)).map(|(e, r)| (*e, r.center()));
         if resp.drag_started_by(Primary) {
             let origin = resp.ctx.input(|i| i.pointer.press_origin());
-            let found = origin.and_then(|o| hit(&self.label_rects.borrow()[view_index(vg)], o).map(|(e, c)| (e, c - o)));
+            let found = origin.and_then(|o| hit(&self.label_rects.borrow()[vg.kind.index()], o).map(|(e, c)| (e, c - o)));
             if let Some((e, off)) = found {
                 self.begin_pending("移动标注");
                 self.drag_label = Some((e, off));
@@ -409,7 +405,7 @@ impl App {
             return;
         }
         if resp.clicked() {
-            let found = resp.interact_pointer_pos().and_then(|p| hit(&self.label_rects.borrow()[view_index(vg)], p));
+            let found = resp.interact_pointer_pos().and_then(|p| hit(&self.label_rects.borrow()[vg.kind.index()], p));
             if let Some((e, _)) = found {
                 self.select_country(e);
             }

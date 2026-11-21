@@ -194,7 +194,7 @@ impl App {
         &self,
         painter: &egui::Painter,
         vg: &ViewGeom,
-        taken: &mut Vec<Rect>,
+        taken: &mut crate::label_boxes::LabelBoxes,
     ) {
         let detail = self.map_detail(vg);
         if !self.doc.style.show_labels || detail.opacity(1) == 0.0 {
@@ -227,7 +227,7 @@ impl App {
             let text =
                 painter.layout_no_wrap(entity.name.clone(), font, ink.gamma_multiply(opacity));
             let area = Rect::from_center_size(at, text.size()).expand(2.0);
-            if !vg.rect.contains_rect(area) || taken.iter().any(|other| other.intersects(area)) {
+            if !vg.rect.contains_rect(area) || taken.intersects(area) {
                 continue;
             }
             let pos = at - text.size() * 0.5;

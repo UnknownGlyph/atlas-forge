@@ -140,7 +140,7 @@ impl App {
         let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (d, c, doc) = (done.clone(), cancel.clone(), self.doc.clone());
-        let handle = std::thread::spawn(move || map_io::atlas::export_atlas(&doc, &job, &d, &c));
+        let handle = crate::perf_ui::spawn("导出地图集", move || map_io::atlas::export_atlas(&doc, &job, &d, &c));
         self.batch = Some(BatchRun { done, cancel, total, dir, started: std::time::Instant::now(), what: "地图集导出", handle: Some(handle) });
         self.set_status(crate::trf!("正在导出地图集（{total} 幅）…"), false);
     }

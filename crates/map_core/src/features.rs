@@ -50,6 +50,34 @@ pub struct FeatureInfo {
     pub at: LonLat,
 }
 
+/// Shared metadata for feature lists. The source comparisons are constant
+/// time when only the view, year, selection or layer metadata changes.
+#[derive(Default)]
+pub struct FeatureCatalog {
+    annotations: imbl::OrdMap<LineId, crate::doc::Annotation>,
+    symbols: imbl::OrdMap<LineId, crate::symbol::MapSymbol>,
+    rivers: imbl::OrdMap<LineId, crate::doc::LineFeature>,
+    areas: imbl::OrdMap<LineId, crate::area::AreaMark>,
+    rows: std::sync::Arc<[FeatureInfo]>,
+}
+
+impl FeatureCatalog {
+    pub fn rows(&mut self, doc: &Document) -> std::sync::Arc<[FeatureInfo]> {
+        if !self.annotations.ptr_eq(&doc.annotations)
+            || !self.symbols.ptr_eq(&doc.symbols)
+            || !self.rivers.ptr_eq(&doc.rivers)
+            || !self.areas.ptr_eq(&doc.areas)
+        {
+            self.rows = doc.features().into();
+            self.annotations = doc.annotations.clone();
+            self.symbols = doc.symbols.clone();
+            self.rivers = doc.rivers.clone();
+            self.areas = doc.areas.clone();
+        }
+        self.rows.clone()
+    }
+}
+
 /// The mean direction of some points (their centre on the sphere).
 fn centre(pts: &[LonLat]) -> Option<LonLat> {
     let mut s = [0.0f64; 3];
@@ -85,7 +113,7 @@ impl Document {
             out.push(FeatureInfo { what: FeatureRef::Text(*id), name: a.text.clone(), detail: String::new(), years: String::new(), hidden: a.hidden, at: a.at });
         }
         for (id, s) in self.symbols.iter() {
-            out.push(FeatureInfo { what: FeatureRef::Symbol(*id), name: s.name.clone(), detail: if s.kind == crate::symbol::SymbolKind::Glyph { format!("字符 {}", s.glyph) } else { s.kind.name().into() }, years: s.years_text(), hidden: s.hidden, at: s.at });
+            out.push(FeatureInfo { what: FeatureRef::Symbol(*id), name: s.name.clone(), detail: if s.pixels.is_none() && s.kind == crate::symbol::SymbolKind::Glyph { format!("字符 {}", s.glyph) } else { s.kind_name().into() }, years: s.years_text(), hidden: s.hidden, at: s.at });
         }
         for (id, r) in self.rivers.iter() {
             let Some(at) = (r.pts.len() >= 2).then(|| crate::doc::path_middle(&r.pts)) else { continue };
@@ -189,5 +217,26 @@ impl Document {
             })
             .map(|f| f.what)
             .collect()
+    }
+}
+
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+
+    #[test]
+    fn catalog_only_rebuilds_when_feature_data_changes() {
+        let mut catalog = FeatureCatalog::default();
+        let mut doc = Document::default();
+        let id = LineId(doc.topo.alloc());
+        doc.symbols.insert(id, crate::symbol::MapSymbol::new(crate::symbol::SymbolKind::Port, LonLat::new(0.0, 0.0)));
+        let original = catalog.rows(&doc);
+        doc.year = Some(1900);
+        assert!(std::sync::Arc::ptr_eq(&original, &catalog.rows(&doc)));
+        doc.symbols.get_mut(&id).unwrap().name = "深水港".into();
+        let updated = catalog.rows(&doc);
+        assert_eq!(updated[0].name, "深水港");
+        assert!(!std::sync::Arc::ptr_eq(&original, &updated));
     }
 }

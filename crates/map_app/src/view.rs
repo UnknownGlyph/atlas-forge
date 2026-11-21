@@ -176,6 +176,13 @@ pub enum ViewKind {
     Globe,
 }
 
+impl ViewKind {
+    /// Slot shared by viewport state for the flat map and the globe.
+    pub(crate) fn index(self) -> usize {
+        match self { Self::Flat => 0, Self::Globe => 1 }
+    }
+}
+
 /// Screen ⇄ lon/lat mapping of one view.
 #[derive(Clone, Copy)]
 pub struct ViewGeom {
@@ -290,7 +297,7 @@ impl GlobeInertia {
     }
 }
 
-struct MapCallback(FrameData);
+struct MapCallback(FrameData, Option<(map_perf::Trace, Option<u64>)>, ViewKind);
 
 impl egui_wgpu::CallbackTrait for MapCallback {
     fn prepare(
@@ -301,6 +308,8 @@ impl egui_wgpu::CallbackTrait for MapCallback {
         enc: &mut egui_wgpu::wgpu::CommandEncoder,
         res: &mut egui_wgpu::CallbackResources,
     ) -> Vec<egui_wgpu::wgpu::CommandBuffer> {
+        let _measurement = self.1.as_ref().map(|(trace, frame)| trace.span("绘制回调",
+            if self.2 == ViewKind::Flat { "二维绘制准备 · ms" } else { "球体绘制准备 · ms" }, *frame));
         if let Some(gpu) = res.get_mut::<MapGpu>() {
             gpu.prepare(device, queue, enc, &self.0);
         }
@@ -308,6 +317,8 @@ impl egui_wgpu::CallbackTrait for MapCallback {
     }
 
     fn paint(&self, _info: egui::PaintCallbackInfo, pass: &mut egui_wgpu::wgpu::RenderPass<'static>, res: &egui_wgpu::CallbackResources) {
+        let _measurement = self.1.as_ref().map(|(trace, frame)| trace.span("绘制回调",
+            if self.2 == ViewKind::Flat { "二维命令编码 · ms" } else { "球体命令编码 · ms" }, *frame));
         if let Some(gpu) = res.get::<MapGpu>() {
             gpu.paint(pass, self.0.view_id);
         }
@@ -345,6 +356,7 @@ impl App {
     }
 
     pub fn map_view(&mut self, ui: &mut egui::Ui, kind: ViewKind, rect: Rect) {
+        let _measurement = crate::perf_ui::span("画布", if kind == ViewKind::Flat { "二维画布" } else { "球体画布" });
         let id = ui.scope_id().with(match kind {
             ViewKind::Flat => "flat",
             ViewKind::Globe => "globe",
@@ -521,7 +533,7 @@ impl App {
             if !clipped.is_positive() { return; }
             painter.with_clip_rect(clipped)
         } else { painter };
-        painter.add(egui_wgpu::Callback::new_paint_callback(rect, MapCallback(data)));
+        painter.add(egui_wgpu::Callback::new_paint_callback(rect, MapCallback(data, crate::perf_ui::context(), kind)));
         self.draw_land_move(&painter, &vg);
         self.draw_geographic_guides(&painter, &vg);
         let t_ov = std::time::Instant::now();
@@ -812,7 +824,7 @@ impl App {
         let rect = vg.rect;
         let style = &self.doc.style;
         // country labels: placed ones, then automatic ones avoiding each other
-        let mut taken: Vec<Rect> = Vec::new();
+        let mut taken = crate::label_boxes::LabelBoxes::default();
         let t_a = std::time::Instant::now();
         // drawn features, layer by layer: those in no layer first, then
         // each layer from the bottom of the stack up, with its opacity
@@ -861,7 +873,7 @@ impl App {
                 let ink = if map_core::doc::halo_for(lc) == [255, 255, 255, 255] { Color32::from_gray(25) } else { Color32::from_rgb(lc[0], lc[1], lc[2]) };
                 let galley = painter.layout_no_wrap(e.name.clone(), font, ink);
                 let r = Rect::from_min_size(s + Vec2::new(6.0, -galley.size().y * 0.5), galley.size()).expand(1.0);
-                if !taken.iter().any(|t| t.intersects(r)) {
+                if !taken.intersects(r) {
                     painter.galley(r.min + Vec2::splat(1.0), galley, ink);
                     taken.push(r);
                 }

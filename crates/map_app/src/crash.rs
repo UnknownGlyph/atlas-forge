@@ -8,7 +8,7 @@
 use map_core::doc::Document;
 use map_io::recovery::Recovery;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 /// The work to save if the program crashes now.
 struct Unsaved {
@@ -19,7 +19,16 @@ struct Unsaved {
 }
 
 static UNSAVED: Mutex<Option<Unsaved>> = Mutex::new(None);
-static RECOVERY: OnceLock<Arc<Recovery>> = OnceLock::new();
+static RECOVERY: Mutex<Option<Arc<Recovery>>> = Mutex::new(None);
+
+pub(crate) fn release_recovery() {
+    if let Ok(mut recovery) = RECOVERY.lock() {
+        recovery.take();
+    }
+    if let Ok(mut unsaved) = UNSAVED.lock() {
+        unsaved.take();
+    }
+}
 
 /// Keep the document for an emergency save (`dirty`: it has unsaved
 /// changes; otherwise there is nothing to save). Cheap when nothing changed.
@@ -48,8 +57,8 @@ fn report(info: &std::panic::PanicHookInfo, thread: &str) -> String {
 
 /// Install the panic hook. `recovery`: where an emergency snapshot goes.
 pub fn install(recovery: Option<Arc<Recovery>>, crash_directory: std::path::PathBuf) {
-    if let Some(r) = recovery {
-        let _ = RECOVERY.set(r);
+    if let Ok(mut current) = RECOVERY.lock() {
+        *current = recovery;
     }
     let interface = std::thread::current().id();
     let previous = std::panic::take_hook();
@@ -65,7 +74,8 @@ pub fn install(recovery: Option<Arc<Recovery>>, crash_directory: std::path::Path
         // program goes on; on the interface thread it is the end
         if on_interface {
             // try_lock: the panic may have happened while the copy was being taken
-            if let (Some(rec), Ok(mut u)) = (RECOVERY.get(), UNSAVED.try_lock()) {
+            let recovery = RECOVERY.try_lock().ok().and_then(|r| r.clone());
+            if let (Some(rec), Ok(mut u)) = (recovery, UNSAVED.try_lock()) {
                 if let Some(x) = u.take() {
                     match rec.write_with(&x.doc, x.original, log.clone()) {
                         Ok(()) => eprintln!("unsaved work was saved for recovery"),

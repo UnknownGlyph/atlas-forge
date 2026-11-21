@@ -433,7 +433,7 @@ impl App {
                 } else {
                     (intent, None)
                 };
-                let handle = std::thread::spawn(move || map_core::overlay::apply(&doc, &pts, intent));
+                let handle = crate::perf_ui::spawn("构建绘制区域", move || map_core::overlay::apply(&doc, &pts, intent));
                 self.bg_edit = Some(BgEdit { label, generation: self.history.generation(),
                     year: self.doc.year, layer: self.doc.active_layer, started: Instant::now(),
                     pts: self.draft.clone(), created, handle });
@@ -456,7 +456,7 @@ impl App {
                     Err(e) => return self.set_status(crate::trf!("重画国界：{e}"), true),
                 };
                 let doc = self.doc.clone();
-                let handle = std::thread::spawn(move || map_core::redraw::apply(&doc, &plan));
+                let handle = crate::perf_ui::spawn("重绘共享边界", move || map_core::redraw::apply(&doc, &plan));
                 let label = "重画国界";
                 self.bg_edit = Some(BgEdit { label, generation: self.history.generation(),
                     year: self.doc.year, layer: self.doc.active_layer, started: Instant::now(),

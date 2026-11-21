@@ -1440,7 +1440,7 @@ impl App {
             };
             let (d, c, doc) = (done.clone(), cancel.clone(), self.doc.clone());
             let total = job.years.len();
-            let handle = std::thread::spawn(move || map_io::batch::export_animation(&doc, &job, &d, &c).map(|p| p.into_iter().collect()));
+            let handle = crate::perf_ui::spawn("批量导出动画", move || map_io::batch::export_animation(&doc, &job, &d, &c).map(|p| p.into_iter().collect()));
             self.batch = Some(BatchRun { done, cancel, total, dir, started: std::time::Instant::now(), what: "动画导出", handle: Some(handle) });
             self.set_status(crate::trf!("正在生成 {total} 帧动画…"), false);
             return;
@@ -1455,7 +1455,7 @@ impl App {
         };
         let (d, c, doc) = (done.clone(), cancel.clone(), self.doc.clone());
         let total = job.years.len();
-        let handle = std::thread::spawn(move || map_io::batch::export_years(&doc, &job, &d, &c));
+        let handle = crate::perf_ui::spawn("批量导出历史地图", move || map_io::batch::export_years(&doc, &job, &d, &c));
         self.batch = Some(BatchRun { done, cancel, total, dir, started: std::time::Instant::now(), what: "逐年导出", handle: Some(handle) });
         self.set_status(crate::trf!("逐年导出 {total} 年…"), false);
     }

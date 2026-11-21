@@ -85,13 +85,13 @@ impl App {
         self.selection().iter().any(|f| self.doc.group_of_feature(*f).is_some())
     }
 
-    pub fn layers_section(&mut self, ui: &mut egui::Ui) {
+    pub fn layers_section(&mut self, ui: &mut egui::Ui, features: &[map_core::features::FeatureInfo]) {
         if self.active_group.is_some_and(|g| self.doc.group(g).is_none()) {
             self.active_group = None;
         }
         let groups = self.doc.groups.clone();
         let mut count: HashMap<Option<GroupId>, usize> = HashMap::new();
-        for f in self.doc.features() {
+        for f in features {
             *count.entry(self.doc.group_of_feature(f.what)).or_default() += 1;
         }
         let sel = self.selection();

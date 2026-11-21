@@ -86,7 +86,7 @@ impl Models {
                 if let Some(asset) = book.assets.get(&id).cloned() {
                     self.inputs.insert(id, asset.bytes.clone());
                     let (tx, rx) = mpsc::channel();
-                    std::thread::spawn(move || {
+                    crate::perf_ui::spawn("生成星图数据", move || {
                         let _ = tx.send((id, map_io::model::decode(&asset)));
                     });
                     self.pending.insert(id, rx);
@@ -188,7 +188,10 @@ impl StarMap {
         };
         self.actual_step = 0.0;
         if self.playing && time_delta > 0.0 {
-            match driver.simulation.advance(time_delta, 95) {
+            let _span = crate::perf_ui::span("星图", "推进多体轨道");
+            let bodies = driver.simulation.states().len();
+            let budget = (16_000 / (bodies * bodies)).clamp(8, 72);
+            match driver.simulation.advance(time_delta, budget) {
                 Ok(span) => {
                     self.actual_step = span;
                 }

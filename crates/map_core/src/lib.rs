@@ -46,6 +46,7 @@ pub mod snap;
 pub mod stats;
 pub mod star_chart;
 pub mod symbol;
+pub mod pixel_art;
 pub mod terrain;
 pub mod testworld;
 pub mod theme;

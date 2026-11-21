@@ -204,7 +204,7 @@ impl App {
                     let (tx, rx) = mpsc::channel();
                     self.plugins.error = None;
                     self.plugins.job = Some(rx);
-                    std::thread::spawn(move || {
+                    crate::perf_ui::spawn("执行插件草稿", move || {
                         let mut session = Session::new(document, "当前地图");
                         let report = run_batch(&mut session, &requests);
                         let draft = session.draft().cloned();

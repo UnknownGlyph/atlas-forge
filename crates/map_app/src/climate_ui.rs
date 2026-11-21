@@ -188,7 +188,7 @@ impl App {
         let document = self.doc.clone();
         let copy = document.clone();
         let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
+        crate::perf_ui::spawn("气候模拟", move || {
             let _ = tx.send(run_model(&copy, mode));
         });
         self.climate_ui.job = Some(Job {

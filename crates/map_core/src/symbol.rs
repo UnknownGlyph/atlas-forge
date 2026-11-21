@@ -131,6 +131,9 @@ pub struct MapSymbol {
     /// The character drawn for a `Glyph` symbol.
     #[serde(default)]
     pub glyph: String,
+    /// Optional custom artwork. The underlying kind is restored if removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pixels: Option<std::sync::Arc<crate::pixel_art::PixelArt>>,
     /// What it stands for in the export's legend; empty: a built-in kind's
     /// name (a `Glyph` symbol then stays out of the legend).
     #[serde(default)]
@@ -148,7 +151,16 @@ pub struct MapSymbol {
 
 impl MapSymbol {
     pub fn new(kind: SymbolKind, at: LonLat) -> Self {
-        Self { kind, at, size: 7.0, color: kind.default_color(), name: String::new(), name_place: NamePlace::Right, glyph: if kind == SymbolKind::Glyph { "◆".into() } else { String::new() }, legend: String::new(), hidden: false, from: None, to: None }
+        Self { kind, at, size: 7.0, color: kind.default_color(), name: String::new(), name_place: NamePlace::Right, glyph: if kind == SymbolKind::Glyph { "◆".into() } else { String::new() }, pixels: None, legend: String::new(), hidden: false, from: None, to: None }
+    }
+
+    pub fn drawn_size(&self, scale: f32) -> [f32; 2] {
+        let extent = self.size * 2.0 * scale;
+        self.pixels.as_ref().map_or([extent; 2], |art| art.drawn_size(extent))
+    }
+
+    pub fn kind_name(&self) -> &'static str {
+        if self.pixels.is_some() { "像素标志" } else { self.kind.name() }
     }
 
     /// Whether it shows when viewing `year` (`None`: no year selected, all show).
@@ -162,7 +174,7 @@ impl MapSymbol {
         let own = self.legend.trim();
         if !own.is_empty() {
             Some(own.to_string())
-        } else if self.kind == SymbolKind::Glyph {
+        } else if self.pixels.is_some() || self.kind == SymbolKind::Glyph {
             None
         } else {
             Some(self.kind.name().to_string())

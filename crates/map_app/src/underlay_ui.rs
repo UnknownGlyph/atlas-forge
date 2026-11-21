@@ -61,7 +61,7 @@ impl App {
             if !self.ul.cache.iter().any(|e| Arc::ptr_eq(&u.image.0, &e.blob.0)) {
                 let (tx, rx) = mpsc::channel();
                 let (bytes, max_dim, ctx) = (u.image.0.clone(), self.ul.max_dim, ctx.clone());
-                std::thread::spawn(move || {
+                crate::perf_ui::spawn("准备参考底图", move || {
                     let _ = tx.send(map_io::underlay::decode(&bytes, max_dim, MAX_PIXELS));
                     ctx.request_repaint();
                 });

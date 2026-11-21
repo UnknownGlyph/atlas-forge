@@ -1,5 +1,7 @@
 # 性能基准
 
+实际创作时的互动、资源占用和慢帧可用[性能录制工具](PERFORMANCE_RECORDER.md)记录。
+
 运行：`tools\cargo-msvc.cmd run -p map_bench --release`（合成网格世界，种子固定，可复现）。
 
 ## 2026-10-28 · 首次基线（P0）

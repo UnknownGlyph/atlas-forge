@@ -238,7 +238,19 @@ fn utf16_hex(s: &str) -> String {
 }
 
 /// The scene as a PDF file. `font`: the default font's file (the one the
-/// PNG uses), for labels that name none or name one this computer lacks.
+fn pixel_rects(page: &mut Page, marks: &[crate::scene::PixelMark]) {
+    if marks.is_empty() { return; }
+    page.ops.push_str("q\n");
+    for mark in marks {
+        for ([x, y, w, h], color) in mark.runs() {
+            page.alpha(color[3]);
+            let _ = writeln!(page.ops, "{} rg {x:.4} {y:.4} {w:.4} {h:.4} re f", rgb(color));
+        }
+    }
+    page.ops.push_str("Q\n");
+}
+
+/// Uses the fallback faces for labels that name none or name an unavailable font.
 /// The map of a scene (not its legend or title) onto a page, in the
 /// scene's pixels: background, areas, coast bands, hill shading (when
 /// `shade` and the page has it), lines, symbols, features, cities, labels.
@@ -275,6 +287,7 @@ fn draw_map(page: &mut Page, s: &Scene, fallback: &[Face], shade: bool) {
     for (poly, c) in &s.fills {
         page.fill(std::slice::from_ref(poly), *c);
     }
+    pixel_rects(page, &s.pixels);
     for layer in &s.layers {
         for p in &layer.polys {
             page.fill(&p.rings, p.fill);
@@ -285,6 +298,7 @@ fn draw_map(page: &mut Page, s: &Scene, fallback: &[Face], shade: bool) {
         for (poly, c) in &layer.fills {
             page.fill(std::slice::from_ref(poly), *c);
         }
+        pixel_rects(page, &layer.pixels);
     }
     for (p, r, c) in &s.dots {
         page.ops.push_str("q\n");

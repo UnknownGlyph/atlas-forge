@@ -65,16 +65,19 @@ fn name_and_folder(p: &Path) -> (String, String) {
 }
 
 impl App {
-    /// Each frame: the preferences follow the interface, take effect, and
-    /// are stored when they changed (once the pointer is let go, so a
-    /// slider being dragged does not write a file per frame).
+    /// Apply preference changes when the pointer is released. Only the
+    /// background writer waits for the settings file to reach disk.
     pub fn sync_prefs(&mut self, ctx: &egui::Context) {
         self.prefs.layout = layout_name(self.layout).into();
         self.prefs.graticule = self.graticule;
         self.prefs.furniture = self.furniture;
-        if self.prefs == self.prefs_saved || ctx.input(|i| i.pointer.any_down()) {
+        if let Err(error) = self.prefs_writer.tick(&self.prefs_path, ctx) {
+            self.set_status(crate::trf!("偏好设置未能保存：{error}"), true);
+        }
+        if self.prefs == self.prefs_applied || ctx.input(|i| i.pointer.any_down()) {
             return;
         }
+        let _timing = crate::perf_ui::span("偏好设置", "应用界面偏好");
         let language = crate::i18n::Lang::from_code(&self.prefs.language);
         if language != crate::i18n::get() {
             crate::i18n::set(language);
@@ -87,16 +90,20 @@ impl App {
         if (ctx.zoom_factor() - self.prefs.ui_scale).abs() > 1e-3 {
             ctx.set_zoom_factor(self.prefs.ui_scale);
         }
-        if let Err(e) = prefs::save(&self.prefs_path, &self.prefs) {
-            self.set_status(crate::trf!("偏好设置未能保存：{e}"), true);
+        self.prefs_applied = self.prefs.clone();
+        self.prefs_writer.queue(&self.prefs);
+        if let Err(error) = self.prefs_writer.tick(&self.prefs_path, ctx) {
+            self.set_status(crate::trf!("偏好设置未能保存：{error}"), true);
         }
-        self.prefs_saved = self.prefs.clone();
     }
 
     /// A world was opened from or saved to this file.
     pub fn note_recent(&mut self, p: &Path) {
-        // another window may have added files meanwhile
-        self.prefs.recent = prefs::load(&self.prefs_path).recent;
+        // Prefer the current list if a later snapshot has not reached disk.
+        // Otherwise another window may have added files in the meantime.
+        if !self.prefs_writer.writing() && self.prefs.recent == self.prefs_applied.recent {
+            self.prefs.recent = prefs::load(&self.prefs_path).recent;
+        }
         self.prefs.note_recent(p);
     }
 

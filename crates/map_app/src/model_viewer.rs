@@ -199,7 +199,7 @@ impl App {
         let (tx, rx) = mpsc::channel();
         let name = asset.name.clone();
         let source = asset.bytes.clone();
-        std::thread::spawn(move || {
+        crate::perf_ui::spawn("读取三维模型", move || {
             let _ = tx.send(map_io::model::decode(&asset).map(Arc::new));
         });
         self.model_viewer = Some(Viewer {

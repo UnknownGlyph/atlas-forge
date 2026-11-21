@@ -83,6 +83,8 @@ pub enum Act {
     Roads,
     Assistant,
     Plugins,
+    Performance,
+    PixelBrush,
     WorldBook,
     Worldview,
     Environment,
@@ -240,8 +242,8 @@ fn table_with(translate: bool) -> Vec<Action> {
         g(Act::Diplomacy, Menu::Time, "外交关系…", None, "记录双边关系、多边协约、时间区间和关联事件。"),
         g(Act::StarChart, Menu::View, "星图", None, ""),
         g(Act::Names, Menu::Tools, "名称生成器…", None, "按风格生成国名、城市名、地区、海洋、河流、山脉与人名；单击即给所选国家或城市改名，或复制。"),
-        a(Act::LandMove, Menu::Tools, "整体移动陆块", None, "用鼠标移动相连的陆地、城市和共享边界；可输入精确经纬度偏移。"),
-        a(Act::LandScale, Menu::Tools, "整体缩放陆块", None, "围绕选中陆块的中心等比缩放海岸、共享边界和附属要素，并检查冲突。"),
+        a(Act::LandMove, Menu::Tools, "整体移动陆块", None, "Shift+单击选择多个大陆或岛屿，拖动时保留球面距离。"),
+        a(Act::LandScale, Menu::Tools, "整体缩放陆块", None, "Shift+单击选择多个大陆或岛屿，绕同一个中心成组等比缩放。"),
         a(Act::Assistant, Menu::Tools, "AI 助手…", None, "把任务交给语言模型（Gemini 或 DeepSeek）：它查看地图并修改一份草稿，看过前后对比再决定是否采用。"),
         a(Act::Climate, Menu::Tools, "行星环境与气候…", None, "根据恒星、行星与地图地理计算逐月气候参考图。"),
         a(Act::Plugins, Menu::Tools, "本地插件…", None, "打开插件清单，预览命令对地图草稿的修改。"),
@@ -253,6 +255,8 @@ fn table_with(translate: bool) -> Vec<Action> {
         a(Act::Palette, Menu::Help, "命令面板…", key(CMD, Key::K), "按名称查找并执行任何命令。"),
         a(Act::Shortcuts, Menu::Help, "快捷键一览", key(NONE, Key::F1), ""),
         a(Act::Tutorial, Menu::Help, "创作教程…", None, "在软件内跟做地图、历史、气候、世界资料与导出。"),
+        a(Act::PixelBrush, Menu::Tools, "彩色像素画笔…", None, "绘制透明像素图并放置为地图标志。"),
+        a(Act::Performance, Menu::Tools, "性能检测…", None, "记录实际使用中的帧耗时与资源占用。"),
         g(Act::About, Menu::Help, "关于 Atlas Forge", None, ""),
     ]);
     t
@@ -366,7 +370,7 @@ impl App {
 
     /// Whether the action can run now.
     pub fn can(&self, act: Act) -> bool {
-        if self.star_map.open && !matches!(act, Act::StarChart | Act::Studio | Act::Assistant | Act::About | Act::Shortcuts | Act::Tutorial | Act::Palette | Act::Prefs |
+        if self.star_map.open && !matches!(act, Act::StarChart | Act::Studio | Act::Assistant | Act::About | Act::Performance | Act::Shortcuts | Act::Tutorial | Act::Palette | Act::Prefs |
             Act::Save | Act::SaveAs | Act::Open | Act::OpenRecent(_) | Act::NewBlank | Act::NewDemo | Act::Undo | Act::Redo) {
             return false;
         }
@@ -419,6 +423,7 @@ impl App {
 
     /// Run an action. Actions that would discard unsaved work ask first.
     pub fn run(&mut self, act: Act) {
+        let _measurement = crate::perf_ui::action(act);
         if !self.can(act) {
             return;
         }
@@ -569,6 +574,8 @@ impl App {
             Act::LandScale => self.start_land_scale(),
             Act::GeographicGuides => self.guide_draft = Some(self.doc.guides.clone()),
             Act::Plugins => self.plugins.open = true,
+            Act::Performance => self.performance.open = true,
+            Act::PixelBrush => self.open_pixel_editor(None),
             Act::WorldBook => self.book_current_context(),
             Act::Worldview => self.open_worldview(None),
             Act::Environment => self.open_environment(),
@@ -580,6 +587,9 @@ impl App {
 
     /// Run the actions whose shortcuts were pressed.
     pub fn action_shortcuts(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. }))) {
+            return;
+        }
         let typing = ctx.egui_wants_keyboard_input();
         let mut keys: Vec<(KeyboardShortcut, Act)> = table().iter().flat_map(|a| a.keys.into_iter().chain(a.also).map(move |k| (k, a.act))).collect();
         keys.sort_by_key(|(k, _)| std::cmp::Reverse(specificity(k)));

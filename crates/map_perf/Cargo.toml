@@ -1,0 +1,18 @@
+[package]
+name = "map_perf"
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+edition.workspace = true
+description = "Atlas Forge performance recorder and offline report tool"
+
+[[bin]]
+name = "atlas-perf"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Performance", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_System_IO"] }

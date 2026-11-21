@@ -109,7 +109,7 @@ impl VisualizationUi {
             let d = input.clone();
             let s = spec.clone();
             let repaint = ctx.clone();
-            let worker = std::thread::spawn(move || {
+            let worker = crate::perf_ui::spawn("生成专题可视化", move || {
                 let result = s.evaluate(&d).map(|data| Prepared {
                     index: plot::Index::new(&s, &data),
                     data,
@@ -540,7 +540,7 @@ impl App {
         &self,
         painter: &egui::Painter,
         vg: &ViewGeom,
-        taken: &mut Vec<Rect>,
+        taken: &mut crate::label_boxes::LabelBoxes,
     ) {
         let mut buckets = std::collections::HashSet::new();
         let clip = painter.clip_rect().expand(35.0);
@@ -572,7 +572,7 @@ impl App {
                 painter.layout_no_wrap(icon.label.clone(), egui::FontId::proportional(11.0), color);
             let origin = Pos2::new(at.x - g.size().x * 0.5, at.y - icon.size - g.size().y - 2.0);
             let box_ = Rect::from_min_size(origin, g.size()).expand(2.0);
-            if clip.contains_rect(box_) && !taken.iter().any(|r| r.intersects(box_)) {
+            if clip.contains_rect(box_) && !taken.intersects(box_) {
                 painter.rect_filled(box_, 2.0, Color32::from_white_alpha(215));
                 painter.galley(origin, g, color);
                 taken.push(box_);

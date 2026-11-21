@@ -24,31 +24,14 @@ pub fn to_bytes(doc: &Document) -> Result<Vec<u8>, String> {
         WorldBook::switch(&mut stored, ROOT, None)?;
     }
     validate_generated(&stored)?;
+    let mut version = content_version(&stored);
     if let Some(book) = &stored.book {
-        for board in book.boards.values().filter_map(|b| b.doc.as_deref()) { validate_generated(board)?; }
+        version = version.max(if book.worldview.is_some() { 8 } else { 5 });
+        for board in book.boards.values().filter_map(|board| board.doc.as_deref()) {
+            validate_generated(board)?;
+            version = version.max(content_version(board));
+        }
     }
-    let requires_six = |d: &Document| d.paper.is_some() || d.diplomacy.is_some();
-    let requires_seven = |d: &Document| d.star_chart.as_ref().is_some_and(|s| s.requires_extended_format());
-    let needs_eight = |d: &Document| d.environment.is_some() || d.visualization.is_some();
-    let needs_nine = |d: &Document| {
-        use map_core::{area::Pattern, styles::Look};
-        d.areas.values().any(|area| area.pattern == Pattern::Solid)
-            || d.styles.iter().any(|style| matches!(&style.look, Look::Area(area) if area.pattern == Pattern::Solid))
-    };
-    let version = if needs_nine(&stored) || stored.book.as_ref().is_some_and(|book| {
-        book.boards.values().filter_map(|b| b.doc.as_deref()).any(needs_nine)
-    }) { 9 } else if needs_eight(&stored) || stored.book.as_ref().is_some_and(|book| {
-        book.worldview.is_some() || book.boards.values().filter_map(|b| b.doc.as_deref()).any(needs_eight)
-    }) { 8 } else if requires_seven(&stored) || stored.book.as_ref().is_some_and(|b| {
-        b.boards.values().filter_map(|x| x.doc.as_deref()).any(requires_seven)
-    }) { 7 } else if requires_six(&stored) || stored.book.as_ref().is_some_and(|b| {
-        b.boards.values().filter_map(|x| x.doc.as_deref()).any(requires_six)
-    }) { 6 } else if stored.book.is_some() { 5 } else { match &stored.star_chart {
-        Some(chart) if !chart.moon.is_default() => 4,
-        Some(_) => 3,
-        None if doc.climate.is_some() => 2,
-        None => 1,
-    }};
     stored.format_version = version;
     let body = rmp_serde::to_vec_named(&stored).map_err(|e| format!("序列化失败: {e}"))?;
     let packed = lz4_flex::compress_prepend_size(&body);
@@ -57,6 +40,34 @@ pub fn to_bytes(doc: &Document) -> Result<Vec<u8>, String> {
     out.extend_from_slice(&version.to_le_bytes());
     out.extend_from_slice(&packed);
     Ok(out)
+}
+
+/// The oldest reader that can round-trip the data of one independent map.
+fn content_version(doc: &Document) -> u32 {
+    use map_core::{area::Pattern, styles::Look};
+
+    let chart = doc.star_chart.as_deref();
+    if doc.symbols.values().any(|symbol| symbol.pixels.is_some()) {
+        11
+    } else if chart.is_some_and(|s| s.requires_orbital_elements_format()) {
+        10
+    } else if doc.areas.values().any(|area| area.pattern == Pattern::Solid)
+        || doc.styles.iter().any(|style| matches!(&style.look, Look::Area(area) if area.pattern == Pattern::Solid))
+    {
+        9
+    } else if doc.environment.is_some() || doc.visualization.is_some() {
+        8
+    } else if chart.is_some_and(|s| s.requires_extended_format()) {
+        7
+    } else if doc.paper.is_some() || doc.diplomacy.is_some() {
+        6
+    } else if let Some(chart) = chart {
+        if chart.moon.is_default() { 3 } else { 4 }
+    } else if doc.climate.is_some() {
+        2
+    } else {
+        1
+    }
 }
 
 pub fn from_bytes(bytes: &[u8]) -> Result<Document, String> {
@@ -98,6 +109,21 @@ fn restore(doc: &mut Document, version: u32) -> Result<(), String> {
     validate_generated(doc)?;
     if let Some(chart) = &doc.star_chart { chart.validate()?; }
     migrate(doc, version);
+    if doc.symbols.values().any(|symbol| symbol.pixels.is_some()) {
+        let mut seen = std::collections::HashSet::new();
+        let shared: Vec<_> = doc.symbols.iter().filter_map(|(&id, symbol)| {
+            let art = symbol.pixels.as_ref()?;
+            if let Some(same) = seen.get(art) {
+                Some((id, Arc::clone(same)))
+            } else {
+                seen.insert(art.clone());
+                None
+            }
+        }).collect();
+        for (id, art) in shared {
+            doc.symbols.get_mut(&id).unwrap().pixels = Some(art);
+        }
+    }
     // merges before the fix could leave a unit its own parent
     doc.drop_self_parents();
     doc.topo.rebuild_index();
