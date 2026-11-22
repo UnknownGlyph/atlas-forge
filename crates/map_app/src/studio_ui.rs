@@ -24,6 +24,75 @@ enum Page {
     Stars,
 }
 
+impl Page {
+    const ALL: [Self; 7] = [
+        Self::Map,
+        Self::Sources,
+        Self::Worldview,
+        Self::Visualizations,
+        Self::History,
+        Self::Environment,
+        Self::Stars,
+    ];
+
+    fn title(self) -> &'static str {
+        tr(match self {
+            Self::Map => "地图",
+            Self::Sources => "世界资料",
+            Self::Worldview => "世界观",
+            Self::Visualizations => "图表",
+            Self::History => "历史",
+            Self::Environment => "环境",
+            Self::Stars => "星图",
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shelf {
+    Full,
+    Compact,
+    Minimal,
+}
+
+impl Shelf {
+    fn pick(available: f32, full: f32, compact: f32) -> Self {
+        if available >= full {
+            Self::Full
+        } else if available >= compact {
+            Self::Compact
+        } else {
+            Self::Minimal
+        }
+    }
+
+    fn labels(self) -> &'static [&'static str] {
+        match self {
+            Self::Full => &["绘制", "选择", "撤销", "重做", "视角", "属性", "导出…"],
+            Self::Compact => &["绘制", "选择", "视角", "更多…"],
+            Self::Minimal => &["绘制", "更多…"],
+        }
+    }
+
+    fn width(self, ui: &egui::Ui) -> f32 {
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let buttons: f32 = self
+            .labels()
+            .iter()
+            .map(|title| {
+                let width = ui
+                    .painter()
+                    .layout_no_wrap(tr(title).to_owned(), font.clone(), INK)
+                    .size()
+                    .x;
+                (width + 14.0).max(34.0)
+            })
+            .sum();
+        let separators = if self == Self::Full { 26.0 } else { 0.0 };
+        buttons + (self.labels().len() - 1) as f32 * 7.0 + separators + 20.0
+    }
+}
+
 struct Navigation {
     flat: Camera2D,
     globe: GlobeCamera,
@@ -154,6 +223,7 @@ impl App {
             self.studio.professional_visuals = Some(ctx.global_style().visuals.clone());
             ctx.set_visuals(studio_visuals());
         } else if let Some(visuals) = self.studio.professional_visuals.take() {
+            self.studio.finder.open = false;
             ctx.set_visuals(visuals);
         }
     }
@@ -187,28 +257,57 @@ impl App {
     fn studio_header(&mut self, ui: &mut egui::Ui) {
         let frame = egui::Frame::new()
             .fill(PAPER)
-            .inner_margin(egui::Margin::symmetric(16, 8));
+            .stroke(egui::Stroke::new(1.0, HAIRLINE))
+            .inner_margin(egui::Margin::symmetric(15, 8));
         egui::Panel::top("studio-header")
             .frame(frame)
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(tr("创作工作室")).size(19.0).strong());
-                    ui.label(RichText::new(&self.doc.meta.name).size(14.0).color(MUTED));
-                    if self.dirty {
-                        ui.label(RichText::new(tr("未保存")).color(ACCENT).small());
+                ui.horizontal(|ui| {
+                    let width = ui.available_width();
+                    if width >= 570.0 {
+                        ui.add(
+                            egui::Label::new(RichText::new(tr("创作工作室")).size(18.0).strong())
+                                .truncate(),
+                        );
+                        ui.separator();
                     }
+                    let name = &self.doc.meta.name;
+                    let marker = if self.dirty { " •" } else { "" };
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(
+                            (width - if width >= 570.0 { 365.0 } else { 185.0 }).max(56.0),
+                            34.0,
+                        ),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(format!("{name}{marker}")).size(15.0).strong(),
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text(name);
+                        },
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .add(
                                 egui::Button::new(RichText::new(tr("保存")).color(Color32::WHITE))
                                     .fill(ACCENT)
-                                    .min_size(egui::vec2(66.0, 30.0)),
+                                    .min_size(egui::vec2(66.0, 32.0)),
                             )
                             .clicked()
                         {
                             self.run(Act::Save);
                         }
+                        ui.spacing_mut().interact_size.y = 32.0;
                         ui.menu_button(tr("更多…"), |ui| {
+                            if ui
+                                .checkbox(&mut self.prefs.studio_solid_controls, tr("减少透明度"))
+                                .changed()
+                            {
+                                ui.close();
+                            }
                             if ui.button(tr("设置")).clicked() {
                                 self.run(Act::Prefs);
                                 ui.close();
@@ -223,33 +322,49 @@ impl App {
                 });
                 ui.add_space(5.0);
                 ui.horizontal_wrapped(|ui| {
+                    let width = ui.available_width();
+                    ui.spacing_mut().interact_size.y = 34.0;
                     ui.menu_button(tr("画板"), |ui| self.studio_boards(ui));
                     if ui.button(tr("查找")).on_hover_text("Ctrl+F").clicked() {
                         self.studio.finder.show();
                     }
                     ui.separator();
-                    for (page, title) in [
-                        (Page::Map, "地图"),
-                        (Page::Sources, "世界资料"),
-                        (Page::Worldview, "世界观"),
-                        (Page::Visualizations, "图表"),
-                        (Page::History, "历史"),
-                        (Page::Environment, "环境"),
-                        (Page::Stars, "星图"),
-                    ] {
-                        if ui
-                            .add(
-                                egui::Button::selectable(self.studio.page == page, tr(title))
-                                    .min_size(egui::vec2(59.0, 30.0)),
-                            )
-                            .clicked()
-                        {
-                            self.studio.page = page;
-                            self.star_map.open = page == Page::Stars;
+                    if width < 830.0 {
+                        ui.menu_button(self.studio.page.title(), |ui| {
+                            for page in Page::ALL {
+                                let label = egui::Button::selectable(
+                                    self.studio.page == page,
+                                    page.title(),
+                                );
+                                if ui.add(label.min_size(egui::vec2(126.0, 33.0))).clicked() {
+                                    self.studio_select_page(page);
+                                    ui.close();
+                                }
+                            }
+                        });
+                    } else {
+                        for page in Page::ALL {
+                            if ui
+                                .add(
+                                    egui::Button::selectable(
+                                        self.studio.page == page,
+                                        page.title(),
+                                    )
+                                    .min_size(egui::vec2(59.0, 34.0)),
+                                )
+                                .clicked()
+                            {
+                                self.studio_select_page(page);
+                            }
                         }
                     }
                 });
             });
+    }
+
+    fn studio_select_page(&mut self, page: Page) {
+        self.studio.page = page;
+        self.star_map.open = page == Page::Stars;
     }
 
     fn studio_commands(&mut self, ui: &mut egui::Ui) {
@@ -422,39 +537,52 @@ impl App {
             });
         }
         egui::Panel::bottom("studio-status").show(ui, |ui| self.status_bar(ui));
-        egui::Panel::bottom("studio-timeline").show(ui, |ui| self.timeline_bar(ui));
+        if self.doc.year.is_some() || self.studio.page == Page::History {
+            egui::Panel::bottom("studio-timeline").show(ui, |ui| self.timeline_bar(ui));
+        }
         if self.table_panel {
             egui::Panel::bottom("studio-data")
                 .resizable(true)
                 .default_size(220.0)
                 .show(ui, |ui| self.data_table(ui));
         }
+        let available_width = ui.available_width();
         if self.studio.page == Page::Environment && self.doc.paper.is_none() {
-            egui::Panel::right("studio-environment")
-                .default_size(406.0)
-                .size_range(320.0..=590.0)
-                .resizable(true)
-                .show(ui, |ui| {
-                    self.assistant_footer(ui);
-                    self.environment_panel(ui, true);
-                });
+            let inspector = egui::Panel::right("studio-environment");
+            let inspector = if available_width < 760.0 {
+                inspector.exact_size((available_width * 0.48).max(170.0))
+            } else {
+                inspector
+                    .default_size(406.0)
+                    .size_range(320.0..=590.0)
+                    .resizable(true)
+            };
+            inspector.show(ui, |ui| {
+                self.assistant_footer(ui);
+                self.environment_panel(ui, true);
+            });
         } else if self.studio.inspector
             || self.ai.open
             || crate::toolbar_ui::has_side_panel(self.tool)
         {
-            egui::Panel::right("studio-properties")
-                .resizable(true)
-                .default_size(328.0)
-                .size_range(255.0..=430.0)
-                .show(ui, |ui| {
-                    self.assistant_footer(ui);
-                    if crate::toolbar_ui::has_side_panel(self.tool) {
-                        self.tool_side_panel(ui);
-                    }
-                    if self.studio.inspector {
-                        self.inspector(ui);
-                    }
-                });
+            let inspector = egui::Panel::right("studio-properties");
+            let inspector = if available_width < 760.0 {
+                inspector.exact_size((available_width * 0.46).max(166.0))
+            } else {
+                inspector
+                    .resizable(true)
+                    .default_size(328.0)
+                    .size_range(255.0..=430.0)
+            };
+            inspector.show(ui, |ui| {
+                self.assistant_footer(ui);
+                if crate::toolbar_ui::has_side_panel(self.tool) {
+                    self.tool_side_panel(ui);
+                }
+                if self.studio.inspector {
+                    self.inspector(ui);
+                }
+            });
         }
         self.refresh_derived();
         egui::CentralPanel::default()
@@ -464,11 +592,14 @@ impl App {
                 if r.width() < 100.0 || r.height() < 80.0 {
                     return;
                 }
+                let available = r.width() - 20.0;
+                let style = Shelf::pick(available, Shelf::Full.width(ui), Shelf::Compact.width(ui));
                 let shelf = egui::Rect::from_center_size(
                     egui::pos2(r.center().x, r.top() + 44.0),
-                    egui::vec2((r.width() - 22.0).min(552.0), 58.0),
+                    egui::vec2(style.width(ui).min(available), 58.0),
                 );
-                let glass = self.doc.paper.is_none().then_some(shelf);
+                let glass = (!self.prefs.studio_solid_controls && self.doc.paper.is_none())
+                    .then_some(shelf);
                 let layout = if self.doc.paper.is_some() {
                     Layout::Flat
                 } else {
@@ -482,22 +613,22 @@ impl App {
                         self.map_view_with_glass(
                             ui,
                             ViewKind::Flat,
-                            egui::Rect::from_min_max(r.min, egui::pos2(x - 1.0, r.max.y)),
+                            egui::Rect::from_min_max(r.min, egui::pos2(x, r.max.y)),
                             glass,
                         );
                         self.map_view_with_glass(
                             ui,
                             ViewKind::Globe,
-                            egui::Rect::from_min_max(egui::pos2(x + 1.0, r.min.y), r.max),
+                            egui::Rect::from_min_max(egui::pos2(x, r.min.y), r.max),
                             glass,
                         );
                     }
                 }
-                self.studio_shelf(ui.ctx(), shelf, glass.is_some());
+                self.studio_shelf(ui.ctx(), shelf, style, glass.is_some());
             });
     }
 
-    fn studio_shelf(&mut self, ctx: &egui::Context, shelf: egui::Rect, glass: bool) {
+    fn studio_shelf(&mut self, ctx: &egui::Context, shelf: egui::Rect, style: Shelf, glass: bool) {
         egui::Area::new(egui::Id::unique("studio-floating-tools"))
             .order(egui::Order::Foreground)
             .fixed_pos(shelf.min)
@@ -522,35 +653,71 @@ impl App {
                         .layout(egui::Layout::left_to_right(egui::Align::Center)),
                 );
                 tools.spacing_mut().item_spacing.x = 7.0;
-                tools.spacing_mut().interact_size.y = 34.0;
+                tools.spacing_mut().interact_size = egui::vec2(34.0, 34.0);
+                tools.spacing_mut().button_padding.x = 7.0;
                 tools.menu_button(RichText::new(tr("绘制")).strong().color(ACCENT), |ui| {
                     self.studio_create(ui)
                 });
-                if tools
-                    .add(egui::Button::selectable(
-                        self.tool == Tool::Select && !self.land_move.active,
-                        tr("选择"),
-                    ))
-                    .clicked()
-                {
-                    self.run(Act::Tool(Tool::Select));
-                }
-                tools.separator();
-                for (act, title) in [(Act::Undo, "撤销"), (Act::Redo, "重做")] {
+                if style != Shelf::Minimal {
                     if tools
-                        .add_enabled(self.can(act), egui::Button::new(tr(title)))
+                        .add(egui::Button::selectable(
+                            self.tool == Tool::Select && !self.land_move.active,
+                            tr("选择"),
+                        ))
                         .clicked()
                     {
-                        self.run(act);
+                        self.run(Act::Tool(Tool::Select));
                     }
                 }
-                tools.separator();
-                tools.menu_button(tr("视角"), |ui| self.studio_view_menu(ui));
-                tools.toggle_value(&mut self.studio.inspector, tr("属性"));
-                if tools.button(tr("导出…")).clicked() {
-                    self.run(Act::Export);
+                if style == Shelf::Full {
+                    tools.separator();
+                    self.studio_edit_buttons(&mut tools);
+                    tools.separator();
+                }
+                if style != Shelf::Minimal {
+                    tools.menu_button(tr("视角"), |ui| self.studio_view_menu(ui));
+                }
+                if style == Shelf::Full {
+                    self.studio_panel_export(&mut tools);
+                } else {
+                    tools.menu_button(tr("更多…"), |ui| {
+                        if style == Shelf::Minimal {
+                            if ui.button(tr("选择")).clicked() {
+                                self.run(Act::Tool(Tool::Select));
+                                ui.close();
+                            }
+                            ui.menu_button(tr("视角"), |ui| self.studio_view_menu(ui));
+                        }
+                        self.studio_edit_buttons(ui);
+                        self.studio_panel_export(ui);
+                    });
                 }
             });
+    }
+
+    fn studio_edit_buttons(&mut self, ui: &mut egui::Ui) {
+        for (act, title) in [(Act::Undo, "撤销"), (Act::Redo, "重做")] {
+            if ui
+                .add_enabled(self.can(act), egui::Button::new(tr(title)))
+                .clicked()
+            {
+                self.run(act);
+                ui.close_kind(egui::UiKind::Menu);
+            }
+        }
+    }
+
+    fn studio_panel_export(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .toggle_value(&mut self.studio.inspector, tr("属性"))
+            .clicked()
+        {
+            ui.close_kind(egui::UiKind::Menu);
+        }
+        if ui.button(tr("导出…")).clicked() {
+            self.run(Act::Export);
+            ui.close_kind(egui::UiKind::Menu);
+        }
     }
 
     fn studio_view_menu(&mut self, ui: &mut egui::Ui) {
@@ -562,6 +729,7 @@ impl App {
             (Act::FitAll, "缩放到全图"),
             (Act::ZoomIn, "放大"),
             (Act::ZoomOut, "缩小"),
+            (Act::Timeline, "时间轴"),
         ] {
             let button = egui::Button::selectable(self.checked(act) == Some(true), tr(title));
             if ui
@@ -605,6 +773,9 @@ impl App {
                         )
                         .clicked()
                     {
+                        if self.studio.page == Page::Environment {
+                            self.studio.show_map();
+                        }
                         self.run(action);
                         ui.close();
                     }
@@ -639,5 +810,18 @@ impl App {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shelf_keeps_core_actions_with_decreasing_space() {
+        assert_eq!(Shelf::pick(500.0, 400.0, 260.0), Shelf::Full);
+        assert_eq!(Shelf::pick(320.0, 400.0, 260.0), Shelf::Compact);
+        assert_eq!(Shelf::pick(190.0, 400.0, 260.0), Shelf::Minimal);
+        assert!(Shelf::Minimal.labels().contains(&"绘制"));
     }
 }

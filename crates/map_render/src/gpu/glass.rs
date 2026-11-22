@@ -1,6 +1,6 @@
 //! The studio's control material samples a small GPU rendering of the map.
 //! The swapchain stays write-only and the renderer never reads pixels to the CPU.
-use super::{map_pipelines, FrameData, MapGpu, ViewUniform, ATLAS_FORMAT};
+use super::{map_pipeline, map_program, FrameData, MapGpu, MapMesh, ViewUniform, ATLAS_FORMAT};
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
 
@@ -12,7 +12,7 @@ pub struct GlassPatch {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Clone, Copy, Pod, Zeroable, PartialEq)]
 struct Material {
     bounds: [f32; 4],
     view_size: [f32; 2],
@@ -25,6 +25,7 @@ struct Source {
     camera: ViewUniform,
     geometry: u64,
     colors: u64,
+    sample_rect: [u32; 4],
 }
 
 struct View {
@@ -32,6 +33,7 @@ struct View {
     image: wgpu::TextureView,
     camera: wgpu::Buffer,
     material: wgpu::Buffer,
+    last_material: Option<Material>,
     surface: wgpu::BindGroup,
     source: Option<Source>,
 }
@@ -61,6 +63,24 @@ fn backing_size(w: f32, h: f32) -> [u32; 2] {
     ]
 }
 
+fn sample_rect(patch: GlassPatch, view_size: [f32; 2], size: [u32; 2]) -> [u32; 4] {
+    // Bound the fill pass to the patch plus the blur kernel and bilinear footprint.
+    let limits = |axis: usize| {
+        let last = size[axis] as f32;
+        let margin = 11.0 * patch.pixels_per_point * last / view_size[axis] + 2.0;
+        let lo = (patch.bounds[axis] * last - margin)
+            .floor()
+            .clamp(0.0, last - 1.0) as u32;
+        let hi = (patch.bounds[axis + 2] * last + margin)
+            .ceil()
+            .clamp(lo as f32 + 1.0, last) as u32;
+        (lo, hi - lo)
+    };
+    let (x, width) = limits(0);
+    let (y, height) = limits(1);
+    [x, y, width, height]
+}
+
 impl Glass {
     fn new(
         device: &wgpu::Device,
@@ -68,7 +88,8 @@ impl Glass {
         format: wgpu::TextureFormat,
         samples: u32,
     ) -> Self {
-        let (map, _) = map_pipelines(device, map_layout, ATLAS_FORMAT, 1);
+        let (shader, layout) = map_program(device, map_layout);
+        let map = map_pipeline(device, &shader, &layout, ATLAS_FORMAT, 1, MapMesh::Fill);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("studio glass"),
             source: wgpu::ShaderSource::Wgsl(include_str!("glass.wgsl").into()),
@@ -168,6 +189,7 @@ impl View {
             image,
             camera,
             material,
+            last_material: None,
             surface,
             source: None,
         }
@@ -202,30 +224,35 @@ impl MapGpu {
             .views
             .get_mut(&frame.view_id)
             .expect("studio glass viewport");
-        queue.write_buffer(
-            &view.material,
-            0,
-            bytemuck::bytes_of(&Material {
-                bounds: patch.bounds,
-                view_size: [w, h],
-                pixels_per_point: patch.pixels_per_point,
-                _pad: 0.0,
-            }),
-        );
-        let source = Source {
-            camera: frame.uniform,
-            geometry: frame.geometry_gen,
-            colors: frame.colors.0,
+        let material = Material {
+            bounds: patch.bounds,
+            view_size: [w, h],
+            pixels_per_point: patch.pixels_per_point,
+            _pad: 0.0,
         };
-        if view.source.as_ref() == Some(&source) {
-            return;
+        if view.last_material != Some(material) {
+            queue.write_buffer(&view.material, 0, bytemuck::bytes_of(&material));
+            view.last_material = Some(material);
         }
-        view.source = Some(source);
+        let sample_rect = sample_rect(patch, [w, h], size);
         let mut camera = frame.uniform;
         let scale = size[0] as f32 / w.max(1.0);
         camera.viewport[0] *= scale;
         camera.viewport[1] *= scale;
         camera.center[2] *= scale;
+        // The sample uses filled geometry, so line styling does not invalidate it.
+        camera.line_color.fill([0.0; 4]);
+        camera.line_width.fill([0.0; 4]);
+        let source = Source {
+            camera,
+            geometry: frame.geometry_gen,
+            colors: frame.colors.0,
+            sample_rect,
+        };
+        if view.source.as_ref() == Some(&source) {
+            return;
+        }
+        view.source = Some(source);
         queue.write_buffer(&view.camera, 0, bytemuck::bytes_of(&camera));
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("studio glass map source"),
@@ -260,6 +287,8 @@ impl MapGpu {
             color_attachments: &attachments,
             ..Default::default()
         });
+        let [x, y, width, height] = sample_rect;
+        pass.set_scissor_rect(x, y, width, height);
         pass.set_pipeline(&glass.map);
         pass.set_bind_group(0, &bind, &[]);
         pass.set_vertex_buffer(0, self.ocean.slice(..));
@@ -289,5 +318,16 @@ mod tests {
     fn material_snapshot_is_small_at_large_window_sizes() {
         assert_eq!(backing_size(1500.0, 900.0), [300, 180]);
         assert_eq!(backing_size(7680.0, 3840.0), [480, 240]);
+    }
+
+    #[test]
+    fn split_view_sample_clips_at_boundary_and_keeps_kernel_margin() {
+        let patch = GlassPatch {
+            bounds: [0.80, 0.10, 1.20, 0.18],
+            pixels_per_point: 1.5,
+        };
+        let [x, y, w, h] = sample_rect(patch, [1000.0, 500.0], [200, 100]);
+        assert!(x < 160 && y < 10 && y + h > 18);
+        assert_eq!(x + w, 200);
     }
 }

@@ -14,6 +14,8 @@ pub(super) struct Finder {
     query: String,
     results: Vec<Match>,
     generation: Option<u64>,
+    selected: usize,
+    composing: bool,
 }
 
 struct Match {
@@ -27,6 +29,8 @@ impl Finder {
         self.open = true;
         self.focus = true;
         self.generation = None;
+        self.selected = 0;
+        self.composing = false;
     }
 }
 
@@ -44,7 +48,7 @@ fn search(doc: &Document, input: &str) -> Vec<Match> {
     let current = WorldBook::current(doc);
     let mut found = Vec::new();
     let mut add = |node, name: &str, kind| {
-        if found.len() < 28 && matches(name) {
+        if found.len() < 28 {
             found.push(Match {
                 node,
                 name: name.into(),
@@ -53,7 +57,9 @@ fn search(doc: &Document, input: &str) -> Vec<Match> {
         }
     };
 
-    add(Node::Map(current), &doc.meta.name, "画板");
+    if matches(&doc.meta.name) {
+        add(Node::Map(current), &doc.meta.name, "画板");
+    }
     if let Some(book) = &doc.book {
         for (name, id) in book
             .boards
@@ -80,7 +86,7 @@ fn search(doc: &Document, input: &str) -> Vec<Match> {
         for (&id, entity) in doc
             .entities
             .iter()
-            .filter(|(_, e)| e.exists_in(doc.year) && matches(&e.name))
+            .filter(|(_, e)| e.exists_in(doc.year) && (matches(&e.name) || matches(&e.code)))
             .take(18)
         {
             let kind = match entity.kind {
@@ -112,57 +118,107 @@ impl App {
         if !self.studio.foreground || !self.studio.finder.open {
             return;
         }
+        if ctx.input(|input| input.viewport().close_requested()) {
+            self.studio.finder.open = false;
+            return;
+        }
         let finder = &mut self.studio.finder;
         let mut chosen = None;
         let mut cancelled = false;
-        let response = egui::Modal::new(egui::Id::unique("studio-find")).show(ctx, |ui| {
-            ui.set_width((ctx.content_rect().width() * 0.80).clamp(260.0, 460.0));
-            ui.heading(tr("查找"));
-            let field = ui.add(
-                egui::TextEdit::singleline(&mut finder.query)
-                    .desired_width(f32::INFINITY)
-                    .hint_text(tr("搜索画板、文档或地图地点")),
-            );
-            if std::mem::take(&mut finder.focus) {
-                field.request_focus();
-            }
-            let generation = self.history.generation();
-            if field.changed() || finder.generation != Some(generation) {
-                finder.results = search(&self.doc, &finder.query);
-                finder.generation = Some(generation);
-            }
-            if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-                chosen = finder.results.first().map(|row| row.node);
-            }
-            if finder.results.is_empty() {
-                ui.weak(tr("没有找到匹配项。"));
-            } else {
-                egui::ScrollArea::vertical()
-                    .max_height(300.0)
-                    .show(ui, |ui| {
-                        for row in &finder.results {
-                            ui.push_id(row.node.uri(), |ui| {
-                                ui.horizontal(|ui| {
-                                    if ui
-                                        .add(
-                                            egui::Button::new(&row.name)
-                                                .min_size(egui::vec2(145.0, 31.0)),
-                                        )
-                                        .clicked()
-                                    {
-                                        chosen = Some(row.node);
-                                    }
-                                    ui.weak(tr(row.kind));
-                                })
-                            });
+        let frame = egui::Frame::popup(&ctx.global_style())
+            .inner_margin(egui::Margin::symmetric(15, 13))
+            .corner_radius(egui::CornerRadius::same(17));
+        let response = egui::Modal::new(egui::Id::unique("studio-find"))
+            .frame(frame)
+            .show(ctx, |ui| {
+                let (up, down, enter) = ui.input(|input| {
+                    if !input.focused {
+                        finder.composing = false;
+                    }
+                    let mut ime_frame = false;
+                    for event in &input.events {
+                        if let egui::Event::Ime(event) = event {
+                            ime_frame = true;
+                            match event {
+                                egui::ImeEvent::Preedit { text, .. } => {
+                                    finder.composing = !text.is_empty()
+                                }
+                                egui::ImeEvent::Commit(_) => finder.composing = false,
+                                _ => {}
+                            }
                         }
-                    });
-            }
-            if ui.button(tr("取消")).clicked() {
-                cancelled = true;
-            }
-        });
-        if response.should_close() || cancelled || chosen.is_some() {
+                    }
+                    let navigation = !ime_frame && !finder.composing;
+                    (
+                        navigation && input.key_pressed(egui::Key::ArrowUp),
+                        navigation && input.key_pressed(egui::Key::ArrowDown),
+                        navigation && input.key_pressed(egui::Key::Enter),
+                    )
+                });
+                ui.set_width((ctx.content_rect().width() * 0.80).clamp(260.0, 460.0));
+                ui.heading(tr("查找"));
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut finder.query)
+                        .desired_width(f32::INFINITY)
+                        .hint_text(tr("搜索画板、文档或地图地点")),
+                );
+                if std::mem::take(&mut finder.focus) {
+                    field.request_focus();
+                }
+                let generation = self.history.generation();
+                if field.changed() || finder.generation != Some(generation) {
+                    finder.results = search(&self.doc, &finder.query);
+                    finder.generation = Some(generation);
+                    finder.selected = 0;
+                }
+                if up {
+                    finder.selected = finder.selected.saturating_sub(1);
+                }
+                if down {
+                    finder.selected =
+                        (finder.selected + 1).min(finder.results.len().saturating_sub(1));
+                }
+                if enter {
+                    chosen = finder.results.get(finder.selected).map(|row| row.node);
+                }
+                ui.add_space(5.0);
+                if finder.results.is_empty() {
+                    ui.weak(tr("没有找到匹配项。"));
+                } else {
+                    egui::ScrollArea::vertical()
+                        .max_height((ctx.content_rect().height() - 132.0).clamp(64.0, 300.0))
+                        .show(ui, |ui| {
+                            for (index, row) in finder.results.iter().enumerate() {
+                                ui.push_id(row.node.uri(), |ui| {
+                                    ui.horizontal(|ui| {
+                                        let target =
+                                            ui.add(
+                                                egui::Button::selectable(
+                                                    finder.selected == index,
+                                                    &row.name,
+                                                )
+                                                .min_size(egui::vec2(
+                                                    (ui.available_width() - 80.0).max(70.0),
+                                                    34.0,
+                                                )),
+                                            );
+                                        if (up || down) && index == finder.selected {
+                                            target.scroll_to_me(None);
+                                        }
+                                        if target.clicked() {
+                                            chosen = Some(row.node);
+                                        }
+                                        ui.weak(tr(row.kind));
+                                    })
+                                });
+                            }
+                        });
+                }
+                if ui.button(tr("取消")).clicked() {
+                    cancelled = true;
+                }
+            });
+        if (response.should_close() && !finder.composing) || cancelled || chosen.is_some() {
             finder.open = false;
         }
         if let Some(target) = chosen {

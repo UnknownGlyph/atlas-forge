@@ -225,46 +225,59 @@ pub struct MapGpu {
     samples: u32,
 }
 
+#[derive(Clone, Copy)]
+enum MapMesh {
+    Fill,
+    Lines,
+}
+
+fn map_program(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> (wgpu::ShaderModule, wgpu::PipelineLayout) {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("map.wgsl"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("map.wgsl").into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("map layout"), bind_group_layouts: &[Some(bgl)], immediate_size: 0,
+    });
+    (shader, layout)
+}
+
+fn map_pipeline(
+    device: &wgpu::Device, shader: &wgpu::ShaderModule, layout: &wgpu::PipelineLayout,
+    format: wgpu::TextureFormat, msaa: u32, mesh: MapMesh,
+) -> wgpu::RenderPipeline {
+    let target = [Some(wgpu::ColorTargetState {
+        format, blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+        write_mask: wgpu::ColorWrites::ALL,
+    })];
+    const FILL: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![0 => Float32x2, 1 => Uint32];
+    const LINES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32];
+    let (label, vertex, fragment, attrs, stride, mode) = match mesh {
+        MapMesh::Fill => ("map fill", "vs_fill", "fs_fill", FILL, std::mem::size_of::<FillVertex>(), wgpu::VertexStepMode::Vertex),
+        MapMesh::Lines => ("map lines", "vs_line", "fs_line", LINES, std::mem::size_of::<LineInstance>(), wgpu::VertexStepMode::Instance),
+    };
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader, entry_point: Some(vertex), compilation_options: Default::default(),
+            buffers: &[Some(wgpu::VertexBufferLayout { array_stride: stride as u64, step_mode: mode, attributes: attrs })],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState { count: msaa.max(1), mask: !0, alpha_to_coverage_enabled: false },
+        fragment: Some(wgpu::FragmentState { module: shader, entry_point: Some(fragment), compilation_options: Default::default(), targets: &target }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 fn map_pipelines(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, format: wgpu::TextureFormat, msaa: u32) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("map.wgsl"), source: wgpu::ShaderSource::Wgsl(include_str!("map.wgsl").into()) });
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("map layout"), bind_group_layouts: &[Some(bgl)], immediate_size: 0 });
-    let target = [Some(wgpu::ColorTargetState { format, blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })];
-    let ms = wgpu::MultisampleState { count: msaa.max(1), mask: !0, alpha_to_coverage_enabled: false };
-    let fill_attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Uint32];
-    let fill_pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("map fill"),
-        layout: Some(&layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_fill"),
-            compilation_options: Default::default(),
-            buffers: &[Some(wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<FillVertex>() as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &fill_attrs })],
-        },
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: ms,
-        fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_fill"), compilation_options: Default::default(), targets: &target }),
-        multiview_mask: None,
-        cache: None,
-    });
-    let line_attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32];
-    let line_pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("map lines"),
-        layout: Some(&layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_line"),
-            compilation_options: Default::default(),
-            buffers: &[Some(wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<LineInstance>() as u64, step_mode: wgpu::VertexStepMode::Instance, attributes: &line_attrs })],
-        },
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: ms,
-        fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_line"), compilation_options: Default::default(), targets: &target }),
-        multiview_mask: None,
-        cache: None,
-    });
-    (fill_pipe, line_pipe)
+    let (shader, layout) = map_program(device, bgl);
+    (
+        map_pipeline(device, &shader, &layout, format, msaa, MapMesh::Fill),
+        map_pipeline(device, &shader, &layout, format, msaa, MapMesh::Lines),
+    )
 }
 
 impl MapGpu {

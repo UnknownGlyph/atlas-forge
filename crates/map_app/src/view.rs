@@ -586,7 +586,12 @@ impl App {
             }
         }
         if kind == ViewKind::Globe && self.layout == crate::app::Layout::Split {
-            painter.text(rect.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP, crate::i18n::tr("三维球体"), egui::FontId::proportional(13.0), Color32::from_gray(230));
+            let (point, align) = if self.studio.foreground {
+                (rect.right_top() + Vec2::new(-11.0, 7.0), egui::Align2::RIGHT_TOP)
+            } else {
+                (rect.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP)
+            };
+            painter.text(point, align, crate::i18n::tr("三维球体"), egui::FontId::proportional(13.0), Color32::from_gray(230));
         }
         self.draw_book_points(&painter,&vg);
         if patch.is_some() {

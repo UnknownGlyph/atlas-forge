@@ -39,6 +39,8 @@ pub struct Prefs {
     pub furniture: bool,
     /// Frame times, triangle counts and memory in the status bar.
     pub perf_in_status: bool,
+    /// Display opaque studio controls instead of live translucent material.
+    pub studio_solid_controls: bool,
     /// Undo steps kept.
     pub undo_limit: usize,
     /// Locale code of the application's interface, for example "en" or "zh-TW".
@@ -47,7 +49,7 @@ pub struct Prefs {
 
 impl Default for Prefs {
     fn default() -> Self {
-        Self { recent: vec![], ui_scale: 1.0, autosave_secs: 60, autosave_on: true, autosave_keep: 20, autosave_steps: 10, cloud_backup: Default::default(), save_directory: None, cache_directory: None, test_project: None, welcome: true, reopen_last: false, layout: "split".into(), graticule: true, progressive_detail: true, furniture: true, perf_in_status: false, undo_limit: 500, language: "zh".into() }
+        Self { recent: vec![], ui_scale: 1.0, autosave_secs: 60, autosave_on: true, autosave_keep: 20, autosave_steps: 10, cloud_backup: Default::default(), save_directory: None, cache_directory: None, test_project: None, welcome: true, reopen_last: false, layout: "split".into(), graticule: true, progressive_detail: true, furniture: true, perf_in_status: false, studio_solid_controls: false, undo_limit: 500, language: "zh".into() }
     }
 }
 
