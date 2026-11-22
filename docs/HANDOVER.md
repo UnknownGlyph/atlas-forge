@@ -2,10 +2,12 @@
 
 > 写给接手开发的人和 AI。读完这一份，应能构建、运行、测试项目，知道代码在哪里、为什么这样写、哪些地方容易出错、下一步该做什么。
 >
-> **维护规则**：每完成一步功能都更新本文件，与代码在同一个提交里。改动之处至少包括：§1 当前状态、§9 进度、§10 最近一步的详情（新的一步写在最前面，旧的移到 §13 的日志里）、§11 未完成与未验证、§12 下一步。
+> **维护规则。** 每次交付项目改动前更新本文件。小改动可在 §13 记一条。功能或工程结构变化需同步更新相关章节，记录入口、验证、限制和下一步。提交时带上交接更新，详见 [仓库协作说明](../AGENTS.md)。
 > 细节设计的逐步记录在 `ARCHITECTURE.md`（按里程碑和步骤），整体规划在 `ROADMAP.md`。本文件是二者的入口和摘要，冲突时以代码为准，并把本文件改正。
 >
-> 最后更新：2026-11-17，v0.1.0-alpha（导出国名修正、随附字体、MIT、公开发布）。
+> 最后更新于 2026-11-22。补齐 0.2.0–0.2.3 与新创作工作室的交接，并记录 Git 提交身份修正。
+>
+> 本轮调整 Git 作者信息和交接文档。测试数字来自对应源码上的既有 Windows 日志，本轮复核了日志。
 
 ---
 
@@ -15,11 +17,13 @@
 |---|---|
 | 产品 | Atlas Forge：原生、离线的桌面地图创作软件，目标是"专业绘图软件的手感 + 架空世界地图的便利"。 |
 | 语言与框架 | Rust（MSVC 工具链）、wgpu、egui/eframe 0.37、imbl 持久化数据结构 |
-| 代码规模 | 7 个 crate，约 4.9 万行 Rust（含测试） |
-| 构建平台 | 只在 Windows 11 上构建和运行过；Linux/macOS 未验证；持续集成只跑 Windows（在公开仓库上） |
-| 测试 | 工作区 317 项测试全部通过（见 §8）；深度随机压力测试 64 种子 × 1500 步无问题；导出图像回归测试守住旧工程外观 |
-| 里程碑 | M1–M9 完成；M10 Windows 部分完成（含随附字体）；M11 主要部分完成（应用内未跑完一次任务）；v0.1.0-alpha 已公开发布 |
-| 仓库 | 公开仓库 https://github.com/UnknownGlyph/atlas-forge（MIT，v0.1.0-alpha） |
+| 代码规模 | 8 个 crate，约 8.4 万行 Rust（含测试；2026-11-22 按 0.2.3 源码统计） |
+| 构建平台 | 只在 Windows 10/11 x64 上构建和运行过；Linux/macOS 未验证；持续集成只跑 Windows |
+| 测试 | Windows 全工作区 Release 测试中，0.2.3 Alpha 有 409 项通过。工作室改版最终构建有 413 项通过。0.2.2 发布说明记录了 389 项通过。 |
+| 里程碑 | M1–M9 完成；M10 Windows 部分完成；M11 主要部分完成；0.2.x 加入创作工作室、世界资料与世界观、行星环境与气候、星图与多体引力、数据可视化、插件与脚本、像素画笔、陆块整体变换、性能录制 |
+| 版本 | GitHub main 上的 0.2.3 Alpha 源码提交为 c9f9afe。本地包含后续的工作室改版与交接更新。最新预发布仍为 v0.2.2-alpha（Windows 便携版）。 |
+| 工程格式 | `FORMAT_VERSION = 11`（`map_core/src/doc.rs`）；保存时按内容取所需的最低格式，旧工程照常可读（见 §4.8） |
+| 仓库 | 公开仓库 https://github.com/UnknownGlyph/atlas-forge（MIT） |
 | 最近提交 | 见 `git log`；本报告随每一步一起提交 |
 
 ## 2. 构建、运行与检查
@@ -41,6 +45,10 @@
 | 性能基准 | `tools\cargo-msvc.cmd run --release -p map_bench`（说明见 `docs/BENCHMARKS.md`） |
 | 只读查询接口 | `target\release\atlas-query <世界.atlas \| --demo \| --test-world> [--request '<JSON>']` |
 | MCP 服务器 | `target\release\atlas-mcp <世界.atlas>`（stdio；配置见 `docs/API.md`） |
+| 草稿编辑与批量脚本 | `target\release\atlas-script <世界.atlas \| --blank> --file plan.json --out 新.atlas [--steps 目录]`；插件：`--plugin 清单.json --command <id>`（见 `docs/API.md`、`docs/PLUGINS.md`） |
+| AI 助手命令行 | `target\release\atlas-agent --blank "<任务>" --provider gemini --out 输出`（密钥只从环境变量读取） |
+| 性能录制 | `target\release\atlas-perf record <日志.jsonl> [世界.atlas]`；`atlas-perf report <日志.jsonl> <报告.html>`（见 `docs/PERFORMANCE_RECORDER.md`） |
+| 创作与球体基准 | `cargo run --release -p map_bench -- authoring`；`cargo run --release -p map_bench --bin globe_frames -- <工程.atlas>` |
 
 注意：
 
@@ -59,6 +67,8 @@
 | `ATLAS_DEBUG_UI` | （debug 构建）显示 egui 可交互控件的边框 |
 | `ATLAS_SOAK_SEEDS` / `ATLAS_SOAK_STEPS` / `ATLAS_SOAK_ONLY` | 压力测试的种子数、每种子步数、只跑某个种子 |
 | `ATLAS_FUZZ_SEEDS` / `ATLAS_FUZZ_STEPS` | `map_core/tests/random_ops.rs` 的随机拓扑操作 |
+| `WGPU_BACKEND` / `WGPU_ADAPTER_NAME` / `WGPU_POWER_PREF` | 设置后沿用 wgpu 原来的适配器选择；不设时 Windows 优先在兼容显卡上用 Direct3D 12（0.2.3） |
+| `GEMINI_API_KEY` 等 | AI 助手与 `atlas-agent` 的密钥，只从环境变量读取或在应用中临时填写（只在内存中） |
 | `ATLAS_WRITE_FIXTURES` | 写兼容性样本（只在新版本格式时用一次，已有样本不得重写） |
 
 ### 2.4 运行时的文件位置
@@ -71,23 +81,35 @@
 ```
 crates/
   map_core    数据模型与算法：不依赖 GPU、界面、文件格式（所有规则都在这里）
-  map_io      工程文件、交换格式（GeoJSON/Shapefile/CSV）、导出（PNG/SVG/逐年/地图集）、恢复、偏好、剪贴板
-  map_render  CPU 端三角化与分块缓存、wgpu 绘制（平面与球体）、相机
-  map_app     桌面应用（egui）：工具、面板、动作表、选择、图层、曲线……
-  map_bench   性能基准
-  map_api     只读查询接口（atlas-query）与 MCP 适配（atlas-mcp），供脚本和 AI 使用
+  map_io      工程文件、交换格式（GeoJSON/Shapefile/CSV）、导出（PNG/SVG/PDF/逐年/地图集）、资料导出、恢复、偏好、剪贴板、云目录副本
+  map_render  CPU 端三角化与分块缓存、wgpu 绘制（平面与球体）、相机、参考图底层
+  map_app     桌面应用 atlas.exe（egui）：专业界面与创作工作室、工具、面板、动作表……
+  map_api     查询（atlas-query）、草稿编辑与脚本（atlas-script）、MCP（atlas-mcp）、插件
+  map_ai      AI 助手：服务商适配（Gemini / OpenAI / Anthropic / 兼容端点）、对话，命令行 atlas-agent
+  map_perf    性能录制 atlas-perf：采样、后台写入、HTML 报告
+  map_bench   性能基准（map_bench、globe_frames）
 docs/
-  HANDOVER.md      本文件
-  ROADMAP.md       整体规划：里程碑 M6–M11、工作流、缺陷清单、质量门槛
-  ARCHITECTURE.md  设计记录：ADR 与每一步的实现说明（最详细）
-  DRAWING.md       绘图功能的用户向概览
-  API.md           查询接口与 MCP 的说明
-  BENCHMARKS.md    基准方法与实测数据
-  PROJECT_BRIEF.md 早期给外部评审的项目说明（2026-10-28，部分过时）
+  HANDOVER.md            本文件
+  ROADMAP.md             整体规划：里程碑 M6–M11、工作流、缺陷清单、质量门槛
+  ENGINEERING_REVIEW.md  0.2.3 的工程审查与维护计划（后续顺序与验收以它为准）
+  ARCHITECTURE.md        设计记录：ADR 与 M1–M11 每一步的实现说明
+  STEPS.md               M8 起各步的详细记录（写到 2026-11-17）
+  USER_GUIDE.md / USER_GUIDE.en.md  用户手册（中/英）
+  CREATION_WORKSPACES.md 创作工作室、世界观设定、环境生成
+  WORLD_BOOK.md          世界资料（文档、事件、附件、独立画板）
+  CLIMATE.md / ASTRONOMY.md  行星环境与气候；星图与多体引力
+  PERFORMANCE_RECORDER.md    性能录制
+  DRAWING.md / API.md / PLUGINS.md  绘图概览；本地 API、脚本与 MCP；插件清单格式
+  BENCHMARKS.md          基准方法与实测数据（含 0.2.1、0.2.2）
+  PROJECT_BRIEF.md / M3_SUMMARY.md  早期给外部评审的说明（已过时，仅作背景）
+  tutorial/ examples/ images/       教程、示例（插件清单等）、README 用图
 tools/
   cargo-msvc.cmd   带 MSVC 环境的 cargo
   check.cmd        本地等价于持续集成的检查
-.github/workflows/ci.yml   持续集成配置（未运行过）
+  package.ps1      Windows 便携包
+  translate_ui.py / localize_ui.py  界面文字的翻译与本地化辅助
+assets/            随附字体（Noto Sans SC）、星图数据（Gaia DR3 节选）等
+.github/workflows/ci.yml   持续集成（Windows：构建、测试、clippy）
 ```
 
 ### 3.1 `map_core`（核心）
@@ -117,6 +139,14 @@ tools/
 | `index.rs` / `seggrid.rs` | 空间索引 |
 | `projection.rs` | 投影（CPU 参考实现，与着色器公式一致） |
 | `sample.rs` / `testworld.rs` | 示例世界、测试世界（约 60 国、240 次变化的长历史） |
+| `world_book.rs` / `worldview.rs` | 世界资料（文档、事件、地点、附件、独立画板及其链接）；世界观设定（自定义实体类型、属性、关系、模板、数值规则）（0.2.x） |
+| `paper.rs` | 独立的平面画板（像素坐标，非地理） |
+| `environment/` / `climate/` | 环境生成（海拔、水文、生态、资源）与逐月气候模型、参数联动与反向搜索 |
+| `star_chart.rs` / `star_chart/` | 星图：本恒星系、地月系、银河系（Gaia 节选）；`gravity.rs` 多体引力（自适应 Dormand–Prince RK5(4)） |
+| `visualization.rs` | 数据可视化（柱状、曲线、散点、关系网、剖面等）的数据准备 |
+| `pixel_art.rs` | 彩色像素标志（0.2.3，格式 11） |
+| `land_move.rs` | 陆块整体移动与缩放：多块刚性移动、保留共享边界与历史，拒绝相交、越极与破坏配准（0.2.3） |
+| `diplomacy.rs` / `playback.rs` / `focus.rs` / `guides.rs` | 外交关系；时间播放；局部视图；地理参考线 |
 
 ### 3.2 `map_app`（界面）
 
@@ -139,12 +169,23 @@ tools/
 | `timeline_ui.rs` / `lifespan_ui.rs` | 时间轴、存续期 |
 | `autosave.rs` / `crash.rs` | 自动恢复快照、崩溃日志与紧急保存 |
 | `layout_ui.rs` / `underlay_ui.rs` / `measure_ui.rs` | 版式与地图集、参考图、测量 |
+| `studio_ui.rs` / `studio_ui/finder.rs` | 画布优先的浅色创作工作室（与专业界面同窗口热切换，`Ctrl+Alt+F10`）：浮动工具条、画板切换、项目内查找（`Ctrl+F`）、视角与时间轴控件 |
+| `book_ui.rs` / `worldview_ui.rs` | 世界资料库、世界观设定 |
+| `environment_ui.rs` / `climate_ui.rs` / `star_map.rs` / `visualization_ui.rs` | 环境、气候、星图、数据可视化面板 |
+| `ai_ui.rs` / `plugin_ui.rs` / `replay_ui.rs` | 应用内 AI 助手（地图属性栏下方）、本地插件、脚本步骤回放 |
+| `pixel_ui.rs` / `land_move_ui.rs` / `label_boxes.rs` | 像素画笔、陆块整体变换、标签碰撞的屏幕网格（0.2.3） |
+| `perf_ui.rs` / `shutdown.rs` / `windows_app.rs` | 性能检测面板与 F8 标记、关闭流程（先关窗口再并行收尾）、Windows 输入与适配器选择 |
+| `tutorial_ui.rs` / `wizard_ui.rs` / `self_test.rs` | 创作教程、新世界向导、`--self-test` |
 
 ### 3.3 其他 crate
 
+- `map_render/gpu/glass.rs` + `glass.wgsl`：创作工作室工具条的"玻璃"材质（采样低分辨率海陆底图、实时模糊与混合；"减少透明度"时改用实色）。
 - `map_render/tess.rs`：面三角化（按 30° 分块缓存）、边线分类（海岸/国界/内部线）、河流线、选中外框；`gpu.rs` 绘制；`camera.rs` 平面与球体相机（CPU 与着色器一致）。
 - `map_io/fonts.rs`：本机字体列表（只读字体文件的名称表与字符表）与按族名加载；`map_io/scene.rs`：导出用的矢量场景（PNG 与 SVG 共用）；`png.rs`（tiny-skia 光栅化）、`svg.rs`；`project.rs`（`.atlas` = MessagePack + lz4）；`batch.rs`/`atlas.rs`（逐年与地图集）；`recovery.rs`、`prefs.rs`、`clip.rs`。
-- `map_api`：`queries.rs`（世界摘要、实体、某地是谁的、两年之间的变化、统计表、要素列表、检查）、`preview.rs`（与数据一致的预览图）、`mcp.rs`。
+- `map_api`：`queries.rs`（世界摘要、实体、某地是谁的、两年之间的变化、统计表、要素列表、检查）、`preview.rs`（与数据一致的预览图）、`edits.rs`（草稿上的编辑）、`automation.rs`（能力登记 `automation.capabilities`、批处理与整批回滚）、`mcp.rs`。
+- `map_ai`：`providers.rs`（各服务商请求与返回的映射）、`conversation.rs`（对话与工具调用，只能用草稿工具白名单）。
+- `map_perf`：`lib.rs`（采样与后台写入）、`system.rs`（CPU、内存、I/O、显存计数器）、`report.rs` + `report.html`（报告；每条曲线最多约 14,000 个图点）。
+- `map_io` 新增：`checkpoints.rs`（命名保存点与按步数/时间自动保存）、`cloud.rs`（OneDrive、坚果云本地同步目录中的版本副本）、`dossier.rs`（资料导出 TXT/MD/DOCX/PDF/HTML）、`model.rs`（OBJ/GLB/glTF 模型附件）、`gaia_csv.rs` / `chart_csv.rs`。
 
 ## 4. 核心概念与数据模型
 
@@ -196,6 +237,23 @@ tools/
 ### 4.7 动作层
 
 `actions.rs` 的 `table()` 列出全部命令（名称、菜单、快捷键、说明）；`can()` 决定是否可用，`run()` 执行。菜单、快捷键、命令面板（Ctrl+K）、画布右键菜单、快捷键一览（F1）都从这张表生成。**新命令只需加一行并在 `can/run` 里处理**；表的自检测试会检查快捷键不重复、每个工具有动作且按键一致。
+
+### 4.8 工程格式版本（0.2.x）
+
+`map_io::project` 保存时按内容决定写入的格式号，只用到旧功能的工程仍写旧格式，所以旧版程序能读的文件不会无故升版；读取时版本高于 `FORMAT_VERSION` 则拒绝。各版本引入的内容（据各专题文档）：
+
+| 格式 | 内容 |
+|---|---|
+| 2 / 3 | 气候数据 / 自定义星图 |
+| 5 | 含世界资料（画板集合）的工程至少写 5（据 `project.rs`） |
+| 6 | 平面画板、外交关系 |
+| 7 | 多体系统配置、天体模型引用 |
+| 8 | 世界观、环境、可视化 |
+| 9 | 实色笔触 |
+| 10 | 轨道方向与 J₂ |
+| 11 | 像素标志（0.2.3） |
+
+新增需要新格式的内容时：提升 `FORMAT_VERSION`，在 `content_version` 中只对用到新内容的工程返回新号，并在 `map_io/tests/compat.rs` 加样本（`ATLAS_WRITE_FIXTURES`，已有样本不得重写）。
 
 ## 5. 必须一直成立的不变式
 
@@ -271,10 +329,19 @@ tools/
 | `map_io/tests/layers.rs`、`workflow.rs` | 导出中的图层；完整工作流 |
 | `map_render` 单元测试 | 边线分类、日界线切分、极地陆地不画通往极点的线 |
 | `map_api/tests` | 查询与 MCP |
-| `map_app` | 只有动作表自检（界面靠手动验证） |
+| `map_app` | 约 15 项：动作表自检、气候面板、标签碰撞网格对照（`label_boxes`，`--include-ignored` 跑性能对照）等；界面主要靠手动验证 |
 
 ## 9. 进度
 
+- **0.2.x（2026-11-20 至 11-21，据发布说明与提交信息）**：
+  - **0.2.0**：命名保存点与自动保存；五国区域示例；政治层逐级深入辖区；世界资料与独立画板；二维/三维共用区划，球体拖动简化；星图（本恒星系、地月系、银河系）；行星环境与气候；AI 助手多服务商；`atlas-script`、插件。
+  - **0.2.1**：创作工作室（`Ctrl+Alt+F10` 热切换）；AI 助手停靠；世界观设定；全球与局部环境生成；数据可视化；时间播放与 H.264 视频；OneDrive/坚果云版本副本；环境与图表后台求值。
+  - **0.2.2**：两套界面同窗口热切换；AI 助手移到地图属性栏下方；脚本步骤回放（`atlas-script --steps`）；资料删除可撤销；家族谱系、人物关系网、国家矿产模板；实色笔触；默认保存、恢复与缓存目录可设；放大地图时只生成视野附近的图案（缩放最慢帧 188 ms → 13 ms）。
+  - **0.2.3（源码，未发布）**：多陆块整体移动与缩放、彩色像素画笔、性能录制 `atlas-perf`；改进多体引力、窗口关闭、Windows 输入与显卡选择、密集标注的碰撞查询；工程审查（`ENGINEERING_REVIEW.md`）。
+- **0.2.3 之后（本地，2026-11-22，未推送）**：创作工作室重做三步——
+  1. 打开画布，渲染实时玻璃效果（`map_render::gpu::glass`）。
+  2. 任务控件与项目查找（`studio_ui/finder.rs`）。
+  3. 布局与玻璃控件打磨；"减少透明度"写进偏好设置（`map_io::prefs`）；`CREATION_WORKSPACES.md` 与 README 随之更新。
 - **M1–M5**：拓扑与编辑、年份与历史、数据与专题、导出、测试世界与性能、只读查询与 MCP。详见 `ARCHITECTURE.md`。
 - **M6（完成）**：归属视图缺陷、压力测试、按需重绘（空闲 CPU 约 1%）、崩溃日志与紧急保存、兼容性样本、持续集成配置（未运行）、动作层、统一选择与多选、偏好设置与最近文件、开始窗口、历史面板、状态栏、空格平移、图标工具栏与选项栏、包围极点的陆地。
 - **发布**：v0.1.0-alpha（2026-11-17），公开仓库 https://github.com/UnknownGlyph/atlas-forge，MIT。
@@ -286,33 +353,27 @@ tools/
   - 完成：多选、剪贴板（可跨窗口）、旋转/缩放/对齐/分布、锁定、历史面板、图层面板、曲线与钢笔工具、样式系统（命名样式、色板、吸管、复制/粘贴样式）、字体、国家名称沿国土弯曲与球面贴合、局部视图、**填充桶、按属性选择、智能吸附**。
   - 未做（P2 或并入后续）：套索选择、隔离编辑、压感；国家/城市/参考图并入同一个选择模型和图层栈；底图（海岸、国界、河流）仍是一套全局设置，没有做成可切换的"地图主题"（M8）。
 
-## 10. 最近一步：v0.1.0-alpha——导出国名修正、随附字体、公开发布（2026-11-17）
+## 10. 最近一步：0.2.3-alpha（源码，2026-11-21）
+
+> 本节依据 0.2.3 提交的说明、`README.md`、`USER_GUIDE.md`、`PERFORMANCE_RECORDER.md`、`ASTRONOMY.md` 与 `ENGINEERING_REVIEW.md` 整理。原 §10（v0.1.0-alpha）已压缩进 §13。
 
 **做了什么**
 
-- **导出中的国名（修复）**：Gemini 从零建的世界导出时 8 个国名只显示 2 个。原因：导出的标注按"自由文字 → 斜线区域名 → 河流与线路名 → 符号名 → 国名 → 城市名"放置，河流名总是放下、不避让，而国名一碰到已放的标注就整个放弃。现在（`map_io::scene::build_scene`）：
-  - 顺序改为：自由文字 → 斜线区域名 → 符号（图标与名称）→ **国名** → 河流与线路名 → 城市名。
-  - 国名在中间放不下时依次试：沿线滑动（余量的 ±½、±1）、离开中线到两侧（国土中部宽度之内）、字距收紧、缩小到 0.8、0.65、0.5 倍直至最小字号。能避开城市的点就避开；避不开时只在不小于 0.8 倍时压在点上（与应用一致），不为避点缩得更小。
-  - 河流与线路名沿自己的线滑动（余量的 0、±½、±1、±¼、±¾）避开已放的标注；整条线上都没有空处时不标这条线的名称（以前总是放下，会盖住国名）。
-  - `map_core::path_text::along_path_shifted`：沿线放字，可从中点前后移动（`along_path` 是移动 0 的情形）。
-  - 结果：Gemini 的世界 8/8、DeepSeek 的 9/9 个国名（以前 2/8、8/9）；`docs/ai_create_from_nothing.png` 重新生成（以 1400×780 渲染后缩小，图例大小与以前一致）。
-- **随附字体**：`assets/fonts/NotoSansSC-Regular.ttf`（Noto Sans SC，SIL OFL 1.1；许可 `OFL.txt` 与说明 `README.md` 在旁）。来源是 google/fonts 官方仓库的 `ofl/notosanssc/NotoSansSC[wght].ttf`；这个可变字体的默认实例是 Thin（wght 100），所以用 fontTools 的 instancer 取 wght=400 的静态实例（Google Fonts 自己的静态文件也是这样得到的；10.6 MB，30890 个字符；名称不含 OFL 保留名 "Source"）。
-  - `map_io::fonts::{BUNDLED, bundled_dirs, bundled}`：先找程序旁的 `fonts\`（打包后），再找程序所在目录及其上各级中的 `assets\fonts\`（源码树中的构建与测试；较新的 cargo 把测试程序放在 `target\release\build\<crate>\<hash>\out` 这样深的地方）；不把构建机的路径编进程序。
-  - `png::find_system_font()` 先用随附字体，找不到才用系统字体（应用界面、导出、自检、`map_api` 都经过它）；`font_dirs()` 把随附字体的目录排在最前，所以也能按族名 "Noto Sans SC" 选它。SVG 的默认字体列表以 Noto Sans SC 开头。
-  - 自检报告多一行"字体：随附的 Noto Sans SC"（找不到时说明用了系统字体，或给出警告）。
-- **发布准备**：
-  - 版本 `0.1.0-alpha`；许可改为 MIT（`LICENSE`；各 crate 继承 `license` 与 `repository`）。
-  - 可移植：`tools/cargo-msvc.cmd` 不再写死 Visual Studio 的路径（rustc 能找到时就是普通 cargo；找不到时从环境变量 `VCVARS64` 或不进 git 的 `tools/local.cmd` 读取）；`docs/API.md` 的示例路径改为占位路径。
-  - `tools/package.ps1`：在 `target\package` 中构建，`--remap-path-prefix` 重映射源码目录与 cargo 目录、`/PDBALTPATH:%_PDB%` 只留 PDB 的文件名，所以程序中不含构建机的路径与用户名；打包前逐个程序检查（UTF-8 与 UTF-16）；附带 `fonts\`、`LICENSE.txt` 与 `atlas-agent.exe`；自检必须用到随附字体。
-  - 持续集成只在 Windows 上运行（Linux/macOS 尚未支持，待有设备时再加回）。
-  - README 重写：中英双语、导出器直接生成的图（新增 `docs/images/wizard_world.png`、`docs/images/test_world_1800.png`）、下载与运行、AI 共同创作、从源码构建、项目结构、许可、贡献者与致谢。
-- **公开仓库**：https://github.com/UnknownGlyph/atlas-forge（MIT）；发布 v0.1.0-alpha（预发布），附 `AtlasForge-0.1.0-alpha-windows-x64.zip`。
+- **陆块整体移动与缩放**（`map_core::land_move`、`map_app::land_move_ui`）：Shift+单击或"多选陆块"选多块大陆或岛屿，拖动时在球面上刚性移动整组；可"仅沿经度移动"、Shift 锁单轴、输入精确偏移。共享边界、内陆湖、归属与历史都保留，城市、图形和资料定位点随块移动。遇到以下情况会拒绝并在状态栏写明原因：与其他陆块相交、越过极点、线路只选了一端、附属要素被锁定、有固定在行星坐标上的高程栅格、陆块里有参考图的配准点。独立画板没有地理陆块，这个操作不适用。
+- **彩色像素画笔**（`map_core::pixel_art`、`map_app::pixel_ui`）：每边 1–128 像素的透明画布，放置为地图标志，随工程保存，并导出到 PNG/SVG/PDF；可导入、导出透明 PNG。用到它的工程写**格式 11**。
+- **性能录制**（新 crate `map_perf`，程序 `atlas-perf`）：按帧记录界面 CPU 耗时、输入、阶段耗时、系统资源；F8 标记卡顿，报告回查前 10 秒；日志按行写入，意外退出后也能生成报告。日志不含工程路径、输入文本、坐标和凭据。
+- **多体引力**：自适应 Dormand–Prince RK5(4)，近距离相遇时缩短步长；轨道方向（升交点、近心点）与 J₂（格式 10）；"对照有无所选天体"的摄动比较在后台运行，可取消。
+- **关闭与输入**：关闭时先关窗口，再并行收尾日志、报告和保存；Windows 优先选兼容显卡上的 Direct3D 12（设了 `WGPU_*` 变量时沿用原流程）。
+- **工程审查的改动**（详见 `ENGINEERING_REVIEW.md`）：密集标签的碰撞查询改为屏幕网格（4,992 个矩形对照，11.79 ms → 0.69 ms）；要素表与图层计数共用一份清单；撤销历史改用双端队列，并计入符号像素的保留内存；工程写出时每张画板只参与一次格式判断；性能报告读入时分桶抽样（18 万帧录制的峰值工作集 33.5 → 15.1 MiB）。
 
-**测试**：全部 317 项通过（`tools\check.cmd` 全绿）。新增：
-- `map_io/tests/label_priority.rs` 2 项：每个国家的标注线上都放一条有名称的河——原来显示的名称一个不少、位置不变，且有河名找到了位置；国土中点放一个战役符号——所有线长足够的国家的名称仍然显示。
-- `fonts.rs` 的 `the_bundled_font_is_the_default`：找到随附字体、它是默认字体、有中文与拉丁字形、字重 400、能按族名加载、导出确实用它画字。
-- 导出图像回归的 `v1_latest.svg` 因标注顺序与默认字体列表改变而重新生成（除行的顺序与字体列表外内容不变；PNG 参考图在容差内不变）。
-- 打包：`tools\package.ps1` 自检通过（用随附字体，1.1 s）；四个程序中没有本机路径与用户名（用未重映射的普通构建做对照，能查到，说明检查有效）；zip 23.1 MB。
+**验证记录。** 0.2.3 Alpha 在 Windows 运行过全工作区 Release 测试，409 项通过。碰撞查询对照可用 `tools\cargo-msvc.cmd test --locked --release -p map_app --bin atlas label_boxes -- --include-ignored --nocapture` 复跑。
+
+### 创作工作室与提交维护
+
+- 工作室让画布占主区，绘图入口按常用任务组织。支持实时模糊海陆底图、一键新建空白画板、Ctrl+F 查找、键盘跳转、二维与球体并排、紧凑菜单和减少透明度。入口和操作见 [创作工作区](CREATION_WORKSPACES.md)。
+- 改版的 Windows 全工作区 Release 测试有 413 项通过。桌面实测覆盖了中文查找与定位、空白画板新建和撤销、英文界面 200% 缩放、属性面板收放和透明度偏好保存。
+- 仓库先前的局部 Git 配置使用了占位作者「你的名字」。仓库身份已设为 UnknownGlyph 及其 GitHub noreply 邮箱。已发布的旧提交 `0654635` 仅修正作者和提交者，GitHub main 现指向 `c9f9afe`，源码树、说明和时间保持一致。三个工作室提交只在本地修正身份。原提交保留在 `backup/before-author-fix`。
+- 交接要求已写进 [仓库协作说明](../AGENTS.md)。每次交付时记录实际验证和待办，提交时随改动一起提交。
 
 ## 11. 未完成、未验证与已知问题
 
@@ -322,7 +383,13 @@ tools/
 - MCP 服务器没有在真正的 MCP 客户端里试过（只有自动测试）。
 - 未在界面上实测：删除图层、移出图层、跨窗口粘贴、剪切、旋转/缩放的"应用"按钮、最近文件菜单、"启动时打开上次的文件"、界面缩放滑块、极地国家的选中外框与名称位置（有自动测试）、曲线的导出（点是派生的，导出代码未改，由已有导出测试间接覆盖）；样式部分的"复制样式/粘贴样式"菜单、色板（加入、取自地图、在编辑器中选色）、样式的改名/复制/删除/排序、区域与文字样式的编辑器（核心逻辑都有自动测试）。
 
+- 0.2.x 的大部分新功能（世界资料、世界观、环境与气候、星图、可视化、插件、像素画笔、陆块变换、性能录制）只记录在各专题文档和发布说明中，没有像 M1–M11 那样写进 `ARCHITECTURE.md` / `STEPS.md`。它们的设计取舍、新增的不变式，以及压力测试 `soak.rs` 是否覆盖这些功能，都还没有核对。
+- 0.2.3 源码还没有打标签、发布便携包；创作工作室的三个提交还没推送。
+
 **已知问题与限制**
+
+- （0.2.x，据 `ENGINEERING_REVIEW.md`）`App` 同时持有文档和大量交互状态；历史内存预算对子画板、嵌套附件、共享数据的估算口径不一致；工程仍整体序列化（17 MB 工程约 78 ms 写、86 ms 读）；长录制中的精确分位数样本仍会增长。
+- 陆块移动默认采用球面旋转。等比缩放使用连续经纬度坐标。有固定高程栅格的地图会拒绝陆块变换。
 
 - 图层只决定图层之间的上下；同一图层内仍是区域在下、线路其次、文字与符号在上。导出时文字总在所有形状之上，应用里文字随图层叠放。
 - 环形陆地（极点处另有国家或湖）在 0° 经线与日界线处各有一条同国的内部线；导入时洞包围极点的多边形不支持；穿过极点的边界画不出来。
@@ -338,19 +405,29 @@ tools/
 
 ## 12. 下一步建议（按顺序）
 
-1. **持续集成**：每次推送后看 GitHub 上持续集成的结果。
-2. **M11 余项**：在应用内用 AI 助手完整跑一次任务（上次被输入法挡住，需要人手输入）；任务范围（区域、层、年份段）与暂停、接管；草稿在地图上的直接预览（现在是两张缩略图）；`entity.get` 加了 `bounds` 后再看模型调用次数是否下降。
-3. **M10 余项**：界面其余文字的英文；安装程序与签名；Linux/macOS（等有设备）。
-4. 叠加运算在极点与日界线附近的稳健性；切换年份的标注重算（大世界约 40 ms）；细节层次。
-5. 层级标注（省名）、划分的后续、道路网考虑已有道路与航线；拥挤的导出中城市名在国名与河名之后，常被省去，可考虑缩小或换位。
+1. **补设计记录**：把 0.2.x 的主要模块（世界资料与画板、世界观、环境与气候、星图与引力、可视化、插件、像素标志、陆块变换、性能录制）各补一节进 `ARCHITECTURE.md` 或 `STEPS.md`。每节写清数据放在 `Document` 的哪里、格式号、撤销与旁表的处理、新增的不变式，并把能随机化的操作加进 `soak.rs`。
+2. **按 `ENGINEERING_REVIEW.md` 的顺序**：
+   - 先守住文件与交互契约：同一组 PNG/SVG/PDF 的导出对照，含像素素材的剪贴板往返，根地图、子画板、非活动画板的格式回读。
+   - 再从拾取、选中、拖动、撤销入手，逐步把编辑状态从 `App` 中拆出来。
+   - 用真实项目的性能录制决定规模优化。
+   - 最后扩大到 Linux 和 macOS。
+3. **交付记录**。分别记录源码推送和发布包。推送工作室改版时先核对远端状态，再按本文件的协作要求更新验证记录。打包参考 §2。
+4. **M11 余项**：在应用内用 AI 助手完整跑一次任务；任务范围、暂停与接管；草稿在地图上的直接预览。
+5. 叠加运算在极点与日界线附近的稳健性；细节层次；层级标注（省名）；道路考虑已有道路与航线。
 6. 清理 clippy 旧警告。
 
 ## 13. 更新日志
 
+- **2026-11-22** 修正 0.2.3 Alpha 的 GitHub 提交作者并核对源码树，保留旧提交备份。补齐 0.2.0–0.2.3 与工作室交接，复核既有测试日志，把每次更新交接的要求写入 AGENTS.md。
+- **2026-11-22** 创作工作室重做三步（本地）：实时玻璃材质、任务控件与项目查找、布局打磨与"减少透明度"。
+- **2026-11-21** 0.2.3-alpha（源码）：陆块整体变换、像素画笔、性能录制、多体引力与关闭流程改进、工程审查。
+- **2026-11-21** v0.2.2-alpha 发布：两套界面同窗口热切换、脚本步骤回放、模板、实色笔触；发布说明称 389 项测试通过。
+- **2026-11-20** v0.2.1-alpha 发布：创作工作室、世界观、环境生成、可视化、视频、云目录副本；发布说明称 385 项测试通过。
+- **2026-11-20** v0.2.0-alpha 发布：保存点、五国示例、世界资料与画板、星图、气候、多服务商 AI、脚本与插件。
+- **2026-11-17** v0.1.0-alpha：导出中国名优先于河流与线路名（`scene::build_scene` 的放置顺序、滑动与缩小，`path_text::along_path_shifted`）；随附 Noto Sans SC（wght=400 静态实例，`map_io::fonts::{BUNDLED, bundled_dirs}`）；MIT；`package.ps1` 重映射路径；317 项测试通过。
 - **2026-11-17** 仓库所有者的 GitHub 用户名改为 UnknownGlyph：公开仓库现为 https://github.com/UnknownGlyph/atlas-forge，README、`Cargo.toml`、交接报告与发布说明中的链接随之更新。
 - **2026-11-17** 持续集成在 GitHub 上首次全部通过：修正了测试程序找不到随附字体（较新 cargo 的目录更深）与工具名称在并行测试中被翻译的两个问题；`cargo test` 加 `--no-fail-fast`。
 - **2026-11-17** 公开仓库的贡献者：Claude（不写具体模型）、仓库所有者（第二）、ChatGPT；README 与发布说明同步。
-- **2026-11-17** v0.1.0-alpha：导出中国名优先于河流与线路名（滑动、偏移、缩小），河名沿线让位；随附 Noto Sans SC；MIT；可移植的构建脚本与路径重映射的打包；公开仓库与预发布。
 - **2026-11-17** M11 续：草稿上的画陆地、挖湖、画河工具，`--blank` 与 `--turns`；Gemini 与 DeepSeek（思考 max）各从零创建一个世界。
 - **2026-11-17** M11：草稿上的编辑与 MCP 写工具、`map_ai` 助手（Gemini 与 OpenAI 兼容）、`atlas-agent`、应用内 AI 助手；Gemini 与 DeepSeek 各完整实测一次。
 - **2026-11-16** M10 第一步（Windows）：自检、打包脚本与 zip、自动备份、启动失败提示、英文界面（命令/菜单/工具）、文件关联按钮、中英文用户手册。
