@@ -67,12 +67,19 @@ pub(crate) struct Studio {
     page: Page,
     navigation: Option<Navigation>,
     inspector: bool,
+    project: bool,
 }
 
 impl Studio {
-    pub(crate) fn worldview_visible(&self) -> bool { self.foreground && self.page == Page::Worldview }
-    pub(crate) fn visualizations_visible(&self) -> bool { self.foreground && self.page == Page::Visualizations }
-    pub(crate) fn environment_visible(&self) -> bool { self.foreground && self.page == Page::Environment }
+    pub(crate) fn worldview_visible(&self) -> bool {
+        self.foreground && self.page == Page::Worldview
+    }
+    pub(crate) fn visualizations_visible(&self) -> bool {
+        self.foreground && self.page == Page::Visualizations
+    }
+    pub(crate) fn environment_visible(&self) -> bool {
+        self.foreground && self.page == Page::Environment
+    }
     pub(crate) fn show_worldview(&mut self) {
         self.page = Page::Worldview;
     }
@@ -87,30 +94,36 @@ impl Studio {
     }
 }
 
-fn parchment_visuals() -> egui::Visuals {
+const INK: Color32 = Color32::from_rgb(22, 34, 53);
+const MUTED: Color32 = Color32::from_rgb(75, 92, 114);
+const ACCENT: Color32 = Color32::from_rgb(22, 87, 182);
+const PAPER: Color32 = Color32::from_rgb(247, 249, 252);
+const HAIRLINE: Color32 = Color32::from_rgb(209, 219, 233);
+
+fn studio_visuals() -> egui::Visuals {
     let mut v = egui::Visuals::light();
-    let ink = Color32::from_rgb(57, 41, 26);
-    let line = Color32::from_rgb(173, 139, 94);
-    v.override_text_color = Some(ink);
-    v.panel_fill = Color32::from_rgb(243, 231, 204);
-    v.window_fill = Color32::from_rgb(249, 239, 216);
-    v.extreme_bg_color = Color32::from_rgb(252, 244, 224);
-    v.faint_bg_color = Color32::from_rgb(235, 218, 183);
-    v.window_stroke = egui::Stroke::new(1.0, line);
-    v.hyperlink_color = Color32::from_rgb(117, 70, 35);
-    v.selection.bg_fill = Color32::from_rgb(221, 188, 132);
-    v.selection.stroke = egui::Stroke::new(1.0, ink);
+    v.override_text_color = Some(INK);
+    v.panel_fill = PAPER;
+    v.window_fill = Color32::WHITE;
+    v.extreme_bg_color = Color32::WHITE;
+    v.faint_bg_color = Color32::from_rgb(235, 241, 249);
+    v.window_stroke = egui::Stroke::new(1.0, HAIRLINE);
+    v.window_corner_radius = egui::CornerRadius::same(15);
+    v.hyperlink_color = ACCENT;
+    v.selection.bg_fill = Color32::from_rgb(219, 233, 253);
+    v.selection.stroke = egui::Stroke::new(1.0, ACCENT);
     for (widget, color) in [
-        (&mut v.widgets.noninteractive, Color32::from_rgb(243, 231, 204)),
-        (&mut v.widgets.inactive, Color32::from_rgb(236, 220, 187)),
-        (&mut v.widgets.hovered, Color32::from_rgb(224, 200, 154)),
-        (&mut v.widgets.active, Color32::from_rgb(215, 185, 130)),
-        (&mut v.widgets.open, Color32::from_rgb(229, 208, 169)),
+        (&mut v.widgets.noninteractive, PAPER),
+        (&mut v.widgets.inactive, Color32::from_rgb(233, 239, 247)),
+        (&mut v.widgets.hovered, Color32::from_rgb(219, 231, 248)),
+        (&mut v.widgets.active, Color32::from_rgb(199, 221, 250)),
+        (&mut v.widgets.open, Color32::from_rgb(224, 235, 252)),
     ] {
         widget.bg_fill = color;
         widget.weak_bg_fill = color;
-        widget.bg_stroke = egui::Stroke::new(1.0, line);
-        widget.fg_stroke.color = ink;
+        widget.bg_stroke = egui::Stroke::new(1.0, HAIRLINE);
+        widget.fg_stroke.color = INK;
+        widget.corner_radius = egui::CornerRadius::same(9);
     }
     v
 }
@@ -137,8 +150,7 @@ impl App {
         self.studio.foreground = !self.studio.foreground;
         if self.studio.foreground {
             self.studio.professional_visuals = Some(ctx.global_style().visuals.clone());
-            self.studio.inspector = true;
-            ctx.set_visuals(parchment_visuals());
+            ctx.set_visuals(studio_visuals());
         } else if let Some(visuals) = self.studio.professional_visuals.take() {
             ctx.set_visuals(visuals);
         }
@@ -158,7 +170,9 @@ impl App {
         if self.studio.page != Page::Environment {
             self.environment_ui.stop_picking();
         }
-        self.studio_project(ui);
+        if self.studio.project {
+            self.studio_project(ui);
+        }
         if matches!(self.studio.page, Page::Worldview | Page::Visualizations) {
             egui::Panel::bottom("studio-study-timeline").show(ui, |ui| self.timeline_bar(ui));
         }
@@ -172,39 +186,68 @@ impl App {
     }
 
     fn studio_header(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("studio-header").show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.heading(RichText::new("Atlas Forge").color(Color32::from_rgb(96, 56, 29)));
-                ui.separator();
-                for (page, title) in [
-                    (Page::Map, "地图"),
-                    (Page::Sources, "世界资料"),
-                    (Page::Worldview, "世界观"),
-                    (Page::Visualizations, "图表"),
-                    (Page::History, "历史"),
-                    (Page::Environment, "环境"),
-                    (Page::Stars, "星图"),
-                ] {
-                    if ui
-                        .selectable_value(&mut self.studio.page, page, tr(title))
-                        .changed()
-                    {
-                        self.star_map.open = page == Page::Stars;
+        let frame = egui::Frame::new()
+            .fill(PAPER)
+            .inner_margin(egui::Margin::symmetric(16, 8));
+        egui::Panel::top("studio-header")
+            .frame(frame)
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(tr("创作工作室")).size(19.0).strong());
+                    ui.label(RichText::new(&self.doc.meta.name).size(14.0).color(MUTED));
+                    if self.dirty {
+                        ui.label(RichText::new(tr("未保存")).color(ACCENT).small());
                     }
-                }
-                ui.separator();
-                if ui.button(tr("保存")).clicked() {
-                    self.run(Act::Save);
-                }
-                if ui.button(tr("设置")).clicked() {
-                    self.run(Act::Prefs);
-                }
-                if ui.button(tr("切回专业界面")).clicked() {
-                    self.switch_workspace();
-                }
-                ui.menu_button(tr("所有命令"), |ui| self.studio_commands(ui));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(RichText::new(tr("保存")).color(Color32::WHITE))
+                                    .fill(ACCENT)
+                                    .min_size(egui::vec2(66.0, 30.0)),
+                            )
+                            .clicked()
+                        {
+                            self.run(Act::Save);
+                        }
+                        ui.menu_button(tr("更多…"), |ui| {
+                            if ui.button(tr("设置")).clicked() {
+                                self.run(Act::Prefs);
+                                ui.close();
+                            }
+                            if ui.button(tr("切回专业界面")).clicked() {
+                                self.switch_workspace();
+                                ui.close();
+                            }
+                            ui.menu_button(tr("所有命令"), |ui| self.studio_commands(ui));
+                        });
+                    });
+                });
+                ui.add_space(5.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.toggle_value(&mut self.studio.project, tr("画板"));
+                    ui.separator();
+                    for (page, title) in [
+                        (Page::Map, "地图"),
+                        (Page::Sources, "世界资料"),
+                        (Page::Worldview, "世界观"),
+                        (Page::Visualizations, "图表"),
+                        (Page::History, "历史"),
+                        (Page::Environment, "环境"),
+                        (Page::Stars, "星图"),
+                    ] {
+                        if ui
+                            .add(
+                                egui::Button::selectable(self.studio.page == page, tr(title))
+                                    .min_size(egui::vec2(59.0, 30.0)),
+                            )
+                            .clicked()
+                        {
+                            self.studio.page = page;
+                            self.star_map.open = page == Page::Stars;
+                        }
+                    }
+                });
             });
-        });
     }
 
     fn studio_commands(&mut self, ui: &mut egui::Ui) {
@@ -346,33 +389,8 @@ impl App {
     }
 
     fn studio_map(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("studio-tools").show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.menu_button(tr("工具"), |ui| {
-                    for tool in Tool::ALL {
-                        if ui
-                            .selectable_label(self.tool == tool, tool.name())
-                            .on_hover_text(tool.help())
-                            .clicked()
-                        {
-                            self.set_tool(tool);
-                            ui.close();
-                        }
-                    }
-                });
-                for (act, name) in [
-                    (Act::LandMove, "整体移动陆块"),
-                    (Act::LandScale, "整体缩放陆块"),
-                    (Act::Export, "导出…"),
-                    (Act::GeographicGuides, "地理参考线…"),
-                ] {
-                    if ui
-                        .add_enabled(self.can(act), egui::Button::new(tr(name)))
-                        .clicked()
-                    {
-                        self.run(act);
-                    }
-                }
+        if self.land_move.active || self.tool != Tool::Select || self.studio.page != Page::Map {
+            egui::Panel::top("studio-context").show(ui, |ui| {
                 if self.studio.page == Page::Environment
                     && ui.button(tr("行星环境与气候…")).clicked()
                 {
@@ -382,14 +400,13 @@ impl App {
                 {
                     self.run(Act::TimelinePlayback);
                 }
-                ui.checkbox(&mut self.studio.inspector, tr("属性"));
+                if self.land_move.active {
+                    self.land_move_bar(ui);
+                } else {
+                    self.options_bar(ui);
+                }
             });
-            if self.land_move.active {
-                self.land_move_bar(ui);
-            } else {
-                self.options_bar(ui);
-            }
-        });
+        }
         egui::Panel::bottom("studio-status").show(ui, |ui| self.status_bar(ui));
         egui::Panel::bottom("studio-timeline").show(ui, |ui| self.timeline_bar(ui));
         if self.table_panel {
@@ -426,27 +443,94 @@ impl App {
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
                 let r = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+                if r.width() < 100.0 || r.height() < 80.0 {
+                    return;
+                }
+                let shelf = egui::Rect::from_center_size(
+                    egui::pos2(r.center().x, r.top() + 39.0),
+                    egui::vec2((r.width() - 22.0).min(530.0), 50.0),
+                );
+                let glass = self.doc.paper.is_none().then_some(shelf);
                 let layout = if self.doc.paper.is_some() {
                     Layout::Flat
                 } else {
                     self.layout
                 };
                 match layout {
-                    Layout::Flat => self.map_view(ui, ViewKind::Flat, r),
-                    Layout::Globe => self.map_view(ui, ViewKind::Globe, r),
+                    Layout::Flat => self.map_view_with_glass(ui, ViewKind::Flat, r, glass),
+                    Layout::Globe => self.map_view_with_glass(ui, ViewKind::Globe, r, glass),
                     Layout::Split => {
                         let x = r.left() + r.width() * 0.61;
-                        self.map_view(
+                        self.map_view_with_glass(
                             ui,
                             ViewKind::Flat,
                             egui::Rect::from_min_max(r.min, egui::pos2(x - 1.0, r.max.y)),
+                            glass,
                         );
-                        self.map_view(
+                        self.map_view_with_glass(
                             ui,
                             ViewKind::Globe,
                             egui::Rect::from_min_max(egui::pos2(x + 1.0, r.min.y), r.max),
+                            glass,
                         );
                     }
+                }
+                self.studio_shelf(ui.ctx(), shelf, glass.is_some());
+            });
+    }
+
+    fn studio_shelf(&mut self, ctx: &egui::Context, shelf: egui::Rect, glass: bool) {
+        egui::Area::new(egui::Id::unique("studio-floating-tools"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(shelf.min)
+            .constrain(false)
+            .show(ctx, |ui| {
+                let (rect, _) = ui.allocate_exact_size(shelf.size(), egui::Sense::hover());
+                let fill = if glass {
+                    Color32::from_white_alpha(20)
+                } else {
+                    PAPER
+                };
+                ui.painter().rect(
+                    rect,
+                    19.0,
+                    fill,
+                    egui::Stroke::new(1.0, HAIRLINE),
+                    egui::StrokeKind::Inside,
+                );
+                let mut tools = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(rect.shrink2(egui::vec2(10.0, 9.0)))
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                tools.spacing_mut().item_spacing.x = 8.0;
+                tools.menu_button(tr("绘图工具"), |ui| {
+                    for tool in Tool::ALL {
+                        if ui
+                            .selectable_label(self.tool == tool, tool.name())
+                            .on_hover_text(tool.help())
+                            .clicked()
+                        {
+                            self.set_tool(tool);
+                            ui.close();
+                        }
+                    }
+                });
+                for (act, title) in [
+                    (Act::Undo, "撤销"),
+                    (Act::Redo, "重做"),
+                    (Act::FitAll, "缩放到全图"),
+                ] {
+                    if tools
+                        .add_enabled(self.can(act), egui::Button::new(tr(title)))
+                        .clicked()
+                    {
+                        self.run(act);
+                    }
+                }
+                tools.toggle_value(&mut self.studio.inspector, tr("属性"));
+                if tools.button(tr("导出…")).clicked() {
+                    self.run(Act::Export);
                 }
             });
     }

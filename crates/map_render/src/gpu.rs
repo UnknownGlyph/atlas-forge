@@ -1,6 +1,9 @@
 //! wgpu resources and draw calls. UI-framework agnostic: the app wraps
 //! [`MapGpu::prepare`] / [`MapGpu::paint`] in its own paint callback.
 
+mod glass;
+pub use glass::GlassPatch;
+
 use crate::camera::{Camera2D, GlobeCamera};
 use crate::tess::{self, Chunk, ChunkId, FillVertex, LineInstance};
 use crate::underlay::{Slot, UnderlayGpu, UnderlayUniform};
@@ -10,7 +13,7 @@ use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct ViewUniform {
     pub view_proj: [[f32; 4]; 4],
     pub cam_pos: [f32; 4],
@@ -217,6 +220,9 @@ pub struct MapGpu {
     views: HashMap<u32, ViewRes>,
     underlay: crate::underlay::UnderlayGpu,
     motion_atlas: Option<MotionAtlas>,
+    glass: Option<glass::Glass>,
+    target_format: wgpu::TextureFormat,
+    samples: u32,
 }
 
 fn map_pipelines(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, format: wgpu::TextureFormat, msaa: u32) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
@@ -302,6 +308,9 @@ impl MapGpu {
             views: HashMap::new(),
             underlay: crate::underlay::UnderlayGpu::new(device, format, msaa),
             motion_atlas: None,
+            glass: None,
+            target_format: format,
+            samples: msaa,
         }
     }
 

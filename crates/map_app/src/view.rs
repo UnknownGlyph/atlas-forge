@@ -297,7 +297,19 @@ impl GlobeInertia {
     }
 }
 
-struct MapCallback(FrameData, Option<(map_perf::Trace, Option<u64>)>, ViewKind);
+struct MapCallback(
+    FrameData, Option<(map_perf::Trace, Option<u64>)>, ViewKind, Option<map_render::gpu::GlassPatch>,
+);
+
+struct GlassCallback(u32);
+
+impl egui_wgpu::CallbackTrait for GlassCallback {
+    fn paint(&self, _info: egui::PaintCallbackInfo, pass: &mut egui_wgpu::wgpu::RenderPass<'static>, resources: &egui_wgpu::CallbackResources) {
+        if let Some(gpu) = resources.get::<MapGpu>() {
+            gpu.paint_glass(pass, self.0);
+        }
+    }
+}
 
 impl egui_wgpu::CallbackTrait for MapCallback {
     fn prepare(
@@ -312,6 +324,10 @@ impl egui_wgpu::CallbackTrait for MapCallback {
             if self.2 == ViewKind::Flat { "二维绘制准备 · ms" } else { "球体绘制准备 · ms" }, *frame));
         if let Some(gpu) = res.get_mut::<MapGpu>() {
             gpu.prepare(device, queue, enc, &self.0);
+            if let Some(patch) = self.3 {
+                let _glass = self.1.as_ref().map(|(trace, frame)| trace.span("绘制回调", "工作室毛玻璃 · ms", *frame));
+                gpu.prepare_glass(device, queue, enc, &self.0, patch);
+            }
         }
         vec![]
     }
@@ -356,6 +372,10 @@ impl App {
     }
 
     pub fn map_view(&mut self, ui: &mut egui::Ui, kind: ViewKind, rect: Rect) {
+        self.map_view_with_glass(ui, kind, rect, None);
+    }
+
+    pub(crate) fn map_view_with_glass(&mut self, ui: &mut egui::Ui, kind: ViewKind, rect: Rect, glass: Option<Rect>) {
         let _measurement = crate::perf_ui::span("画布", if kind == ViewKind::Flat { "二维画布" } else { "球体画布" });
         let id = ui.scope_id().with(match kind {
             ViewKind::Flat => "flat",
@@ -511,6 +531,15 @@ impl App {
             ViewKind::Flat => ViewUniform::for_2d(&c, w, h, &styles),
             ViewKind::Globe => ViewUniform::for_globe(&self.globe, self.scene.lon0(), w, h, &styles),
         };
+        let patch = glass.filter(|panel| panel.intersects(rect)).map(|panel| map_render::gpu::GlassPatch {
+            bounds: [
+                (panel.left() - rect.left()) / rect.width(),
+                (panel.top() - rect.top()) / rect.height(),
+                (panel.right() - rect.left()) / rect.width(),
+                (panel.bottom() - rect.top()) / rect.height(),
+            ],
+            pixels_per_point: ppp,
+        });
         let data = FrameData {
             view_id: kind as u32,
             uniform,
@@ -533,7 +562,7 @@ impl App {
             if !clipped.is_positive() { return; }
             painter.with_clip_rect(clipped)
         } else { painter };
-        painter.add(egui_wgpu::Callback::new_paint_callback(rect, MapCallback(data, crate::perf_ui::context(), kind)));
+        painter.add(egui_wgpu::Callback::new_paint_callback(rect, MapCallback(data, crate::perf_ui::context(), kind, patch)));
         self.draw_land_move(&painter, &vg);
         self.draw_geographic_guides(&painter, &vg);
         let t_ov = std::time::Instant::now();
@@ -560,6 +589,10 @@ impl App {
             painter.text(rect.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP, crate::i18n::tr("三维球体"), egui::FontId::proportional(13.0), Color32::from_gray(230));
         }
         self.draw_book_points(&painter,&vg);
+        if patch.is_some() {
+            // Use the map viewport even when the map itself is clipped to a paper board.
+            ui.painter_at(rect).add(egui_wgpu::Callback::new_paint_callback(rect, GlassCallback(kind as u32)));
+        }
     }
 
     fn draw_globe_navigation(&self, painter: &egui::Painter, vg: &ViewGeom) {
