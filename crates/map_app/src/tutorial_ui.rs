@@ -1,9 +1,11 @@
-//! The illustrated Yuanyang lessons. Instructions and figures occupy
-//! separate pages with a chapter index. Launching a tool returns to the map.
+//! The illustrated Ithaer lessons, worked in the Creative Studio on the
+//! local three-state project. Instructions and figures occupy separate pages
+//! with a chapter index. Launching a tool returns to the map.
 use crate::{actions::Act, app::App, view::Tool};
 use crate::i18n::{text, tr};
 use eframe::egui;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -20,7 +22,8 @@ pub(crate) struct Tutorial {
     page: Page,
     original_size: bool,
     figure_step: Option<usize>,
-    picture: Option<(&'static str, egui::TextureHandle)>,
+    /// Pictures already decoded, by name; decoded the first time they are shown.
+    pictures: HashMap<&'static str, egui::TextureHandle>,
 }
 
 #[derive(Deserialize)]
@@ -46,7 +49,7 @@ struct Chapter {
 fn chapters() -> &'static [Chapter] {
     static CHAPTERS: OnceLock<Vec<Chapter>> = OnceLock::new();
     CHAPTERS.get_or_init(|| {
-        serde_json::from_str(include_str!("../../../docs/tutorial/lessons.json"))
+        serde_json::from_str(include_str!("../../../docs/tutorial/ithaer/lessons.json"))
             .expect("bundled tutorial chapters")
     })
 }
@@ -71,73 +74,52 @@ macro_rules! lesson {
 }
 
 const MEDIA: &[Media] = &[
-    lesson!("paper", "01-blank", "打开世界资料", Act::WorldBook),
+    lesson!("studio", "ithaer/01-studio", "查看快捷键一览", Act::Shortcuts),
     lesson!(
-        "coast",
-        "02-coast",
-        "选择绘制陆地",
-        Act::Tool(Tool::DrawLand)
-    ),
-    lesson!(
-        "countries",
-        "03-countries",
-        "选择领土画笔",
-        Act::Tool(Tool::Assign)
-    ),
-    lesson!(
-        "provinces",
-        "04-provinces",
-        "选择地图对象",
-        Act::Tool(Tool::Select)
-    ),
-    lesson!(
-        "regions",
-        "05-regions",
-        "选择分区画笔",
-        Act::Tool(Tool::Assign)
-    ),
-    lesson!("water", "06-water", "选择河流工具", Act::Tool(Tool::River)),
-    lesson!("cities", "07-cities", "选择添加城市", Act::Tool(Tool::City)),
-    lesson!("history", "08-history", "打开事件时间线", Act::Events),
-    lesson!("diplomacy", "09-diplomacy", "打开外交关系", Act::Diplomacy),
-    lesson!("board", "10-board", "打开世界资料", Act::WorldBook),
-    lesson!("export", "11-atlas", "打开导出设置", Act::Export),
-    lesson!(
-        "districts",
-        "12-districts",
-        "选择地图对象",
-        Act::Tool(Tool::Select)
-    ),
-    lesson!(
-        "navigation",
-        "13-navigation",
+        "find",
+        "ithaer/02-find",
         "切换二维与三维分屏",
         Act::Layout(crate::app::Layout::Split)
     ),
     lesson!(
-        "checkpoints",
-        "14-checkpoints",
-        "打开保存点",
-        Act::Checkpoints
+        "hierarchy",
+        "ithaer/03-hierarchy",
+        "选择地图对象",
+        Act::Tool(Tool::Select)
     ),
     lesson!(
-        "imports",
-        "15-imports",
-        "选择配准参考图",
-        Act::Tool(Tool::Align)
+        "territory",
+        "ithaer/04-territory",
+        "选择领土画笔",
+        Act::Tool(Tool::Assign)
     ),
+    lesson!(
+        "borders",
+        "ithaer/05-borders",
+        "选择切分工具",
+        Act::Tool(Tool::Split)
+    ),
+    lesson!(
+        "rivers",
+        "ithaer/06-rivers",
+        "选择河流工具",
+        Act::Tool(Tool::River)
+    ),
+    lesson!(
+        "marks",
+        "ithaer/07-marks",
+        "打开彩色像素画笔",
+        Act::PixelBrush
+    ),
+    lesson!("history", "ithaer/08-history", "打开事件时间线", Act::Events),
     lesson!(
         "data",
-        "16-data",
+        "ithaer/09-data",
         "返回地图打开数据表",
         Act::Tool(Tool::Select)
     ),
-    lesson!("features", "17-tools", "选择钢笔工具", Act::Tool(Tool::Pen)),
-    lesson!("climate", "18-climate", "打开行星环境与气候", Act::Climate),
-    lesson!("stars", "19-stars", "打开星图", Act::StarChart),
-    lesson!("library", "20-library", "打开世界资料", Act::WorldBook),
-    lesson!("automation", "21-automation", "打开本地插件", Act::Plugins),
-    lesson!("final-review", "22-review", "打开版式视图", Act::PageView),
+    lesson!("library", "ithaer/10-library", "打开世界资料", Act::WorldBook),
+    lesson!("export", "ithaer/11-export", "打开导出设置", Act::Export),
 ];
 
 macro_rules! diagrams {
@@ -169,13 +151,15 @@ impl App {
         let body_height = (ctx.content_rect().height() - 264.0).clamp(240.0, 590.0);
         egui::Window::new(crate::i18n::tr("创作教程"))
             .id(egui::Id::unique("creative-tutorial"))
+            // Keep the tutorial above the workspace's floating map controls.
+            .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .open(&mut open)
             .default_size([1005.0, 760.0])
             .min_size([530.0, 395.0])
             .resizable(true)
             .show(ctx, |ui| {
-                ui.heading(crate::i18n::tr("从零绘制远洋人民共和国与四邻国"));
+                ui.heading(crate::i18n::tr("在创作工作室里完成伊瑟尔三国"));
                 ui.add_space(8.0);
                 let sidebar = ui.available_width() >= 760.0;
                 let previous_chapter = state.step;
@@ -188,19 +172,6 @@ impl App {
                             }
                         });
                 }
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut state.page, Page::Practice, crate::i18n::tr("操作与验收"));
-                    if ui
-                        .selectable_label(
-                            state.page == Page::Figure && state.figure_step.is_none(),
-                            crate::i18n::tr("阶段大图"),
-                        )
-                        .clicked()
-                    {
-                        state.figure_step = None;
-                        state.page = Page::Figure;
-                    }
-                });
                 ui.separator();
 
                 ui.horizontal_top(|ui| {
@@ -237,8 +208,8 @@ impl App {
                         ui.add_space(6.0);
                         match state.page {
                             Page::Practice => {
-                                if let Some(index) = instructions(ui, chapter, body_height) {
-                                    state.figure_step = Some(index);
+                                if let Some(index) = instructions(ui, ctx, &mut state.pictures, chapter, media, body_height) {
+                                    state.figure_step = index;
                                     state.page = Page::Figure;
                                 }
                             }
@@ -274,8 +245,8 @@ impl App {
                     if ui.button(tr(MEDIA[state.step].entry)).clicked() {
                         action = Some(MEDIA[state.step].action);
                     }
-                    if ui.button(crate::i18n::tr("打开教程成品")).clicked() {
-                        action = Some(Act::TutorialExample);
+                    if ui.button(crate::i18n::tr("打开伊瑟尔三国测试工程")).clicked() {
+                        action = Some(Act::NewTestWorld);
                     }
                 });
             });
@@ -287,14 +258,60 @@ impl App {
     }
 }
 
-fn instructions(ui: &mut egui::Ui, chapter: &Chapter, height: f32) -> Option<usize> {
-    let mut picture = None;
+/// A bundled picture as a texture, decoded once.
+fn texture(
+    ctx: &egui::Context,
+    cache: &mut HashMap<&'static str, egui::TextureHandle>,
+    name: &'static str,
+    bytes: &'static [u8],
+) -> Option<egui::TextureHandle> {
+    if !cache.contains_key(name) {
+        let image = image::load_from_memory(bytes).ok()?.into_rgba8();
+        let size = [image.width() as usize, image.height() as usize];
+        let pixels = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
+        cache.insert(name, ctx.load_texture(name, pixels, egui::TextureOptions::LINEAR));
+    }
+    cache.get(name).cloned()
+}
+
+/// A picture in the text, as wide as the column; true when clicked.
+fn inline_picture(ui: &mut egui::Ui, texture: &egui::TextureHandle, max_height: f32, caption: &str) -> bool {
+    let size = texture.size_vec2();
+    let scale = (ui.available_width() / size.x).min(max_height / size.y).min(1.0);
+    let clicked = ui
+        .add(egui::Image::new((texture.id(), size * scale)).sense(egui::Sense::click()))
+        .on_hover_cursor(egui::CursorIcon::ZoomIn)
+        .on_hover_text(crate::i18n::tr("点击查看大图"))
+        .clicked();
+    if !caption.is_empty() {
+        ui.label(egui::RichText::new(caption).size(13.5).weak());
+    }
+    clicked
+}
+
+/// The chapter as one column of text and pictures. `Some(step)` asks for
+/// the large view of a picture (`None` inside: the chapter's own picture).
+fn instructions(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    cache: &mut HashMap<&'static str, egui::TextureHandle>,
+    chapter: &Chapter,
+    media: &Media,
+    height: f32,
+) -> Option<Option<usize>> {
+    let mut enlarge = None;
     egui::ScrollArea::vertical()
         .id_salt(("tutorial-instructions", &chapter.id))
         .max_height(height)
         .show(ui, |ui| {
             ui.label(egui::RichText::new(text(&chapter.goal)).size(16.0));
-            ui.add_space(13.0);
+            ui.add_space(10.0);
+            if let Some(picture) = texture(ctx, cache, media.image, media.bytes) {
+                if inline_picture(ui, &picture, (height * 0.62).clamp(220.0, 460.0), text(&chapter.caption)) {
+                    enlarge = Some(None);
+                }
+            }
+            ui.add_space(14.0);
             for (index, item) in chapter.steps.iter().enumerate() {
                 ui.label(
                     egui::RichText::new(format!("{}. {}", index + 1, text(&item.title)))
@@ -302,8 +319,18 @@ fn instructions(ui: &mut egui::Ui, chapter: &Chapter, height: f32) -> Option<usi
                         .strong(),
                 );
                 ui.label(egui::RichText::new(text(&item.body)).size(15.0));
-                if ui.link(crate::i18n::tr("查看本步配图")).clicked() {
-                    picture = Some(index);
+                // a step with a picture of its own shows it right under its text
+                let own = item
+                    .figure
+                    .as_deref()
+                    .and_then(|name| DIAGRAMS.iter().find(|(key, _)| *key == name).copied());
+                if let Some((name, bytes)) = own {
+                    ui.add_space(6.0);
+                    if let Some(picture) = texture(ctx, cache, name, bytes) {
+                        if inline_picture(ui, &picture, (height * 0.5).clamp(200.0, 380.0), "") {
+                            enlarge = Some(Some(index));
+                        }
+                    }
                 }
                 ui.add_space(11.0);
             }
@@ -314,9 +341,10 @@ fn instructions(ui: &mut egui::Ui, chapter: &Chapter, height: f32) -> Option<usi
             ui.strong(crate::i18n::tr("遇到问题"));
             ui.label(egui::RichText::new(text(&chapter.help)).size(15.0));
         });
-    picture
+    enlarge
 }
 
+/// One picture at a larger size, with the way back to the text.
 fn figure(
     ui: &mut egui::Ui,
     ctx: &egui::Context,
@@ -328,6 +356,10 @@ fn figure(
     debug_assert_eq!(chapter.image, media.image);
     debug_assert_eq!(chapter.id, media.id);
     ui.horizontal(|ui| {
+        if ui.button(crate::i18n::tr("返回教程")).clicked() {
+            state.page = Page::Practice;
+        }
+        ui.separator();
         ui.selectable_value(&mut state.original_size, false, crate::i18n::tr("适合窗口"));
         ui.selectable_value(&mut state.original_size, true, crate::i18n::tr("原始尺寸"));
     });
@@ -336,19 +368,8 @@ fn figure(
         .and_then(|s| s.figure.as_deref())
         .and_then(|name| DIAGRAMS.iter().find(|(key, _)| *key == name).copied())
         .unwrap_or((media.image, media.bytes));
-    if state.picture.as_ref().is_none_or(|(key, _)| *key != name) {
-        state.picture = image::load_from_memory(bytes).ok().map(|image| {
-            let image = image.into_rgba8();
-            let size = [image.width() as usize, image.height() as usize];
-            let pixels = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
-            (
-                name,
-                ctx.load_texture(name, pixels, egui::TextureOptions::LINEAR),
-            )
-        });
-    }
-    if let Some((_, texture)) = &state.picture {
-        let size = texture.size_vec2();
+    if let Some(picture) = texture(ctx, &mut state.pictures, name, bytes) {
+        let size = picture.size_vec2();
         let width = ui.available_width();
         let height = (height - 55.0).max(190.0);
         let scale = if state.original_size {
@@ -356,25 +377,29 @@ fn figure(
         } else {
             (width / size.x).min(height / size.y).min(1.0)
         };
+        let mut back = false;
         egui::ScrollArea::both()
             .id_salt(("tutorial-figure", state.step))
             .max_height(height)
             .max_width(width)
             .show(ui, |ui| {
-                ui.image((texture.id(), size * scale));
+                back = ui
+                    .add(egui::Image::new((picture.id(), size * scale)).sense(egui::Sense::click()))
+                    .on_hover_text(crate::i18n::tr("点击返回教程"))
+                    .clicked();
             });
-    }
-    ui.add_space(7.0);
-    if let Some(step) = step {
-        ui.strong(text(&step.title));
-        if name == media.image {
-            ui.label(text(&chapter.caption));
-        }
-        if ui.link(crate::i18n::tr("返回操作步骤")).clicked() {
+        if back {
             state.page = Page::Practice;
         }
-    } else {
-        ui.label(text(&chapter.caption));
+    }
+    ui.add_space(7.0);
+    match step {
+        Some(step) => {
+            ui.strong(text(&step.title));
+        }
+        None => {
+            ui.label(text(&chapter.caption));
+        }
     }
 }
 

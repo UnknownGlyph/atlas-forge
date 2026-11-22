@@ -97,7 +97,7 @@ fn main() -> eframe::Result<()> {
         renderer: eframe::Renderer::Wgpu,
         multisampling: MSAA as u16,
         depth_buffer: 0,
-        viewport: egui::ViewportBuilder::default().with_title("Atlas Forge").with_inner_size([1500.0, 900.0]).with_min_inner_size([900.0, 560.0]),
+        viewport: with_app_icon(egui::ViewportBuilder::default().with_title("Atlas Forge").with_inner_size([1500.0, 900.0]).with_min_inner_size([900.0, 560.0])),
         ..Default::default()
     };
     #[cfg(windows)]
@@ -141,6 +141,19 @@ fn main() -> eframe::Result<()> {
             ))
             .show();
     })
+}
+
+/// The window and taskbar icon (the file icon is put in by `build.rs`).
+fn with_app_icon(viewport: egui::ViewportBuilder) -> egui::ViewportBuilder {
+    let bytes = include_bytes!("../../../assets/icon/atlas-forge-256.png");
+    match image::load_from_memory(bytes) {
+        Ok(image) => {
+            let image = image.into_rgba8();
+            let (width, height) = image.dimensions();
+            viewport.with_icon(Arc::new(egui::IconData { rgba: image.into_raw(), width, height }))
+        }
+        Err(_) => viewport,
+    }
 }
 
 /// Resident memory of this process in bytes (Windows); None elsewhere.

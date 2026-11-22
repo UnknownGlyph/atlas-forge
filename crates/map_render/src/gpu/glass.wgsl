@@ -2,7 +2,7 @@ struct Material {
     bounds: vec4<f32>,
     view_size: vec2<f32>,
     pixels_per_point: f32,
-    _pad: f32,
+    dark: f32,
 };
 
 @group(0) @binding(0) var maps: texture_2d<f32>;
@@ -53,8 +53,13 @@ fn fs_main(in: Vertex) -> @location(0) vec4<f32> {
         + sample_map(uv + vec2(-step.x, step.y))
         + sample_map(uv + vec2(step.x, -step.y))
     ) / 16.0;
-    let tint = mix(vec3(0.84, 0.91, 0.98), vec3(1.0, 0.995, 0.985), 1.0 - in.panel_uv.y);
+    let is_dark = material.dark > 0.5;
+    let light_tint = mix(vec3(0.84, 0.91, 0.98), vec3(1.0, 0.995, 0.985), 1.0 - in.panel_uv.y);
+    let dark_tint = mix(vec3(0.09, 0.11, 0.15), vec3(0.16, 0.19, 0.25), 1.0 - in.panel_uv.y);
+    let tint = select(light_tint, dark_tint, is_dark);
+    let veil = select(0.63, 0.72, is_dark);
+    let shine = select(0.68, 0.2, is_dark);
     let rim = smoothstep(-2.2 * pixel, -0.3 * pixel, edge) * (1.0 - in.panel_uv.y * 0.48);
-    let rgb = mix(mix(soft, tint, 0.63), vec3(1.0), rim * 0.68);
+    let rgb = mix(mix(soft, tint, veil), vec3(1.0), rim * shine);
     return vec4(rgb * opacity, opacity);
 }

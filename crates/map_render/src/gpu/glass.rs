@@ -9,6 +9,10 @@ pub struct GlassPatch {
     /// Left, top, right, bottom as fractions of the map viewport.
     pub bounds: [f32; 4],
     pub pixels_per_point: f32,
+    /// The dark appearance of the material.
+    pub dark: bool,
+    /// What shows where no map is drawn, as 0–1 colour values.
+    pub backdrop: [f32; 3],
 }
 
 #[repr(C)]
@@ -17,7 +21,8 @@ struct Material {
     bounds: [f32; 4],
     view_size: [f32; 2],
     pixels_per_point: f32,
-    _pad: f32,
+    /// 1 for the dark appearance (also keeps the uniform 16-byte aligned).
+    dark: f32,
 }
 
 #[derive(PartialEq)]
@@ -26,6 +31,7 @@ struct Source {
     geometry: u64,
     colors: u64,
     sample_rect: [u32; 4],
+    backdrop: [f32; 3],
 }
 
 struct View {
@@ -228,7 +234,7 @@ impl MapGpu {
             bounds: patch.bounds,
             view_size: [w, h],
             pixels_per_point: patch.pixels_per_point,
-            _pad: 0.0,
+            dark: if patch.dark { 1.0 } else { 0.0 },
         };
         if view.last_material != Some(material) {
             queue.write_buffer(&view.material, 0, bytemuck::bytes_of(&material));
@@ -248,6 +254,7 @@ impl MapGpu {
             geometry: frame.geometry_gen,
             colors: frame.colors.0,
             sample_rect,
+            backdrop: patch.backdrop,
         };
         if view.source.as_ref() == Some(&source) {
             return;
@@ -274,9 +281,9 @@ impl MapGpu {
             resolve_target: None,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(wgpu::Color {
-                    r: 0.16,
-                    g: 0.18,
-                    b: 0.21,
+                    r: patch.backdrop[0] as f64,
+                    g: patch.backdrop[1] as f64,
+                    b: patch.backdrop[2] as f64,
                     a: 1.0,
                 }),
                 store: wgpu::StoreOp::Store,
@@ -325,6 +332,8 @@ mod tests {
         let patch = GlassPatch {
             bounds: [0.80, 0.10, 1.20, 0.18],
             pixels_per_point: 1.5,
+            dark: false,
+            backdrop: [0.16, 0.18, 0.21],
         };
         let [x, y, w, h] = sample_rect(patch, [1000.0, 500.0], [200, 100]);
         assert!(x < 160 && y < 10 && y + h > 18);

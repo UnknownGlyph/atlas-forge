@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Atlas Forge program icon (simplified, for 16-32 px). Hand-written vector; render with tools/make_icon.py. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#26282D"/>
+      <stop offset="0.45" stop-color="#121316"/>
+      <stop offset="1" stop-color="#050506"/>
+    </linearGradient>
+    <radialGradient id="tileglow" cx="0.5" cy="0.06" r="0.7">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.10"/>
+    </linearGradient>
+    <radialGradient id="ocean" cx="0.36" cy="0.30" r="0.80">
+      <stop offset="0" stop-color="#4A4F59"/>
+      <stop offset="0.55" stop-color="#22252B"/>
+      <stop offset="1" stop-color="#0B0C0F"/>
+    </radialGradient>
+    <linearGradient id="champagne" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F6E7C1"/>
+      <stop offset="1" stop-color="#CDB07A"/>
+    </linearGradient>
+    <linearGradient id="champagne2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#D9BE86"/>
+      <stop offset="1" stop-color="#A98648"/>
+    </linearGradient>
+    <radialGradient id="shine" cx="0.30" cy="0.24" r="0.55">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FBEBC4"/>
+      <stop offset="0.45" stop-color="#D8B36A"/>
+      <stop offset="1" stop-color="#8E6A2E"/>
+    </linearGradient>
+    <radialGradient id="spark">
+      <stop offset="0" stop-color="#F7DFA6" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#F7DFA6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="drop" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0.62" stop-color="#000000" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="globe"><circle cx="512" cy="530" r="290"/></clipPath>
+    <clipPath id="land"><path d="M 170 330 C 260 230 400 220 470 262 C 530 296 600 280 630 330 C 650 380 590 420 540 440 C 500 470 470 520 420 540 C 360 565 330 610 280 590 C 230 570 200 520 170 500 Z"/></clipPath>
+    <clipPath id="before"><rect x="0" y="530" width="1024" height="494"/></clipPath>
+  </defs>
+
+  <rect x="40" y="40" width="944" height="944" rx="216" fill="url(#tile)"/>
+  <rect x="40" y="40" width="944" height="944" rx="216" fill="url(#tileglow)"/>
+  <rect x="46" y="46" width="932" height="932" rx="210" fill="none" stroke="url(#rim)" stroke-width="12"/>
+
+  <ellipse cx="512" cy="566" rx="322" ry="322" fill="url(#drop)"/>
+
+  <g transform="rotate(-22 512 530)">
+    <ellipse cx="512" cy="530" rx="418" ry="126" fill="none" stroke="url(#gold)" stroke-opacity="0.85" stroke-width="40"/>
+  </g>
+
+  <circle cx="512" cy="530" r="290" fill="url(#ocean)"/>
+  <g clip-path="url(#globe)">
+    <path d="M 170 330 C 260 230 400 220 470 262 C 530 296 600 280 630 330 C 650 380 590 420 540 440 C 500 470 470 520 420 540 C 360 565 330 610 280 590 C 230 570 200 520 170 500 Z" fill="url(#champagne)"/>
+    <path d="M 452 250 C 470 330 420 380 455 445 C 470 480 440 520 430 548 L 900 548 L 900 150 Z" fill="url(#champagne2)" clip-path="url(#land)"/>
+    <path d="M 452 250 C 470 330 420 380 455 445 C 470 480 440 520 430 548" fill="none" stroke="#141518" stroke-width="14" stroke-linecap="round" clip-path="url(#land)"/>
+    <path d="M 610 600 C 650 560 730 570 740 620 C 750 680 690 720 640 700 C 600 685 585 635 610 600 Z" fill="url(#champagne)"/>
+  </g>
+  <circle cx="512" cy="530" r="290" fill="url(#shine)"/>
+  <circle cx="512" cy="530" r="290" fill="none" stroke="#E8ECF2" stroke-opacity="0.22" stroke-width="6"/>
+
+  <g transform="rotate(-22 512 530)">
+    <ellipse cx="512" cy="530" rx="418" ry="126" fill="none" stroke="url(#gold)" stroke-width="40" clip-path="url(#before)"/>
+  </g>
+</svg>

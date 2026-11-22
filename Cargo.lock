@@ -1936,7 +1936,7 @@ dependencies = [
 
 [[package]]
 name = "map_ai"
-version = "0.2.3-alpha"
+version = "0.2.4-alpha"
 dependencies = [
  "map_api",
  "map_core",
@@ -1947,7 +1947,7 @@ dependencies = [
 
 [[package]]
 name = "map_api"
-version = "0.2.3-alpha"
+version = "0.2.4-alpha"
 dependencies = [
  "map_core",
  "map_io",
@@ -1957,7 +1957,7 @@ dependencies = [
 
 [[package]]
 name = "map_app"
-version = "0.2.3-alpha"
+version = "0.2.4-alpha"
 dependencies = [
  "bytemuck",
  "earcutr",
@@ -1979,7 +1979,7 @@ dependencies = [
 
 [[package]]
 name = "map_bench"
-version = "0.2.3-alpha"
+version = "0.2.4-alpha"
 dependencies = [
  "map_core",
  "map_io",
@@ -1990,7 +1990,7 @@ dependencies = [
 
 [[package]]
 name = "map_core"
-version = "0.2.3-alpha"
+version = "0.2.4-alpha"
 dependencies = [
  "earcutr",
  "geo",
@@ -2003,7 +2003,7 @@ dependencies = [
 
 [[package]]
 name = "map_io"
-version = "0.2.3-alpha"
+version = "0.2.4-alpha"
 dependencies = [
  "ab_glyph",
  "base64",
@@ -2028,7 +2028,7 @@ dependencies = [
 
 [[package]]
 name = "map_perf"
-version = "0.2.3-alpha"
+version = "0.2.4-alpha"
 dependencies = [
  "serde",
  "serde_json",
@@ -2037,7 +2037,7 @@ dependencies = [
 
 [[package]]
 name = "map_render"
-version = "0.2.3-alpha"
+version = "0.2.4-alpha"
 dependencies = [
  "bytemuck",
  "earcutr",

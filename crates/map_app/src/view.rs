@@ -531,6 +531,7 @@ impl App {
             ViewKind::Flat => ViewUniform::for_2d(&c, w, h, &styles),
             ViewKind::Globe => ViewUniform::for_globe(&self.globe, self.scene.lon0(), w, h, &styles),
         };
+        let dark = ui.visuals().dark_mode;
         let patch = glass.filter(|panel| panel.intersects(rect)).map(|panel| map_render::gpu::GlassPatch {
             bounds: [
                 (panel.left() - rect.left()) / rect.width(),
@@ -539,6 +540,8 @@ impl App {
                 (panel.bottom() - rect.top()) / rect.height(),
             ],
             pixels_per_point: ppp,
+            dark,
+            backdrop: crate::studio_ui::glass_backdrop(dark),
         });
         let data = FrameData {
             view_id: kind as u32,
@@ -555,7 +558,9 @@ impl App {
             globe_detail,
         };
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, Color32::from_gray(40));
+        if !self.paint_studio_canvas(&painter, rect, vg.paper_rect()) {
+            painter.rect_filled(rect, 0.0, Color32::from_gray(40));
+        }
         let painter = if let Some(board) = vg.paper_rect() {
             painter.rect_stroke(board, 0.0, Stroke::new(1.0, Color32::from_gray(100)), egui::StrokeKind::Outside);
             let clipped = board.intersect(rect);
@@ -591,7 +596,8 @@ impl App {
             } else {
                 (rect.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP)
             };
-            painter.text(point, align, crate::i18n::tr("三维球体"), egui::FontId::proportional(13.0), Color32::from_gray(230));
+            let ink = self.studio_canvas_ink().unwrap_or(Color32::from_gray(230));
+            painter.text(point, align, crate::i18n::tr("三维球体"), egui::FontId::proportional(13.0), ink);
         }
         self.draw_book_points(&painter,&vg);
         if patch.is_some() {

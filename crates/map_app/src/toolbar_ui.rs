@@ -11,7 +11,7 @@ use eframe::egui::{self, pos2, Color32, Pos2, Rect, RichText, Sense, Shape, Stro
 pub const BUTTON: f32 = 30.0;
 
 /// Draw a tool's icon inside `r` (designed on a 20 × 20 grid).
-fn tool_icon(p: &egui::Painter, r: Rect, tool: Tool, c: Color32) {
+pub(crate) fn tool_icon(p: &egui::Painter, r: Rect, tool: Tool, c: Color32) {
     let s = r.width().min(r.height()) / 26.0;
     let at = |x: f32, y: f32| pos2(r.center().x + (x - 10.0) * s, r.center().y + (y - 10.0) * s);
     let pts = |v: &[(f32, f32)]| v.iter().map(|(x, y)| at(*x, *y)).collect::<Vec<Pos2>>();

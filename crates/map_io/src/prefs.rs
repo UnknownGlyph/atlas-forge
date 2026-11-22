@@ -41,6 +41,8 @@ pub struct Prefs {
     pub perf_in_status: bool,
     /// Display opaque studio controls instead of live translucent material.
     pub studio_solid_controls: bool,
+    /// Appearance of the studio: "light", "dark" or "system".
+    pub studio_theme: String,
     /// Undo steps kept.
     pub undo_limit: usize,
     /// Locale code of the application's interface, for example "en" or "zh-TW".
@@ -49,7 +51,7 @@ pub struct Prefs {
 
 impl Default for Prefs {
     fn default() -> Self {
-        Self { recent: vec![], ui_scale: 1.0, autosave_secs: 60, autosave_on: true, autosave_keep: 20, autosave_steps: 10, cloud_backup: Default::default(), save_directory: None, cache_directory: None, test_project: None, welcome: true, reopen_last: false, layout: "split".into(), graticule: true, progressive_detail: true, furniture: true, perf_in_status: false, studio_solid_controls: false, undo_limit: 500, language: "zh".into() }
+        Self { recent: vec![], ui_scale: 1.0, autosave_secs: 60, autosave_on: true, autosave_keep: 20, autosave_steps: 10, cloud_backup: Default::default(), save_directory: None, cache_directory: None, test_project: None, welcome: true, reopen_last: false, layout: "split".into(), graticule: true, progressive_detail: true, furniture: true, perf_in_status: false, studio_solid_controls: false, studio_theme: "light".into(), undo_limit: 500, language: "zh".into() }
     }
 }
 
@@ -72,6 +74,9 @@ impl Prefs {
         self.recent.truncate(RECENT_MAX);
         if !matches!(self.layout.as_str(), "flat" | "globe" | "split") {
             self.layout = "split".into();
+        }
+        if !matches!(self.studio_theme.as_str(), "light" | "dark" | "system") {
+            self.studio_theme = "light".into();
         }
         self
     }

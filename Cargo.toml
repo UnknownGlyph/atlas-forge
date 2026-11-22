@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/map_core", "crates/map_io", "crates/map_render", "crates/map_app", "crates/map_bench", "crates/map_api", "crates/map_ai", "crates/map_perf"]
 
 [workspace.package]
-version = "0.2.3-alpha"
+version = "0.2.4-alpha"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/UnknownGlyph/atlas-forge"

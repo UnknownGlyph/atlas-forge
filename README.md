@@ -25,7 +25,7 @@ A world from the new-world wizard (seed 7), exported straight to PNG: hill shadi
 
 Atlas Forge 把陆地、国家、河流与城市画在**同一张共享边界的矢量拓扑**上：两国之间的边界只有一条，改一处，两边一起变。边界、海岸与归属**逐年变化**——在某一年做的修改从那一年起生效，更早的年份保持原样。画好的世界可以直接导出成**成品地图**。二维多投影地图与三维地球共用同一份数据，**完全离线**；可选的 **AI 助手**能在一份草稿上与你共同创作。
 
-> **0.2.3 Alpha（源码）** 加入彩色像素画笔、多大陆联动和性能录制，改进多体引力模拟、窗口关闭与密集标注性能。[像素画笔](docs/USER_GUIDE.md#彩色像素画笔) · [性能录制](docs/PERFORMANCE_RECORDER.md) · [工程审查](docs/ENGINEERING_REVIEW.md) · [重构后的创作工作室](docs/CREATION_WORKSPACES.md)
+> **0.2.4 Alpha（源码）** 更新创作工作室的工具条、浅色与深色外观、常用绘图选项和选中卡片，加入应用图标与伊瑟尔三国图文教程。[创作工作区](docs/CREATION_WORKSPACES.md) · [图文教程](docs/tutorial/ithaer/README.md)
 
 > **v0.2.2-alpha** 提供 Windows 便携版。可在同一窗口切换专业界面与羊皮纸创作工作室。新增脚本步骤回放、创作模板和地图涂色，减少放大地图时的屏外渲染开销。[创作工作区](docs/CREATION_WORKSPACES.md)
 
@@ -119,7 +119,7 @@ assets/fonts       随附字体 Noto Sans SC（SIL OFL 1.1）
 
 Atlas Forge draws land, countries, rivers and cities on **one shared-border vector topology**: there is one border between two countries, and moving it changes both. Borders, coasts and ownership **change year by year**: an edit made in a year takes effect from that year on, and earlier years stay as they were. A finished world exports straight to **finished maps**. The flat map, in several projections, and the 3D globe share the same data, and everything works **offline**; an optional **AI assistant** can co-create with you on a draft.
 
-> **0.2.3 Alpha (source)** adds a pixel brush, grouped continent transforms and performance recording, with improvements to orbital dynamics, window shutdown and dense labels. [User guide](docs/USER_GUIDE.en.md#pixel-brush) · [Engineering review](docs/ENGINEERING_REVIEW.md) · [Creative Studio](docs/CREATION_WORKSPACES.md)
+> **0.2.4 Alpha (source)** refreshes the Creative Studio with an icon toolbar, light and dark appearance, streamlined drawing options and selection cards. It also adds an app icon and an illustrated Ithaer tutorial. [Creative Studio](docs/CREATION_WORKSPACES.md) · [Tutorial](docs/tutorial/ithaer/README.md)
 
 > **v0.2.2-alpha** is available as a portable Windows build, with a single-window parchment studio, script replay, worldbuilding starters, colored brush strokes, and faster map zooming.
 
