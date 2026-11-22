@@ -1427,7 +1427,7 @@ impl App {
 
 impl App {
     pub(crate) fn read_workspace_input(&mut self,ctx:&egui::Context) {
-        if self.pixel_tools.open {
+        if self.pixel_tools.open || self.studio_find_input(ctx) {
             return;
         }
         self.shortcuts(ctx);
@@ -1481,6 +1481,7 @@ impl App {
         self.import_windows(ctx);
         self.performance_window(ctx);
         self.pixel_window(ctx);
+        self.studio_find_window(ctx);
     }
 }
 

@@ -1058,6 +1058,43 @@ impl App {
         self.book_action(Action::Open(node, year));
     }
 
+    fn create_book_map(&mut self, kind: BoardKind, linked: bool, selected: Node) -> Option<BookId> {
+        let mut candidate = match kind {
+            BoardKind::Copy => WorldBook::active_map(
+                &self.doc, selected.board().unwrap_or(WorldBook::current(&self.doc)),
+            ).cloned().unwrap_or_else(|| self.doc.clone()),
+            BoardKind::Paper => Document::new_paper("新画板", self.book_ui.paper_size),
+            BoardKind::Geographic => Document::new("新画板", self.doc.radius()),
+        };
+        if kind == BoardKind::Copy {
+            candidate.meta.name = format!("{} · 副本", candidate.meta.name);
+        }
+        self.edit("新建画板", move |doc| {
+            if linked {
+                WorldBook::register_anchor(doc, selected);
+            }
+            let book = WorldBook::edit(doc);
+            let id = book.add_map(candidate);
+            if linked {
+                book.add_link(Link::new(selected, Node::Map(id), selected.board().is_some()))?;
+            }
+            Ok(id)
+        })
+    }
+
+    pub(crate) fn create_studio_paper(&mut self) {
+        let selected = Node::Map(WorldBook::current(&self.doc));
+        if let Some(id) = self.create_book_map(BoardKind::Paper, false, selected) {
+            if let Err(error) = self.enter_book_map(id, None, true) {
+                self.set_status(error, true);
+            } else {
+                self.book_ui.open = false;
+                self.star_map.open = false;
+                self.studio.show_map();
+            }
+        }
+    }
+
     fn book_action(&mut self, action: Action) {
         let selected = self
             .book_ui
@@ -1115,36 +1152,7 @@ impl App {
                 self.book_ui.open = false;
             }
             Action::NewMap(kind, linked) => {
-                let mut candidate = if kind == BoardKind::Copy {
-                    WorldBook::active_map(
-                        &self.doc,
-                        selected.board().unwrap_or(WorldBook::current(&self.doc)),
-                    )
-                    .cloned()
-                    .unwrap_or_else(|| self.doc.clone())
-                } else if kind == BoardKind::Paper {
-                    Document::new_paper("新画板", self.book_ui.paper_size)
-                } else {
-                    Document::new("新画板", self.doc.radius())
-                };
-                if kind == BoardKind::Copy {
-                    candidate.meta.name = format!("{} · 副本", candidate.meta.name);
-                }
-                if let Some(id) = self.edit("新建画板", move |d| {
-                    if linked {
-                        WorldBook::register_anchor(d, selected);
-                    }
-                    let b = WorldBook::edit(d);
-                    let id = b.add_map(candidate);
-                    if linked {
-                        b.add_link(Link::new(
-                            selected,
-                            Node::Map(id),
-                            selected.board().is_some(),
-                        ))?;
-                    }
-                    Ok(id)
-                }) {
+                if let Some(id) = self.create_book_map(kind, linked, selected) {
                     self.book_context(Node::Map(id));
                 }
             }

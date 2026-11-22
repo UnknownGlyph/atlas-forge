@@ -1,5 +1,7 @@
 //! The studio arranges the same editing session around project navigation
 //! and task workspaces. The professional shell keeps its own navigation.
+mod finder;
+
 use crate::{
     actions::{self, Act, Menu},
     app::{App, Layout},
@@ -67,7 +69,7 @@ pub(crate) struct Studio {
     page: Page,
     navigation: Option<Navigation>,
     inspector: bool,
-    project: bool,
+    finder: finder::Finder,
 }
 
 impl Studio {
@@ -170,9 +172,6 @@ impl App {
         if self.studio.page != Page::Environment {
             self.environment_ui.stop_picking();
         }
-        if self.studio.project {
-            self.studio_project(ui);
-        }
         if matches!(self.studio.page, Page::Worldview | Page::Visualizations) {
             egui::Panel::bottom("studio-study-timeline").show(ui, |ui| self.timeline_bar(ui));
         }
@@ -224,7 +223,10 @@ impl App {
                 });
                 ui.add_space(5.0);
                 ui.horizontal_wrapped(|ui| {
-                    ui.toggle_value(&mut self.studio.project, tr("画板"));
+                    ui.menu_button(tr("画板"), |ui| self.studio_boards(ui));
+                    if ui.button(tr("查找")).on_hover_text("Ctrl+F").clicked() {
+                        self.studio.finder.show();
+                    }
                     ui.separator();
                     for (page, title) in [
                         (Page::Map, "地图"),
@@ -276,90 +278,82 @@ impl App {
         }
     }
 
-    fn studio_project(&mut self, ui: &mut egui::Ui) {
+    fn studio_boards(&mut self, ui: &mut egui::Ui) {
         let current = WorldBook::current(&self.doc);
-        let boards: Vec<_> = self
-            .doc
-            .book
-            .as_ref()
-            .map(|book| {
-                book.boards
-                    .keys()
-                    .copied()
-                    .filter_map(|id| book.map(&self.doc, id).map(|d| (id, d.meta.name.clone())))
-                    .collect()
-            })
-            .unwrap_or_else(|| vec![(current, self.doc.meta.name.clone())]);
-        let mut board = None;
-        egui::Panel::left("studio-project")
-            .default_size(235.0)
-            .size_range(160.0..=348.0)
+        let mut open = None;
+        ui.set_min_width(244.0);
+        if ui
+            .add(egui::Button::new(tr("新建空白画板")).min_size(egui::vec2(182.0, 36.0)))
+            .clicked()
+        {
+            self.create_studio_paper();
+            ui.close();
+            return;
+        }
+        if ui.button(tr("打开工程…")).clicked() {
+            self.run(Act::Open);
+            ui.close();
+        }
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .max_height(300.0)
             .show(ui, |ui| {
-                ui.heading(tr("项目"));
-                ui.strong(tr("画板"));
-                egui::ScrollArea::vertical()
-                    .max_height(270.0)
-                    .show(ui, |ui| {
-                        for (id, name) in boards {
-                            if ui.selectable_label(id == current, name).clicked() {
-                                board = Some(id);
+                if let Some(book) = &self.doc.book {
+                    for &id in book.boards.keys() {
+                        if let Some(board) = book.map(&self.doc, id) {
+                            if ui
+                                .add(
+                                    egui::Button::selectable(current == id, &board.meta.name)
+                                        .min_size(egui::vec2(210.0, 32.0)),
+                                )
+                                .clicked()
+                            {
+                                open = Some(id);
                             }
                         }
-                    });
-                ui.separator();
-                for (act, label) in [
+                    }
+                } else {
+                    ui.label(RichText::new(&self.doc.meta.name).strong());
+                }
+            });
+        if let Some(id) = open {
+            self.star_map.open = false;
+            self.studio.show_map();
+            if id != current {
+                if let Err(error) = self.enter_book_map(id, None, true) {
+                    self.set_status(error, true);
+                }
+            }
+            ui.close();
+        }
+    }
+
+    fn studio_sources(&mut self, ui: &mut egui::Ui) {
+        let frame = egui::Frame::new()
+            .fill(PAPER)
+            .inner_margin(egui::Margin::same(24));
+        egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+            ui.heading(tr("世界资料"));
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                for (act, title) in [
+                    (Act::WorldBook, "打开资料库…"),
+                    (Act::Worldview, "编辑世界观…"),
                     (Act::Events, "事件时间线…"),
-                    (Act::TimelinePlayback, "时间播放与视频"),
                     (Act::Diplomacy, "外交关系…"),
-                    (Act::Checkpoints, "保存点与自动保存…"),
                 ] {
                     if ui
-                        .add_enabled(self.can(act), egui::Button::new(tr(label)))
+                        .add_enabled(
+                            self.can(act),
+                            egui::Button::new(tr(title)).min_size(egui::vec2(100.0, 36.0)),
+                        )
                         .clicked()
                     {
                         self.run(act);
                     }
                 }
             });
-        if let Some(id) = board.filter(|id| *id != current) {
-            if let Err(e) = self.enter_book_map(id, None, true) {
-                self.set_status(e, true);
-            }
-            self.studio.page = Page::Map;
-        }
-    }
-
-    fn studio_sources(&mut self, ui: &mut egui::Ui) {
-        let counts = self
-            .doc
-            .book
-            .as_ref()
-            .map(|b| (b.articles.len(), b.assets.len(), b.links.len()))
-            .unwrap_or_default();
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.heading(tr("世界资料"));
-            ui.horizontal_wrapped(|ui| {
-                for (label, count) in [
-                    ("文档", counts.0),
-                    ("图片与附件", counts.1),
-                    ("关联", counts.2),
-                ] {
-                    ui.group(|ui| {
-                        ui.label(tr(label));
-                        ui.heading(count.to_string());
-                    });
-                }
-            });
-            ui.separator();
-            if ui.button(tr("世界观设定…")).clicked() {
-                self.open_worldview(None);
-            }
-            if ui.button(tr("世界资料库…")).clicked() {
-                self.run(Act::WorldBook);
-            }
-            if ui.button(tr("地图")).clicked() {
-                self.studio.page = Page::Map;
-            }
+            ui.add_space(12.0);
             if let Some(book) = &self.doc.book {
                 let articles: Vec<_> = book
                     .articles
@@ -373,10 +367,17 @@ impl App {
                     .map(|(&id, a)| (id, a.name.clone()))
                     .collect();
                 egui::ScrollArea::vertical().show(ui, |ui| {
+                    if !articles.is_empty() {
+                        ui.strong(tr("文档"));
+                    }
                     for (id, title) in articles {
                         if ui.link(title).clicked() {
                             self.book_context(Node::Article(id));
                         }
+                    }
+                    if !models.is_empty() {
+                        ui.add_space(12.0);
+                        ui.strong(tr("三维模型"));
                     }
                     for (id, title) in models {
                         if ui.link(title).clicked() {
@@ -396,9 +397,22 @@ impl App {
                 {
                     self.run(Act::Climate);
                 }
-                if self.studio.page == Page::History && ui.button(tr("时间播放与视频")).clicked()
-                {
-                    self.run(Act::TimelinePlayback);
+                if self.studio.page == Page::History {
+                    ui.horizontal_wrapped(|ui| {
+                        for (act, title) in [
+                            (Act::Events, "事件时间线…"),
+                            (Act::TimelinePlayback, "时间播放与视频"),
+                            (Act::Diplomacy, "外交关系…"),
+                            (Act::Checkpoints, "保存点与自动保存…"),
+                        ] {
+                            if ui
+                                .add_enabled(self.can(act), egui::Button::new(tr(title)))
+                                .clicked()
+                            {
+                                self.run(act);
+                            }
+                        }
+                    });
                 }
                 if self.land_move.active {
                     self.land_move_bar(ui);
@@ -424,19 +438,23 @@ impl App {
                     self.assistant_footer(ui);
                     self.environment_panel(ui, true);
                 });
-        } else if self.studio.inspector || self.ai.open {
+        } else if self.studio.inspector
+            || self.ai.open
+            || crate::toolbar_ui::has_side_panel(self.tool)
+        {
             egui::Panel::right("studio-properties")
                 .resizable(true)
-                .default_size(340.0)
+                .default_size(328.0)
+                .size_range(255.0..=430.0)
                 .show(ui, |ui| {
                     self.assistant_footer(ui);
+                    if crate::toolbar_ui::has_side_panel(self.tool) {
+                        self.tool_side_panel(ui);
+                    }
                     if self.studio.inspector {
                         self.inspector(ui);
                     }
                 });
-        }
-        if crate::toolbar_ui::has_side_panel(self.tool) {
-            egui::Panel::right("studio-tool-detail").show(ui, |ui| self.tool_side_panel(ui));
         }
         self.refresh_derived();
         egui::CentralPanel::default()
@@ -447,8 +465,8 @@ impl App {
                     return;
                 }
                 let shelf = egui::Rect::from_center_size(
-                    egui::pos2(r.center().x, r.top() + 39.0),
-                    egui::vec2((r.width() - 22.0).min(530.0), 50.0),
+                    egui::pos2(r.center().x, r.top() + 44.0),
+                    egui::vec2((r.width() - 22.0).min(552.0), 58.0),
                 );
                 let glass = self.doc.paper.is_none().then_some(shelf);
                 let layout = if self.doc.paper.is_some() {
@@ -503,24 +521,22 @@ impl App {
                         .max_rect(rect.shrink2(egui::vec2(10.0, 9.0)))
                         .layout(egui::Layout::left_to_right(egui::Align::Center)),
                 );
-                tools.spacing_mut().item_spacing.x = 8.0;
-                tools.menu_button(tr("绘图工具"), |ui| {
-                    for tool in Tool::ALL {
-                        if ui
-                            .selectable_label(self.tool == tool, tool.name())
-                            .on_hover_text(tool.help())
-                            .clicked()
-                        {
-                            self.set_tool(tool);
-                            ui.close();
-                        }
-                    }
+                tools.spacing_mut().item_spacing.x = 7.0;
+                tools.spacing_mut().interact_size.y = 34.0;
+                tools.menu_button(RichText::new(tr("绘制")).strong().color(ACCENT), |ui| {
+                    self.studio_create(ui)
                 });
-                for (act, title) in [
-                    (Act::Undo, "撤销"),
-                    (Act::Redo, "重做"),
-                    (Act::FitAll, "缩放到全图"),
-                ] {
+                if tools
+                    .add(egui::Button::selectable(
+                        self.tool == Tool::Select && !self.land_move.active,
+                        tr("选择"),
+                    ))
+                    .clicked()
+                {
+                    self.run(Act::Tool(Tool::Select));
+                }
+                tools.separator();
+                for (act, title) in [(Act::Undo, "撤销"), (Act::Redo, "重做")] {
                     if tools
                         .add_enabled(self.can(act), egui::Button::new(tr(title)))
                         .clicked()
@@ -528,10 +544,100 @@ impl App {
                         self.run(act);
                     }
                 }
+                tools.separator();
+                tools.menu_button(tr("视角"), |ui| self.studio_view_menu(ui));
                 tools.toggle_value(&mut self.studio.inspector, tr("属性"));
                 if tools.button(tr("导出…")).clicked() {
                     self.run(Act::Export);
                 }
             });
+    }
+
+    fn studio_view_menu(&mut self, ui: &mut egui::Ui) {
+        ui.set_min_width(136.0);
+        for (act, title) in [
+            (Act::Layout(Layout::Flat), "二维地图"),
+            (Act::Layout(Layout::Globe), "三维球体"),
+            (Act::Layout(Layout::Split), "二维 + 三维"),
+            (Act::FitAll, "缩放到全图"),
+            (Act::ZoomIn, "放大"),
+            (Act::ZoomOut, "缩小"),
+        ] {
+            let button = egui::Button::selectable(self.checked(act) == Some(true), tr(title));
+            if ui
+                .add_enabled(self.can(act), button.min_size(egui::vec2(124.0, 30.0)))
+                .clicked()
+            {
+                self.run(act);
+                ui.close();
+            }
+        }
+    }
+
+    fn studio_create(&mut self, ui: &mut egui::Ui) {
+        ui.set_min_width(260.0);
+        for (heading, items) in [
+            (
+                "地形",
+                &[
+                    (Act::Tool(Tool::DrawLand), "绘制陆地"),
+                    (Act::Tool(Tool::DrawLake), "绘制水域"),
+                    (Act::Tool(Tool::River), "河流 / 线路"),
+                ][..],
+            ),
+            (
+                "地点与标志",
+                &[
+                    (Act::Tool(Tool::City), "添加城市"),
+                    (Act::Tool(Tool::Label), "地图文字"),
+                    (Act::Tool(Tool::Symbol), "地图符号"),
+                    (Act::PixelBrush, "彩色像素画笔…"),
+                ][..],
+            ),
+        ] {
+            ui.label(RichText::new(tr(heading)).strong().color(MUTED));
+            ui.horizontal_wrapped(|ui| {
+                for &(action, label) in items {
+                    if ui
+                        .add_enabled(
+                            self.can(action),
+                            egui::Button::new(tr(label)).min_size(egui::vec2(78.0, 34.0)),
+                        )
+                        .clicked()
+                    {
+                        self.run(action);
+                        ui.close();
+                    }
+                }
+            });
+            ui.add_space(5.0);
+        }
+        ui.separator();
+        for (act, label) in [
+            (Act::LandMove, "整体移动陆块"),
+            (Act::LandScale, "整体缩放陆块"),
+            (Act::ImportUnderlay, "导入参考图片…"),
+            (Act::GeographicGuides, "地理参考线…"),
+        ] {
+            if ui
+                .add_enabled(self.can(act), egui::Button::new(tr(label)))
+                .clicked()
+            {
+                self.run(act);
+                ui.close();
+            }
+        }
+        ui.menu_button(tr("全部绘图工具"), |ui| {
+            for tool in Tool::ALL {
+                if ui
+                    .selectable_label(self.tool == tool, tool.name())
+                    .on_hover_text(tool.help())
+                    .clicked()
+                {
+                    self.run(Act::Tool(tool));
+                    ui.close();
+                }
+            }
+        });
     }
 }
