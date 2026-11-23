@@ -90,6 +90,16 @@ pub struct Context {
     pub layer: LayerId,
 }
 
+impl Context {
+    fn view_of(&self, doc: &Document) -> Document {
+        let mut view = doc.clone();
+        if view.set_layer_and_year(self.layer, self.year).is_err() {
+            view.set_year(self.year);
+        }
+        view
+    }
+}
+
 impl Session {
     /// A session over `doc`; `source` says where it came from.
     pub fn new(doc: Document, source: &str) -> Self {
@@ -140,12 +150,13 @@ impl Session {
         let id = req.get("id").cloned().unwrap_or(Value::Null);
         let out = (|| {
             let op = req.get("op").and_then(Value::as_str).ok_or_else(|| ApiError::BadRequest("缺少 op".into()))?;
-            let args = req.get("args").cloned().unwrap_or(json!({}));
+            let empty = Value::Object(serde_json::Map::new());
+            let args = req.get("args").unwrap_or(&empty);
             if !args.is_object() {
                 return Err(ApiError::BadRequest("args 必须是对象".into()));
             }
             let ctx = self.context(req.get("context"))?;
-            let result = self.dispatch(op, &args, &ctx)?;
+            let result = self.dispatch(op, args, &ctx)?;
             Ok((result, ctx))
         })();
         match out {
@@ -196,18 +207,12 @@ impl Session {
 
     /// A private copy of the world in the request's context.
     fn view(&self, ctx: &Context) -> Document {
-        let mut d = self.doc().clone();
-        let _ = d.set_active_layer(ctx.layer);
-        d.set_year(ctx.year);
-        d
+        ctx.view_of(self.doc())
     }
 
     /// [`Session::view`] of the world before the draft's edits.
     fn view_original(&self, ctx: &Context) -> Document {
-        let mut d = self.doc.clone();
-        let _ = d.set_active_layer(ctx.layer);
-        d.set_year(ctx.year);
-        d
+        ctx.view_of(&self.doc)
     }
 
     fn dispatch(&self, op: &str, args: &Value, ctx: &Context) -> ApiResult {

@@ -2,7 +2,7 @@
 //! set to the request's context (see [`Session::view`]).
 
 use crate::{ApiError, ApiResult, Context, Session};
-use map_core::doc::{Document, EntityId, EntityKind, FieldKind, LayerKind, AREA_KEY};
+use map_core::doc::{dominant, Document, EntityId, EntityKind, FieldKind, LayerKind, AREA_KEY};
 use map_core::lifespan::Presence;
 use map_core::stats::Stats;
 use map_core::topo::{FaceKind, BACKGROUND};
@@ -271,23 +271,27 @@ pub fn place(s: &Session, args: &Value, ctx: &Context) -> ApiResult {
         return Err(ApiError::BadRequest("lat 必须在 -90 到 90 之间".into()));
     }
     let p = LonLat::new(lon, lat).normalized();
-    let d = s.view(ctx);
+    let d = s.doc();
     let f = d.topo.face_at(p);
-    let kind = d.topo.faces.get(&f).map(|x| x.kind).unwrap_or(FaceKind::Water);
+    let is_land = d.face_kind_at(f, ctx.year) == Some(FaceKind::Land);
     let mut layers = Vec::new();
     for l in d.layer_ids() {
-        let v = s.view(&Context { year: ctx.year, layer: l });
-        let mut o = json!({"id": l.0, "name": v.layer_name(l), "owner": ent(&v, v.owner.get(&f).copied())});
-        if v.layer_kind(l) == LayerKind::Shares {
-            o["shares"] = json!(v
-                .shares_shown(f)
-                .iter()
-                .map(|(e, bp)| json!({"unit": ent(&v, Some(*e)), "percent": *bp as f64 / 100.0}))
-                .collect::<Vec<_>>());
+        let name = d.layer_name(l);
+        let exists = |id: &EntityId| d.exists_in(*id, ctx.year);
+        if d.layer_kind(l) == LayerKind::Shares {
+            let mut shares = d.shares_in_at(l, f, ctx.year);
+            shares.retain(|id, _| is_land && exists(id));
+            let owner = ent(d, dominant(&shares));
+            let weights: Vec<_> = shares.iter()
+                .map(|(id, bp)| json!({"unit": ent(d, Some(*id)), "percent": *bp as f64 / 100.0}))
+                .collect();
+            layers.push(json!({"id": l.0, "name": name, "owner": owner, "shares": weights}));
+        } else {
+            let owner = d.owner_at_in(l, f, ctx.year).filter(|id| is_land && exists(id));
+            layers.push(json!({"id": l.0, "name": name, "owner": ent(d, owner)}));
         }
-        layers.push(o);
     }
-    Ok(json!({"lon": p.lon, "lat": p.lat, "face": f.0, "land": kind == FaceKind::Land, "layers": layers}))
+    Ok(json!({"lon": p.lon, "lat": p.lat, "face": f.0, "land": is_land, "layers": layers}))
 }
 
 pub fn changes(s: &Session, args: &Value, ctx: &Context) -> ApiResult {

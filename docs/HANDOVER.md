@@ -19,7 +19,7 @@
 | 语言与框架 | Rust（MSVC 工具链）、wgpu、egui/eframe 0.37、imbl 持久化数据结构 |
 | 代码规模 | 8 个 crate，约 8.4 万行 Rust（含测试；2026-11-22 按 0.2.3 源码统计） |
 | 构建平台 | 只在 Windows 10/11 x64 上构建和运行过；Linux/macOS 未验证；持续集成只跑 Windows |
-| 测试 | 0.2.4 Alpha 的 Windows 全工作区 Release 测试有 414 项通过，1 项标记为忽略。 |
+| 测试 | 0.2.4 Alpha 发布时的 Windows 全工作区 Release 测试有 414 项通过。后续第一批审查改动有 417 项通过，1 项标记为忽略。 |
 | 里程碑 | M1–M9 完成；M10 Windows 部分完成；M11 主要部分完成；0.2.x 加入创作工作室、世界资料与世界观、行星环境与气候、星图与多体引力、数据可视化、插件与脚本、像素画笔、陆块整体变换、性能录制 |
 | 版本 | `main` 的源码版本为 0.2.4-alpha。Windows 便携预发布已上线。[0.2.3 Alpha（c9f9afe）](https://github.com/UnknownGlyph/atlas-forge/releases/tag/v0.2.3-alpha) · [0.2.4 Alpha（6704e17）](https://github.com/UnknownGlyph/atlas-forge/releases/tag/v0.2.4-alpha) |
 | 工程格式 | `FORMAT_VERSION = 11`（`map_core/src/doc.rs`）；保存时按内容取所需的最低格式，旧工程照常可读（见 §4.8） |
@@ -469,6 +469,7 @@ assets/            随附字体（Noto Sans SC）、星图数据（Gaia DR3 节�
 
 ## 13. 更新日志
 
+- **2026-11-23** 开始全项目代码审查。合并原子保存和历史视图刷新路径，单地块查询省去逐层重建，二维和球体复用渲染分块，性能报告保留精确统计。Windows 检查、GPU 离屏回放与 API 对照通过。处理范围、性能数据和下一批路径见 [工程审查](ENGINEERING_REVIEW.md)。
 - **2026-11-23** 在 GitHub Releases 发布 0.2.3 和 0.2.4 Alpha，分别提供 Windows x64 便携包与 SHA-256 校验文件。更新 README 下载入口。
 - **2026-11-23** 建立 0.2.4 Alpha 源码提交，更新版本号并记录 Release 测试。修正浮动地图工具栏遮挡教程窗口的问题。
 - **2026-11-23** 教程图文合一；新的程序图标（窗口、任务栏与 exe 文件图标）。

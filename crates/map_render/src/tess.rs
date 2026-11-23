@@ -264,6 +264,15 @@ pub struct Chunk<T> {
     pub data: Arc<Vec<T>>,
 }
 
+/// One immutable set of geometry chunks shared by all views of a scene.
+#[derive(Default)]
+pub struct GeometryChunks {
+    pub fill: Vec<Chunk<FillVertex>>,
+    pub lines: Vec<Chunk<LineInstance>>,
+    vertex_count: usize,
+    line_count: usize,
+}
+
 /// Incrementally maintained render data derived from a [`Document`].
 ///
 /// Faces and edges are grouped into spatial chunks; an edit re-triangulates
@@ -284,6 +293,7 @@ pub struct SceneCache {
     edge_display: HashMap<EdgeId, (ChunkId, u32)>,
     line_members: BTreeMap<ChunkId, BTreeSet<EdgeId>>,
     lines: BTreeMap<ChunkId, Chunk<LineInstance>>,
+    chunks: Arc<GeometryChunks>,
     last: Option<Document>,
     /// Changes whenever any line chunk changes.
     pub line_gen: u64,
@@ -401,14 +411,13 @@ impl SceneCache {
             }
         }
         for c in &dirty {
-            let members = self.fill_members.get(c).cloned().unwrap_or_default();
-            if members.is_empty() {
+            let Some(members) = self.fill_members.get(c).filter(|members| !members.is_empty()) else {
                 self.fill_members.remove(c);
                 self.fill.remove(c);
                 continue;
-            }
+            };
             let mut v = Vec::with_capacity(members.iter().map(|f| self.meshes[f].2.len()).sum());
-            for f in &members {
+            for f in members {
                 let slot = self.slots[f];
                 v.extend(self.meshes[f].2.iter().map(|p| FillVertex { ll: *p, slot }));
             }
@@ -479,14 +488,13 @@ impl SceneCache {
             }
         }
         for c in &dirty_lines {
-            let members = self.line_members.get(c).cloned().unwrap_or_default();
-            if members.is_empty() {
+            let Some(members) = self.line_members.get(c).filter(|members| !members.is_empty()) else {
                 self.line_members.remove(c);
                 self.lines.remove(c);
                 continue;
-            }
+            };
             let mut v = Vec::with_capacity(members.iter().map(|id| doc.topo.edges[id].pts.len() + 1).sum());
-            for eid in &members {
+            for eid in members {
                 let e = &doc.topo.edges[eid];
                 edge_instances(doc, e, self.edge_display[eid].1, lon0, &mut v);
             }
@@ -510,6 +518,12 @@ impl SceneCache {
         }
         if st.fill_rebuilt || st.lines_rebuilt {
             self.geometry_gen += 1;
+            self.chunks = Arc::new(GeometryChunks {
+                fill: self.fill.values().cloned().collect(),
+                lines: self.lines.values().cloned().collect(),
+                vertex_count: self.fill.values().map(|chunk| chunk.data.len()).sum(),
+                line_count: self.lines.values().map(|chunk| chunk.data.len()).sum(),
+            });
         }
         self.last = Some(doc.clone());
         st.ms = t0.elapsed().as_secs_f64() * 1e3;
@@ -537,20 +551,23 @@ impl SceneCache {
     }
 
     pub fn fill_chunks(&self) -> Vec<Chunk<FillVertex>> {
-        self.fill.values().cloned().collect()
+        self.chunks.fill.clone()
     }
     pub fn line_chunks(&self) -> Vec<Chunk<LineInstance>> {
-        self.lines.values().cloned().collect()
+        self.chunks.lines.clone()
+    }
+    pub fn chunks(&self) -> &Arc<GeometryChunks> {
+        &self.chunks
     }
     pub fn face_of_slot(&self, slot: u32) -> Option<FaceId> {
         self.slots.iter().find(|(_, s)| **s == slot).map(|(f, _)| *f)
     }
     pub fn vertex_count(&self) -> usize {
-        self.fill.values().map(|c| c.data.len()).sum()
+        self.chunks.vertex_count
     }
 
     pub fn line_count(&self) -> usize {
-        self.lines.values().map(|c| c.data.len()).sum()
+        self.chunks.line_count
     }
 }
 
@@ -747,14 +764,19 @@ mod tests {
         let mut c = SceneCache::default();
         let s = c.update_geometry(&d, 0.0);
         assert_eq!(s.faces_retessellated, 2);
+        let before = Arc::clone(c.chunks());
+        assert_eq!(c.vertex_count(), before.fill.iter().map(|chunk| chunk.data.len()).sum::<usize>());
+        assert_eq!(c.line_count(), before.lines.iter().map(|chunk| chunk.data.len()).sum::<usize>());
         let s = c.update_geometry(&d, 0.0);
         assert_eq!(s.faces_retessellated, 0);
         assert!(!s.fill_rebuilt && !s.lines_rebuilt);
+        assert!(Arc::ptr_eq(c.chunks(), &before));
         let (v, _) = d.topo.nearest_vertex(LonLat::new(20.0, 0.0), 0.1).unwrap();
         d.topo.move_vertex(v, LonLat::new(19.0, -1.0)).unwrap();
         let s = c.update_geometry(&d, 0.0);
         assert_eq!(s.faces_retessellated, 1);
         assert!(s.lines_rebuilt);
+        assert!(!Arc::ptr_eq(c.chunks(), &before));
     }
 
     #[test]

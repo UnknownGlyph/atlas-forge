@@ -1006,7 +1006,7 @@ impl App {
         // the coast bands of a map theme, from the coast lines
         let glow_key = (self.scene.line_gen, self.doc.style.coast_glow_width > 0.0);
         if self.glow_src != Some(glow_key) {
-            let v = if glow_key.1 { map_render::tess::glow_lines(&self.scene.line_chunks()) } else { vec![] };
+            let v = if glow_key.1 { map_render::tess::glow_lines(&self.scene.chunks().lines) } else { vec![] };
             self.glow = (self.glow.0 + 1, Arc::new(v));
             self.glow_src = Some(glow_key);
         }

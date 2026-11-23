@@ -190,8 +190,7 @@ impl Session {
         let (year0, layer0) = (self.doc.year, self.doc.active_layer);
         // (the draft is made only by an edit that holds)
         let mut d = self.draft.clone().unwrap_or_else(|| self.doc.clone());
-        d.set_active_layer(ctx.layer).map_err(ApiError::BadRequest)?;
-        d.set_year(ctx.year);
+        d.set_layer_and_year(ctx.layer, ctx.year).map_err(ApiError::BadRequest)?;
         let when = ctx.year.map_or("所有年份".to_string(), |y| format!("{y} 年起"));
         let (result, note) = match op {
             "edit.transfer" => {
@@ -366,8 +365,7 @@ impl Session {
             _ => return Err(ApiError::Unsupported(format!("没有编辑操作“{op}”"))),
         };
         d.topo.validate().map_err(|e| ApiError::Failed(format!("编辑后拓扑无效，未采用：{e}")))?;
-        d.set_active_layer(layer0).map_err(ApiError::Failed)?;
-        d.set_year(year0);
+        d.set_layer_and_year(layer0, year0).map_err(ApiError::Failed)?;
         *self.draft_mut() = d;
         self.log.push(note.clone());
         Ok(json!({"done": note, "result": result, "edits_in_draft": self.log.len()}))
@@ -377,13 +375,10 @@ impl Session {
     /// area before and after, units added and gone, renames, and the log.
     fn changes(&self, ctx: &Context) -> Value {
         let Some(draft) = &self.draft else { return json!({"draft": false, "edits": []}) };
-        let at = |d: &Document| {
-            let mut v = d.clone();
-            let _ = v.set_active_layer(ctx.layer);
-            v.set_year(ctx.year);
-            v.areas_by_entity()
-        };
-        let (a, b) = (at(&self.doc), at(draft));
+        let (a, b) = (
+            self.view_original(ctx).areas_by_entity(),
+            self.view(ctx).areas_by_entity(),
+        );
         let mut rows = Vec::new();
         for (e, x) in draft.entities.iter() {
             let (before, after) = (a.get(e).copied().unwrap_or(0.0), b.get(e).copied().unwrap_or(0.0));

@@ -22,15 +22,27 @@ impl Stats {
         if values.is_empty() {
             return Self::default();
         }
-        values.sort_unstable_by(f64::total_cmp);
-        let percentile =
-            |p: f64| values[((values.len() as f64 * p).ceil() as usize).saturating_sub(1)];
+        let count = values.len();
+        let mut remaining = values;
+        let mut start = 0;
+        let mut percentiles = [0.0; 3];
+        for (quantile, result) in [0.50, 0.95, 0.99].into_iter().zip(&mut percentiles) {
+            let rank = (count as f64 * quantile).ceil() as usize - 1;
+            let index = rank - start;
+            remaining.select_nth_unstable_by(index, f64::total_cmp);
+            // Keep the selected value in the remaining range: with small
+            // sample groups, several quantiles have the same rank.
+            remaining = &mut remaining[index..];
+            *result = remaining[0];
+            start = rank;
+        }
+        let [p50, p95, p99] = percentiles;
         Self {
-            count: values.len(),
-            p50: percentile(0.50),
-            p95: percentile(0.95),
-            p99: percentile(0.99),
-            max: values[values.len() - 1],
+            count,
+            p50,
+            p95,
+            p99,
+            max: remaining.iter().copied().max_by(f64::total_cmp).unwrap(),
         }
     }
 }
@@ -178,6 +190,24 @@ fn chart_point(
     }
 }
 
+fn operation_sample(
+    samples: &mut BTreeMap<String, Vec<f64>>,
+    label: &mut String,
+    channel: &str,
+    name: &str,
+    duration: f64,
+) {
+    label.clear();
+    label.push_str(channel);
+    label.push_str(" / ");
+    label.push_str(name);
+    if let Some(values) = samples.get_mut(label.as_str()) {
+        values.push(duration);
+    } else {
+        samples.insert(label.clone(), vec![duration]);
+    }
+}
+
 /// Keep both extrema in each time bucket so a single long frame survives
 /// even when the report compresses an hours-long trace.
 fn downsample(points: &mut Vec<[f64; 2]>, duration: f64) {
@@ -216,6 +246,7 @@ fn read(input: impl BufRead) -> io::Result<Report> {
     let mut interacting = Vec::new();
     let (mut frames, mut intervals, mut worst) = (Vec::new(), Vec::new(), Vec::<Value>::new());
     let (mut series, mut operation_ms) = (BTreeMap::new(), BTreeMap::<String, Vec<f64>>::new());
+    let mut operation_label = String::new();
     let mut markers = Vec::new();
     let mut stalls = Vec::new();
     let (mut duration, mut discarded_lines, mut header, mut dropped_records) =
@@ -280,10 +311,13 @@ fn read(input: impl BufRead) -> io::Result<Report> {
                         if let Some(name) = phase["name"].as_str() {
                             if let Some(ms) = number(phase, "ms") {
                                 chart_point(&mut series, name, t, Some(ms));
-                                operation_ms
-                                    .entry(format!("界面阶段 / {name}"))
-                                    .or_default()
-                                    .push(ms);
+                                operation_sample(
+                                    &mut operation_ms,
+                                    &mut operation_label,
+                                    "界面阶段",
+                                    name,
+                                    ms,
+                                );
                             }
                         }
                     }
@@ -298,10 +332,7 @@ fn read(input: impl BufRead) -> io::Result<Report> {
             Some("span") => {
                 if let (Some(name), Some(ms)) = (value["name"].as_str(), number(&value, "ms")) {
                     let channel = value["channel"].as_str().unwrap_or("operation");
-                    operation_ms
-                        .entry(format!("{channel} / {name}"))
-                        .or_default()
-                        .push(ms);
+                    operation_sample(&mut operation_ms, &mut operation_label, channel, name, ms);
                     if matches!(channel, "绘制回调" | "窗口重绘") {
                         chart_point(&mut series, name, t, Some(ms));
                     } else if ms >= 8.0 {
@@ -403,6 +434,25 @@ pub fn write(input: &Path, output: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_percentiles_match_a_full_sort() {
+        for count in 1..=256 {
+            let mut values: Vec<_> = (0..count)
+                .map(|index| ((index * 37 + count * 13) % 109) as f64)
+                .collect();
+            values[0] = -0.0;
+            let mut sorted = values.clone();
+            sorted.sort_unstable_by(f64::total_cmp);
+            let expected = |p: f64| sorted[(sorted.len() as f64 * p).ceil() as usize - 1].to_bits();
+            let stats = Stats::compute(&mut values);
+            assert_eq!(stats.count, count);
+            assert_eq!(stats.p50.to_bits(), expected(0.50));
+            assert_eq!(stats.p95.to_bits(), expected(0.95));
+            assert_eq!(stats.p99.to_bits(), expected(0.99));
+            assert_eq!(stats.max.to_bits(), expected(1.0));
+        }
+    }
 
     #[test]
     fn report_keeps_a_slow_frame_and_an_interrupted_log() {

@@ -260,12 +260,14 @@ mod tests {
         let mut v2 = v1.clone();
         v2.meta.name = "第二版".into();
         let full = to_bytes(&v2).unwrap();
-        std::fs::write(path.with_extension("atlas.tmp"), &full[..full.len() / 3]).unwrap();
+        let partial = &full[..full.len() / 3];
+        let interrupted = path.with_extension("atlas.tmp");
+        std::fs::write(&interrupted, partial).unwrap();
         assert_eq!(without_revs(&load(&path).unwrap()), without_revs(&v1), "the committed file must be untouched");
-        // the next save simply replaces the stale temp file
+        // the next save writes its own temporary file and commits successfully
         save(&path, &v2).unwrap();
         assert_eq!(without_revs(&load(&path).unwrap()), without_revs(&v2));
-        assert!(!path.with_extension("atlas.tmp").exists());
+        assert_eq!(std::fs::read(&interrupted).unwrap(), partial);
         // a truncated project file is rejected, not half-loaded
         std::fs::write(&path, &full[..full.len() / 2]).unwrap();
         assert!(load(&path).is_err());

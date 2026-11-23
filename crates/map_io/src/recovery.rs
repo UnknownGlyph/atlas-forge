@@ -64,16 +64,30 @@ pub fn write_crash_log(dir: &Path, text: &str) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
-/// Write `bytes` to `path` durably: temp file, flush to disk, then rename.
+/// Flush a new file next to `path`, then atomically replace `path`.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    let tmp = path.with_extension(format!("{}.tmp", path.extension().and_then(|e| e.to_str()).unwrap_or("")));
-    {
-        let mut f = File::create(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
+    use std::io::{ErrorKind, Write};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let pid = std::process::id();
+    let (temporary, mut file) = loop {
+        let number = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
+        let temporary = parent.join(format!(".atlas-write-{pid}-{number}.atlas.tmp"));
+        match File::options().write(true).create_new(true).open(&temporary) {
+            Ok(file) => break (temporary, file),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    };
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    let result = written.and_then(|()| fs::rename(&temporary, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
-    fs::rename(&tmp, path)
+    result
 }
 
 impl Recovery {
@@ -192,6 +206,35 @@ impl Recovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn atomic_writers_use_independent_temporary_files() {
+        let dir = std::env::temp_dir().join(format!("atlas_atomic_{}_{}", std::process::id(), now_secs()));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("world.atlas");
+        let old_temporary = dir.join("world.atlas.tmp");
+        fs::write(&old_temporary, b"earlier save").unwrap();
+        let contents = [vec![0xAA; 256 * 1024], vec![0x55; 256 * 1024]];
+        let barrier = std::sync::Barrier::new(contents.len());
+        std::thread::scope(|scope| {
+            for data in &contents {
+                scope.spawn(|| {
+                    barrier.wait();
+                    write_atomic(&path, data).unwrap();
+                });
+            }
+        });
+        assert!(contents.contains(&fs::read(&path).unwrap()));
+        assert_eq!(fs::read(&old_temporary).unwrap(), b"earlier save");
+        let occupied = dir.join("directory.atlas");
+        fs::create_dir(&occupied).unwrap();
+        assert!(write_atomic(&occupied, b"cannot replace a directory").is_err());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 3);
+        fs::remove_file(&path).unwrap();
+        fs::remove_file(&old_temporary).unwrap();
+        fs::remove_dir(&occupied).unwrap();
+        fs::remove_dir(dir).unwrap();
+    }
 
     #[test]
     fn crashed_session_is_offered_live_one_is_not() {

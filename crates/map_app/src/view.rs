@@ -546,8 +546,7 @@ impl App {
         let data = FrameData {
             view_id: kind as u32,
             uniform,
-            fill: self.scene.fill_chunks(),
-            lines: self.scene.line_chunks(),
+            geometry: self.scene.chunks().clone(),
             colors: (self.scene.color_gen, self.scene.colors.clone()),
             overlay: self.overlay.clone(),
             glow: self.glow.clone(),

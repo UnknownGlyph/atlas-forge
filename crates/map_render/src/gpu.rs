@@ -5,7 +5,7 @@ mod glass;
 pub use glass::GlassPatch;
 
 use crate::camera::{Camera2D, GlobeCamera};
-use crate::tess::{self, Chunk, ChunkId, FillVertex, LineInstance};
+use crate::tess::{self, Chunk, ChunkId, FillVertex, GeometryChunks, LineInstance};
 use crate::underlay::{Slot, UnderlayGpu, UnderlayUniform};
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
@@ -72,10 +72,8 @@ impl ViewUniform {
 pub struct FrameData {
     pub view_id: u32,
     pub uniform: ViewUniform,
-    /// All fill chunks currently in the scene (chunks absent here are freed).
-    pub fill: Vec<Chunk<FillVertex>>,
-    /// All line chunks currently in the scene.
-    pub lines: Vec<Chunk<LineInstance>>,
+    /// Geometry shared by views. The same snapshot needs only one GPU sync.
+    pub geometry: Arc<GeometryChunks>,
     pub colors: (u64, Arc<Vec<[f32; 4]>>),
     pub overlay: (u64, Arc<Vec<LineInstance>>),
     /// Bands along the coasts, drawn over the sea and under the land.
@@ -214,6 +212,7 @@ pub struct MapGpu {
     grat_count: u32,
     fill: HashMap<ChunkId, DynBuf>,
     lines: HashMap<ChunkId, DynBuf>,
+    geometry: Option<Arc<GeometryChunks>>,
     overlay: DynBuf,
     glow: DynBuf,
     colors: DynBuf,
@@ -315,6 +314,7 @@ impl MapGpu {
             grat_count: grat_data.len() as u32,
             fill: HashMap::new(),
             lines: HashMap::new(),
+            geometry: None,
             overlay: DynBuf::new(device, v, "overlay"),
             glow: DynBuf::new(device, v, "coast glow"),
             colors: DynBuf::new(device, wgpu::BufferUsages::STORAGE, "colors"),
@@ -329,8 +329,11 @@ impl MapGpu {
 
     pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, f: &FrameData) {
         let v = wgpu::BufferUsages::VERTEX;
-        sync_chunks(&mut self.fill, &f.fill, device, queue, "fill chunk");
-        sync_chunks(&mut self.lines, &f.lines, device, queue, "line chunk");
+        if self.geometry.as_ref().is_none_or(|uploaded| !Arc::ptr_eq(uploaded, &f.geometry)) {
+            sync_chunks(&mut self.fill, &f.geometry.fill, device, queue, "fill chunk");
+            sync_chunks(&mut self.lines, &f.geometry.lines, device, queue, "line chunk");
+            self.geometry = Some(Arc::clone(&f.geometry));
+        }
         self.overlay.upload(device, queue, f.overlay.0, &f.overlay.1, v);
         self.glow.upload(device, queue, f.glow.0, &f.glow.1, v);
         self.colors.upload(device, queue, f.colors.0, &f.colors.1, wgpu::BufferUsages::STORAGE);

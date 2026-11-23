@@ -1305,8 +1305,13 @@ impl Document {
     /// Shares of a face in layer `l` at the selected year (empty for
     /// exclusive layers).
     pub fn shares_in(&self, l: LayerId, f: FaceId) -> Shares {
+        self.shares_in_at(l, f, self.year)
+    }
+
+    /// Recorded shares of a face at an explicit year in any layer.
+    pub fn shares_in_at(&self, l: LayerId, f: FaceId, year: Option<i32>) -> Shares {
         match self.layers.get(&l) {
-            Some(x) if x.kind == LayerKind::Shares => x.shares.at(f, self.year),
+            Some(x) if x.kind == LayerKind::Shares => x.shares.at(f, year),
             _ => Shares::new(),
         }
     }
@@ -1420,8 +1425,22 @@ impl Document {
     /// View and edit another layer: its ownership becomes `owner_*` (and
     /// `owner`), the current one is parked.
     pub fn set_active_layer(&mut self, l: LayerId) -> TResult<()> {
+        if self.switch_layer(l)? {
+            self.refresh_owner();
+        }
+        Ok(())
+    }
+
+    /// Set both parts of the historical view with one refresh.
+    pub fn set_layer_and_year(&mut self, layer: LayerId, year: Option<i32>) -> TResult<()> {
+        self.switch_layer(layer)?;
+        self.set_year(year);
+        Ok(())
+    }
+
+    fn switch_layer(&mut self, l: LayerId) -> TResult<bool> {
         if l == self.active_layer {
-            return Ok(());
+            return Ok(false);
         }
         if l != POLITICAL && !self.layers.contains_key(&l) {
             return Err("层不存在".into());
@@ -1439,8 +1458,7 @@ impl Document {
         self.owner_base = own.base;
         self.owner_changes = own.changes;
         self.active_layer = l;
-        self.refresh_owner();
-        Ok(())
+        Ok(true)
     }
 
     /// Owners of every face in layer `l` at the selected year.
@@ -1559,10 +1577,22 @@ impl Document {
 
     /// Owner of a face at a year (None = latest state).
     pub fn owner_at(&self, f: FaceId, year: Option<i32>) -> Option<EntityId> {
-        if self.active_is_shares() {
-            return self.layers.get(&self.active_layer).and_then(|x| dominant(&x.shares.at(f, year)));
+        self.owner_at_in(self.active_layer, f, year)
+    }
+
+    /// Recorded owner or dominant share of one face in any layer.
+    pub fn owner_at_in(&self, layer: LayerId, face: FaceId, year: Option<i32>) -> Option<EntityId> {
+        let stored = self.layers.get(&layer);
+        if let Some(layer) = stored.filter(|layer| layer.kind == LayerKind::Shares) {
+            return dominant(&layer.shares.at(face, year));
         }
-        resolve(self.owner_base.get(&f).copied(), self.owner_changes.get(&f), year)
+        let (base, changes) = if layer == self.active_layer {
+            (&self.owner_base, &self.owner_changes)
+        } else {
+            let parked = &stored?.parked;
+            (&parked.base, &parked.changes)
+        };
+        resolve(base.get(&face).copied(), changes.get(&face), year)
     }
 
     /// Recompute everything derived from the selected year: ownership

@@ -129,14 +129,12 @@ fn main() {
         &map_core::theme::evaluate(&doc).face_colors,
         &Default::default(),
     );
-    let fill = scene.fill_chunks();
-    let lines = scene.line_chunks();
     println!(
         "{}x{}, 4x MSAA, {} triangles, {} lines",
         w,
         h,
         scene.vertex_count() / 3,
-        lines.iter().map(|c| c.data.len()).sum::<usize>()
+        scene.line_count()
     );
     let colors = [
         (doc.style.coast, doc.style.coast_width),
@@ -163,15 +161,14 @@ fn main() {
         width,
     });
     let glow = if doc.style.coast_glow_width > 0.0 {
-        tess::glow_lines(&lines)
+        tess::glow_lines(&scene.chunks().lines)
     } else {
         Vec::new()
     };
     let mut frame = FrameData {
         view_id: 1,
         uniform: ViewUniform::for_globe(&GlobeCamera::default(), 0.0, w as f32, h as f32, &colors),
-        fill,
-        lines,
+        geometry: scene.chunks().clone(),
         colors: (scene.color_gen, scene.colors.clone()),
         overlay: (1, Arc::new(vec![])),
         glow: (1, Arc::new(glow)),
@@ -257,6 +254,13 @@ fn main() {
         error < 7.0,
         "moving globe does not match full geometry: {error:.2}"
     );
+    let geometry = std::mem::take(&mut frame.geometry);
+    let cleared = render_pixels(&mut frame, GlobeDetail::Full);
+    assert!(cleared != full, "removed chunks still draw");
+    frame.geometry = geometry;
+    let restored = render_pixels(&mut frame, GlobeDetail::Full);
+    assert!(restored == full, "restored chunks differ from the original rendering");
+
     frame.colors.0 += 1;
     frame.colors.1 = Arc::new(vec![[0.92, 0.18, 0.16, 1.0]; frame.colors.1.len()]);
     let invalidated = render_pixels(&mut frame, GlobeDetail::Moving);
@@ -274,5 +278,5 @@ fn main() {
         &invalidated[mid..mid + 4],
         &updated[mid..mid + 4]
     );
-    println!("Date line screenshot error: {error:.2}/255 per channel; stale colors correctly fall back to vectors");
+    println!("Date line screenshot error: {error:.2}/255 per channel; removed and restored chunks verified; stale colors correctly fall back to vectors");
 }

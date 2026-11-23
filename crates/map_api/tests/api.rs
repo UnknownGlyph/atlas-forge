@@ -100,6 +100,51 @@ fn answers_agree_with_each_other() {
 }
 
 #[test]
+fn place_uses_the_requested_year_for_all_layers() {
+    use map_core::doc::{Document, EntityKind, LayerKind, POLITICAL};
+    use map_core::{FaceKind, LonLat};
+
+    let mut d = Document::default();
+    let ring = [(0.0, 0.0), (5.0, 0.0), (5.0, 5.0), (0.0, 5.0)]
+        .map(|(lon, lat)| LonLat::new(lon, lat));
+    let face = d.add_ring_face(&ring, FaceKind::Land).unwrap();
+    let country = d.add_entity(EntityKind::Country, "Country");
+    d.assign(face, Some(country)).unwrap();
+    let exclusive = d.add_layer("Exclusive");
+    d.set_active_layer(exclusive).unwrap();
+    let governor = d.add_entity(EntityKind::Country, "Governor");
+    d.assign(face, Some(governor)).unwrap();
+    let shared = d.add_layer_of("Shared", LayerKind::Shares);
+    d.set_active_layer(shared).unwrap();
+    let early = d.add_entity(EntityKind::Country, "Early");
+    let late = d.add_entity(EntityKind::Country, "Late");
+    d.set_share(face, Some(early), 3000).unwrap();
+    d.set_share(face, Some(late), 7000).unwrap();
+    d.set_lifespan(late, Some(150), None).unwrap();
+    d.set_year(Some(200));
+    d.record_kind(face, FaceKind::Water).unwrap();
+    d.set_year(None);
+
+    let s = Session::new(d, "layers");
+    let place = |year, layer| ok(&s, json!({
+        "op": "place.at", "args": {"lon": 2.0, "lat": 2.0},
+        "context": {"year": year, "layer": layer},
+    }));
+    let first = place(Some(100), POLITICAL.0);
+    assert_eq!(first["face"], face.0);
+    assert_eq!(first["land"], true);
+    assert_eq!(first["layers"][0]["owner"]["id"], country.0);
+    assert_eq!(first["layers"][1]["owner"]["id"], governor.0);
+    assert_eq!(first["layers"][2]["owner"]["id"], early.0);
+    assert_eq!(first["layers"][2]["shares"].as_array().unwrap().len(), 1);
+    assert_eq!(place(Some(150), exclusive.0)["layers"][2]["owner"]["id"], late.0);
+    let flooded = place(None, shared.0);
+    assert_eq!(flooded["land"], false);
+    assert!(flooded["layers"].as_array().unwrap().iter().all(|layer| layer["owner"].is_null()));
+    assert_eq!(flooded["layers"][2]["shares"], json!([]));
+}
+
+#[test]
 fn previews_say_where_things_are() {
     let s = session();
     let dir = std::env::temp_dir().join(format!("atlas_api_prev_{}", std::process::id()));

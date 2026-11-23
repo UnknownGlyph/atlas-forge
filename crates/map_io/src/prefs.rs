@@ -125,32 +125,10 @@ pub fn load(path: &Path) -> Prefs {
 
 /// Write the preferences (whole file replaced at once).
 pub fn save(path: &Path, prefs: &Prefs) -> Result<(), String> {
-    use std::{fs, io::Write, sync::atomic::{AtomicU64, Ordering}};
-
-    static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
-
     let parent = path.parent().filter(|dir| !dir.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let text = serde_json::to_vec_pretty(prefs).map_err(|e| e.to_string())?;
-
-    // Windows can have more than one Atlas window/process writing preferences.
-    // A separate temporary file keeps each replacement atomic.
-    let (temporary, mut file) = loop {
-        let number = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
-        let temporary = parent.join(format!(".atlas-prefs-{}-{number}.tmp", std::process::id()));
-        match fs::File::options().create_new(true).write(true).open(&temporary) {
-            Ok(file) => break (temporary, file),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e.to_string()),
-        }
-    };
-    let write = file.write_all(&text).and_then(|()| file.sync_all());
-    drop(file);
-    let result = write.and_then(|()| fs::rename(&temporary, path));
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result.map_err(|e| e.to_string())
+    crate::recovery::write_atomic(path, &text).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
