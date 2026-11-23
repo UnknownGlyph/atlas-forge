@@ -6,7 +6,79 @@
 use crate::geom::{self, LonLat};
 use crate::topo::{EdgeId, FaceKind, NodeId, Topology};
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BinaryHeap, HashMap};
+
+type GridPoint = (i64, i64);
+type GridRing = Vec<GridPoint>;
+
+/// Trace all labeled regions in a row-major grid. Corners have y down;
+/// in map coordinates each ring keeps its region to the left. Straight
+/// runs keep every corner so neighboring regions share the same vertices.
+pub(crate) fn grid_regions(
+    width: usize,
+    height: usize,
+    region_count: usize,
+    label_at: impl Fn(usize) -> Option<usize>,
+) -> Vec<Vec<GridRing>> {
+    let label_at_cell = |x: i64, y: i64| {
+        if x >= 0 && y >= 0 && (x as usize) < width && (y as usize) < height {
+            label_at(y as usize * width + x as usize).filter(|&label| label < region_count)
+        } else {
+            None
+        }
+    };
+    let mut boundaries = vec![BTreeMap::<GridPoint, Vec<GridPoint>>::new(); region_count];
+    for y in 0..height as i64 {
+        for x in 0..width as i64 {
+            let Some(label) = label_at_cell(x, y) else { continue };
+            let boundary = &mut boundaries[label];
+            for (neighbor, from, to) in [
+                ((x, y + 1), (x, y + 1), (x + 1, y + 1)),
+                ((x + 1, y), (x + 1, y + 1), (x + 1, y)),
+                ((x, y - 1), (x + 1, y), (x, y)),
+                ((x - 1, y), (x, y), (x, y + 1)),
+            ] {
+                if label_at_cell(neighbor.0, neighbor.1) != Some(label) {
+                    boundary.entry(from).or_default().push(to);
+                }
+            }
+        }
+    }
+    boundaries.into_iter().map(|mut next| {
+        let mut rings = Vec::new();
+        while let Some((&start, _)) = next.first_key_value() {
+            let mut ring = vec![start];
+            let mut at = start;
+            let mut direction = (0, 0);
+            loop {
+                let std::collections::btree_map::Entry::Occupied(mut entry) = next.entry(at) else {
+                    unreachable!("grid boundaries form closed rings");
+                };
+                let outs = entry.get_mut();
+                // Where two regions of the same label touch at a corner,
+                // take the left turn first (negative cross product with y down).
+                let pick = (0..outs.len()).max_by_key(|&i| {
+                    let (x, y) = outs[i];
+                    direction.1 * (x - at.0) - direction.0 * (y - at.1)
+                }).unwrap();
+                let to = outs.swap_remove(pick);
+                if outs.is_empty() {
+                    entry.remove();
+                }
+                direction = (to.0 - at.0, to.1 - at.1);
+                at = to;
+                if at == start {
+                    break;
+                }
+                ring.push(at);
+            }
+            if ring.len() >= 3 {
+                rings.push(ring);
+            }
+        }
+        rings
+    }).collect()
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Key {
@@ -176,6 +248,21 @@ pub fn simplify(pts: &[[f64; 2]], eps: f64) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grid_rings_preserve_diagonal_components_and_shared_holes() {
+        let diagonal = [Some(0), None, None, Some(0)];
+        let regions = grid_regions(2, 2, 1, |index| diagonal[index]);
+        assert_eq!(regions[0], vec![
+            vec![(0, 0), (0, 1), (1, 1), (1, 0)],
+            vec![(1, 1), (1, 2), (2, 2), (2, 1)],
+        ]);
+
+        let regions = grid_regions(3, 3, 2, |index| Some(usize::from(index == 4)));
+        assert_eq!(regions[0][0].len(), 12);
+        assert_eq!(regions[0][1], vec![(1, 1), (2, 1), (2, 2), (1, 2)]);
+        assert_eq!(regions[1][0], vec![(1, 1), (1, 2), (2, 2), (2, 1)]);
+    }
     use crate::doc::Document;
 
     fn sq(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<LonLat> {

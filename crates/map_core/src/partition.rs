@@ -71,52 +71,6 @@ impl Ord for Cost {
     }
 }
 
-/// Outlines of the cells with `label` on a `w` × `h` grid: rings of grid
-/// corners (x right, y down), the region on the left; every corner kept.
-fn trace(labels: &[usize], w: usize, h: usize, label: usize) -> Vec<Vec<(i64, i64)>> {
-    let has = |i: i64, j: i64| i >= 0 && j >= 0 && (i as usize) < w && (j as usize) < h && labels[j as usize * w + i as usize] == label;
-    let mut next: std::collections::BTreeMap<(i64, i64), Vec<(i64, i64)>> = std::collections::BTreeMap::new();
-    for j in 0..h as i64 {
-        for i in 0..w as i64 {
-            if !has(i, j) {
-                continue;
-            }
-            if !has(i, j + 1) {
-                next.entry((i, j + 1)).or_default().push((i + 1, j + 1));
-            }
-            if !has(i + 1, j) {
-                next.entry((i + 1, j + 1)).or_default().push((i + 1, j));
-            }
-            if !has(i, j - 1) {
-                next.entry((i + 1, j)).or_default().push((i, j));
-            }
-            if !has(i - 1, j) {
-                next.entry((i, j)).or_default().push((i, j + 1));
-            }
-        }
-    }
-    let mut rings = Vec::new();
-    while let Some(start) = next.iter().find(|(_, v)| !v.is_empty()).map(|(k, _)| *k) {
-        let mut ring = vec![start];
-        let (mut at, mut came) = (start, (0i64, 0i64));
-        loop {
-            let outs = next.get_mut(&at).unwrap();
-            let pick = if outs.len() == 1 { 0 } else { (0..outs.len()).max_by_key(|k| -(came.0 * (outs[*k].1 - at.1) - came.1 * (outs[*k].0 - at.0))).unwrap() };
-            let to = outs.swap_remove(pick);
-            came = (to.0 - at.0, to.1 - at.1);
-            at = to;
-            if at == start {
-                break;
-            }
-            ring.push(at);
-        }
-        if ring.len() >= 3 {
-            rings.push(ring);
-        }
-    }
-    rings
-}
-
 /// A ring cut at the corners it passes twice into rings that do not touch
 /// themselves (a figure eight → its two loops).
 fn simple_loops(ring: &[LonLat]) -> Vec<Vec<LonLat>> {
@@ -472,8 +426,10 @@ impl Document {
         let region = region.0.iter().fold(geo::MultiPolygon::<f64>::new(vec![]), |acc, p| acc.union(&geo::MultiPolygon::new(vec![p.clone()])));
         let mut units = Vec::new();
         let mut areas = Vec::new();
-        for k in 0..n {
-            let rings: Vec<Vec<P2>> = trace(&label, w, h, k).into_iter().map(|r| r.into_iter().map(|(x, y)| [x0 + x as f64 * cs, y1 - y as f64 * cs]).collect()).collect();
+        for outline in crate::trace::grid_regions(w, h, n, |index| Some(label[index])) {
+            let rings: Vec<Vec<P2>> = outline.into_iter()
+                .map(|ring| ring.into_iter().map(|(x, y)| [x0 + x as f64 * cs, y1 - y as f64 * cs]).collect())
+                .collect();
             let cut = to_geo(&rings).intersection(&region);
             let mut parts: Vec<Part> = Vec::new();
             let mut km2 = 0.0;

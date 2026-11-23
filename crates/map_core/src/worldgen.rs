@@ -402,77 +402,6 @@ fn dist(a: usize, b: usize) -> f64 {
 
 // ------------------------------------------------------------- outlines
 
-/// The outlines of the cells with `label`: closed rings (lon/lat, no
-/// repeated last point), region on the left (outer rings counter-clockwise).
-fn trace(labels: &[Option<usize>], label: usize) -> Vec<Vec<LonLat>> {
-    // grid corners: x 0..=W, y 0..=H (y down); the cell (i, j) spans x i..i+1, y j..j+1
-    let has = |i: i64, j: i64| i >= 0 && j >= 0 && (i as usize) < W && (j as usize) < H && labels[j as usize * W + i as usize] == Some(label);
-    let mut next: std::collections::BTreeMap<(i64, i64), Vec<(i64, i64)>> = std::collections::BTreeMap::new();
-    let mut count = 0;
-    for j in 0..H as i64 {
-        for i in 0..W as i64 {
-            if !has(i, j) {
-                continue;
-            }
-            // counter-clockwise as seen with north up (y down on the grid)
-            if !has(i, j + 1) {
-                next.entry((i, j + 1)).or_default().push((i + 1, j + 1));
-                count += 1;
-            }
-            if !has(i + 1, j) {
-                next.entry((i + 1, j + 1)).or_default().push((i + 1, j));
-                count += 1;
-            }
-            if !has(i, j - 1) {
-                next.entry((i + 1, j)).or_default().push((i, j));
-                count += 1;
-            }
-            if !has(i - 1, j) {
-                next.entry((i, j)).or_default().push((i, j + 1));
-                count += 1;
-            }
-        }
-    }
-    let mut rings = Vec::new();
-    let mut used = 0;
-    while used < count {
-        let Some((&start, _)) = next.iter().find(|(_, v)| !v.is_empty()) else { break };
-        let mut ring = vec![start];
-        let mut at = start;
-        let mut came = (0i64, 0i64);
-        loop {
-            let outs = next.get_mut(&at).unwrap();
-            // at a corner shared by two runs of the region: turn left first
-            let pick = if outs.len() == 1 {
-                0
-            } else {
-                let turn = |d: (i64, i64)| -> i64 {
-                    // cross product (y down): left turns first
-                    let c = came.0 * d.1 - came.1 * d.0;
-                    -c
-                };
-                (0..outs.len()).max_by_key(|k| turn((outs[*k].0 - at.0, outs[*k].1 - at.1))).unwrap()
-            };
-            let to = outs.swap_remove(pick);
-            used += 1;
-            came = (to.0 - at.0, to.1 - at.1);
-            at = to;
-            if at == start {
-                break;
-            }
-            ring.push(at);
-        }
-        // every grid point is kept: a point in the middle of a straight run
-        // here may be where two neighbours meet on the other side, and
-        // shared borders must match point for point (straight runs are
-        // thinned on the built edges, see `straightened`)
-        if ring.len() >= 3 {
-            rings.push(ring.into_iter().map(|(x, y)| LonLat::new(-180.0 + x as f64 / N as f64, 90.0 - y as f64 / N as f64)).collect());
-        }
-    }
-    rings
-}
-
 /// Signed area (lon/lat degrees, counter-clockwise positive).
 fn ring_area(r: &[LonLat]) -> f64 {
     let n = r.len();
@@ -645,8 +574,14 @@ pub fn generate(spec: &WorldSpec) -> Result<(Document, WorldReport), String> {
     // polygons, built into a topology
     let mut polys: Vec<SourcePolygon> = Vec::new();
     let mut owner_of: Vec<usize> = Vec::new();
-    for k in 0..n {
-        for p in polygons(trace(&labels, k)) {
+    let outlines = crate::trace::grid_regions(W, H, n, |index| labels[index]);
+    for (k, outline) in outlines.into_iter().enumerate() {
+        let rings = outline.into_iter().map(|ring| {
+            ring.into_iter().map(|(x, y)| {
+                LonLat::new(-180.0 + x as f64 / N as f64, 90.0 - y as f64 / N as f64)
+            }).collect()
+        }).collect();
+        for p in polygons(rings) {
             polys.push(p);
             owner_of.push(k);
         }
