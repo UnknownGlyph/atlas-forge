@@ -342,18 +342,17 @@ impl App {
             // white behind dark names, dark behind light ones (a dark theme)
             let h = map_core::doc::halo_for(self.doc.style.label);
             let halo = Color32::from_rgba_unmultiplied(h[0], h[1], h[2], if faded { 60 } else { 150 });
-            let mut outlined = Mesh::with_texture(mesh.texture_id);
-            outlined.vertices.reserve(mesh.vertices.len() * 9);
-            outlined.indices.reserve(mesh.indices.len() * 9);
-            for i in 0..8 {
+            painter.extend((0..8).map(|i| {
                 let a = i as f32 * std::f32::consts::TAU / 8.0;
                 let o = Vec2::new(a.cos(), a.sin()) * 1.4;
-                let base = outlined.vertices.len() as u32;
-                outlined.vertices.extend(mesh.vertices.iter().map(|v| Vertex { pos: v.pos + o, color: halo, ..*v }));
-                outlined.indices.extend(mesh.indices.iter().map(|index| base + index));
-            }
-            outlined.append(mesh);
-            painter.add(egui::Shape::mesh(outlined));
+                let mut outline = mesh.clone();
+                for vertex in &mut outline.vertices {
+                    vertex.pos += o;
+                    vertex.color = halo;
+                }
+                egui::Shape::mesh(outline)
+            }));
+            painter.add(egui::Shape::mesh(mesh));
             if editing {
                 let strong = self.selected == Some(e) || self.drag_label.is_some_and(|d| d.0 == e);
                 let col = if place.is_some() { Color32::from_rgb(230, 80, 20) } else { Color32::from_gray(120) };
