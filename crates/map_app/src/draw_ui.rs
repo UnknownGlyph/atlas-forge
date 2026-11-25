@@ -80,7 +80,7 @@ impl App {
         self.pen_pull = false;
         self.draft.clear();
         self.draft_snap.clear();
-        self.draft_drag = None;
+        self.gestures.draft_point = None;
         self.trace_preview = None;
     }
 
@@ -196,22 +196,22 @@ impl App {
             let origin = resp.ctx.input(|i| i.pointer.press_origin()).unwrap_or(pos);
             let Some(o) = vg.to_lonlat(origin) else { return };
             if let Some(i) = self.nearest_anchor(vg, origin) {
-                self.draft_drag = Some(DraftDrag::Move(i));
+                self.gestures.draft_point = Some(DraftDrag::Move(i));
             } else if let Some((i, _)) = self.midpoints(vg).into_iter().find(|(_, m)| m.distance(origin) <= GRAB_PX) {
                 self.draft.insert(i + 1, o);
                 self.draft_snap.insert((i + 1).min(self.draft_snap.len()), false);
-                self.draft_drag = Some(DraftDrag::Move(i + 1));
+                self.gestures.draft_point = Some(DraftDrag::Move(i + 1));
             } else {
                 if self.tool.ends_on_boundary() && self.draft.is_empty() && self.doc.topo.snap_boundary(o, vg.deg_per_px(origin, GRAB_PX)).is_none() {
                     self.set_status(crate::i18n::tr("这条线必须从已有边界开始（光标靠近边界时会吸附）"), true);
                     return;
                 }
                 self.add_draft_point(vg, origin, o, false, ctrl);
-                self.draft_drag = Some(DraftDrag::Stroke(self.draft.len() - 1));
+                self.gestures.draft_point = Some(DraftDrag::Stroke(self.draft.len() - 1));
             }
         }
         if resp.dragged_by(Primary) {
-            match self.draft_drag {
+            match self.gestures.draft_point {
                 Some(DraftDrag::Move(i)) if i < self.draft.len() => {
                     let tol = vg.deg_per_px(pos, GRAB_PX);
                     let (q, s) = self.snap(p, tol);
@@ -230,10 +230,10 @@ impl App {
             }
         }
         if resp.drag_stopped() {
-            if let Some(DraftDrag::Stroke(start)) = self.draft_drag.take() {
+            if let Some(DraftDrag::Stroke(start)) = self.gestures.draft_point.take() {
                 self.finish_stroke(vg, start, pos);
             }
-            self.draft_drag = None;
+            self.gestures.draft_point = None;
             return;
         }
         // a quick click just before a double-click makes egui count the
@@ -646,7 +646,7 @@ impl App {
         }
         // the next segment to the cursor: traced along the boundary or straight
         if let (Some(h), Some(last)) = (hover, screen.last().copied().flatten()) {
-            if self.draft_drag.is_none() {
+            if self.gestures.draft_point.is_none() {
                 let hs = vg.to_screen(h);
                 let tol = hs.map_or(0.5, |s| vg.deg_per_px(s, GRAB_PX));
                 let (q, s) = self.snap(h, tol);
@@ -745,7 +745,7 @@ impl App {
     /// While redrawing a border: when the cursor is on a boundary, show
     /// the land that would change hands and who would get it.
     fn draw_redraw_preview(&mut self, painter: &egui::Painter, vg: &ViewGeom, hover: Option<LonLat>) {
-        let Some(h) = hover.filter(|_| !self.draft.is_empty() && self.draft_drag.is_none()) else { return };
+        let Some(h) = hover.filter(|_| !self.draft.is_empty() && self.gestures.draft_point.is_none()) else { return };
         let Some(hs) = vg.to_screen(h) else { return };
         let Some(end) = self.doc.topo.snap_boundary(h, vg.deg_per_px(hs, GRAB_PX)) else { return };
         let mut line = self.draft.clone();
@@ -776,19 +776,19 @@ impl App {
         if resp.drag_started_by(Primary) {
             let origin = resp.ctx.input(|i| i.pointer.press_origin());
             let q = origin.and_then(|o| vg.to_lonlat(o)).unwrap_or(p);
-            self.dated_drag = from_at(&self.doc, q).map(|f| (f, None));
+            self.gestures.dated_vertex = from_at(&self.doc, q).map(|f| (f, None));
         }
         if resp.dragged_by(Primary) {
-            if let Some((from, last)) = &self.dated_drag {
+            if let Some((from, last)) = &self.gestures.dated_vertex {
                 if last.as_ref().is_none_or(|(at, _)| *at != p) {
                     let plan = redraw::drag_line(&self.doc.topo, *from, p).and_then(|l| redraw::plan(&self.doc, &l, tol * 0.25));
                     let from = *from;
-                    self.dated_drag = Some((from, Some((p, plan))));
+                    self.gestures.dated_vertex = Some((from, Some((p, plan))));
                 }
             }
         }
         if resp.drag_stopped() {
-            if let Some((_, Some((_, plan)))) = self.dated_drag.take() {
+            if let Some((_, Some((_, plan)))) = self.gestures.dated_vertex.take() {
                 self.apply_plan("移动国界", plan);
             }
         }

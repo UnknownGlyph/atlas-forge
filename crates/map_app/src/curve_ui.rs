@@ -156,11 +156,11 @@ impl App {
                             Ok(())
                         });
                     }
-                    self.curve_drag = Some(CurveDrag { id, grip });
+                    self.gestures.curve = Some(CurveDrag { id, grip });
                 }
             }
         }
-        let Some(d) = &self.curve_drag else { return false };
+        let Some(d) = &self.gestures.curve else { return false };
         let (id, grip) = (d.id, d.grip);
         if resp.dragged_by(Primary) {
             if let Some(p) = resp.interact_pointer_pos().and_then(|p| vg.to_lonlat(p)) {
@@ -179,7 +179,7 @@ impl App {
             }
         }
         if resp.drag_stopped() || !resp.ctx.input(|i| i.pointer.primary_down()) {
-            self.curve_drag = None;
+            self.gestures.curve = None;
             self.end_pending();
         }
         true
@@ -238,7 +238,7 @@ impl App {
         let at = |p: Option<Pos2>| p.and_then(|p| vg.to_lonlat(p));
         let near_first = |s: &App, o: Pos2| s.pen.first().and_then(|n| vg.to_screen(n.at)).is_some_and(|f| f.distance(o) <= GRIP_PX);
         let closes = self.pen_target == PenTarget::Area && self.pen.len() >= 3;
-        if resp.drag_started_by(Primary) && self.curve_drag.is_none() {
+        if resp.drag_started_by(Primary) && self.gestures.curve.is_none() {
             let origin = resp.ctx.input(|i| i.pointer.press_origin());
             if let (Some(o), Some(p)) = (origin, at(origin)) {
                 if closes && near_first(self, o) {
@@ -395,7 +395,7 @@ impl App {
             for n in &c.nodes {
                 handles(n);
             }
-            let active = self.curve_drag.as_ref().map(|d| d.grip);
+            let active = self.gestures.curve.as_ref().map(|d| d.grip);
             for (i, n) in c.nodes.iter().enumerate() {
                 anchor(n.at, active == Some(Grip::Anchor(i)));
             }

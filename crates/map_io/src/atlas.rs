@@ -141,10 +141,10 @@ fn index_html(doc: &Document, job: &AtlasJob, list: &[Item]) -> String {
         _ => "不分年份".into(),
     };
     let mut h = format!(
-        "<!doctype html>\n<html lang=\"zh\">\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{name} 地图集</title>\n<style>\nbody{{font-family:system-ui,\"Microsoft YaHei\",sans-serif;margin:24px auto;max-width:1200px;padding:0 16px;color:#222;background:#fff}}\nh1{{margin-bottom:4px}}\nnav a{{margin-right:16px}}\nfigure{{margin:0 0 32px}}\nimg{{max-width:100%;border:1px solid #ccc}}\nfigcaption{{color:#555;margin-top:4px}}\n</style>\n<h1>{name} 地图集</h1>\n<p>{} 个版式，{years}，共 {} 幅。</p>\n<nav>",
-        job.pages.len(),
-        list.len()
+        include_str!("atlas_index.html.in"),
+        name = name, years = years, layouts = job.pages.len(), maps = list.len(),
     );
+    h.push_str("<nav>");
     for (p, l) in job.pages.iter().enumerate() {
         h.push_str(&format!("<a href=\"#p{p}\">{}</a>", esc(&l.name)));
     }
@@ -207,7 +207,8 @@ mod tests {
 
     #[test]
     fn pages_times_years_with_contents() {
-        let d = world();
+        let mut d = world();
+        d.meta.name = "海岸 <A&B>".into();
         let dir = tmp("svg");
         let job = AtlasJob {
             pages: vec![page("全图", "{year} 年人口"), page("东部: 细节", "")],
@@ -223,6 +224,8 @@ mod tests {
         let names: Vec<String> = files.iter().map(|f| f.file_name().unwrap().to_string_lossy().into_owned()).collect();
         assert_eq!(names, ["全图_1900.svg", "全图_1950.svg", "东部_ 细节_1900.svg", "东部_ 细节_1950.svg", "index.html"]);
         let index = std::fs::read_to_string(dir.join("index.html")).unwrap();
+        assert!(index.contains("<title>海岸 &lt;A&amp;B&gt; 地图集</title>"));
+        assert!(index.contains("nav a{margin-right:16px}"));
         assert!(index.contains("2 个版式，1900–1950 年，2 个年份，共 4 幅"));
         assert!(index.contains("src=\"全图_1950.svg\"") && index.contains("1950 年人口"));
         // one legend scale: both years' legends cover 10–1000

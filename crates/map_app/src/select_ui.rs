@@ -167,26 +167,26 @@ impl App {
                 let sel = self.selection();
                 let on_selected = !sel.is_empty() && self.feature_at(o, vg).is_some_and(|h| sel.contains(&h));
                 if shift {
-                    self.marquee = Some((vg.kind.index(), o, o));
+                    self.gestures.marquee = Some((vg.kind.index(), o, o));
                 } else if let (true, Some(q)) = (on_selected, vg.to_lonlat(o)) {
                     self.begin_pending(if sel.len() == 1 { "移动要素" } else { "移动多个要素" });
                     let original = self.doc.copy_features(&sel);
                     let keys = sel.iter().flat_map(|f| self.doc.key_points(*f)).collect();
                     let targets = self.doc.snap_targets(&sel);
-                    self.move_drag = Some(MoveDrag { fs: sel, origin: q, original, keys, targets });
+                    self.gestures.features = Some(MoveDrag { fs: sel, origin: q, original, keys, targets });
                 }
             }
         }
-        if let Some((view, from, _)) = self.marquee {
+        if let Some((view, from, _)) = self.gestures.marquee {
             // the other view leaves the box alone (and stays still)
             if view != vg.kind.index() {
                 return true;
             }
             if let Some(p) = resp.interact_pointer_pos() {
-                self.marquee = Some((view, from, p));
+                self.gestures.marquee = Some((view, from, p));
             }
             if resp.drag_stopped() || !resp.dragged_by(Primary) {
-                let (_, a, b) = self.marquee.take().unwrap();
+                let (_, a, b) = self.gestures.marquee.take().unwrap();
                 let rect = Rect::from_two_pos(a, b);
                 let mut sel = self.selection();
                 for f in self.doc.features() {
@@ -201,7 +201,7 @@ impl App {
             }
             return true;
         }
-        let Some(m) = &self.move_drag else { return false };
+        let Some(m) = &self.gestures.features else { return false };
         if resp.dragged_by(Primary) {
             let at = resp.interact_pointer_pos();
             if let Some(mut p) = at.and_then(|p| vg.to_lonlat(p)) {
@@ -236,7 +236,7 @@ impl App {
             }
         }
         if resp.drag_stopped() {
-            self.move_drag = None;
+            self.gestures.features = None;
             self.snap_guides.clear();
             self.end_pending();
             self.set_status(crate::i18n::tr("已移动（Ctrl+Z 撤销）"), false);
@@ -306,7 +306,7 @@ impl App {
                 }
             }
         }
-        if let Some((_, a, b)) = self.marquee.filter(|m| m.0 == i) {
+        if let Some((_, a, b)) = self.gestures.marquee.filter(|m| m.0 == i) {
             let r = Rect::from_two_pos(a, b);
             painter.rect_filled(r, 0.0, ACCENT.gamma_multiply(0.12));
             painter.rect_stroke(r, 0.0, Stroke::new(1.0, ACCENT), egui::StrokeKind::Inside);

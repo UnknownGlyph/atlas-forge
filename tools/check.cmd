@@ -1,5 +1,7 @@
 @echo off
 setlocal
+python "%~dp0i18n_catalog.py" || exit /b 1
+python -B -m unittest discover -s "%~dp0." -p test_i18n_catalog.py || exit /b 1
 rem What continuous integration runs, locally on Windows: build, tests, clippy.
 rem   tools\check.cmd          the usual checks
 rem   tools\check.cmd soak     also the long random authoring run (minutes)

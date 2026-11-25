@@ -8,6 +8,7 @@ use map_core::sample::{grid_world, Rng};
 use map_core::theme;
 use map_render::tess::SceneCache;
 use std::time::Instant;
+mod storage;
 
 fn ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1e3
@@ -48,6 +49,11 @@ fn scene_refresh() {
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("storage") {
+        let count = std::env::args().nth(2).map_or(100, |arg| arg.parse().expect("storage needs a board count"));
+        let kib = std::env::args().nth(3).map_or(256, |arg| arg.parse().expect("storage needs attachment size in KiB"));
+        return storage::run(count, kib);
+    }
     if std::env::args().nth(1).as_deref() == Some("scene-refresh") {
         return scene_refresh();
     }

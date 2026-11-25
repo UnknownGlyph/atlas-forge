@@ -77,11 +77,11 @@ impl App {
             let q = origin.and_then(|o| vg.to_lonlat(o)).unwrap_or(p);
             if let Some(id) = self.doc.city_at(q, tol) {
                 self.begin_pending("移动城市");
-                self.drag_city = Some(id);
+                self.gestures.city = Some(id);
                 self.selected = Some(id);
             }
         }
-        if let Some(id) = self.drag_city {
+        if let Some(id) = self.gestures.city {
             if resp.dragged_by(Primary) {
                 if let Some(e) = self.doc.entities.get_mut(&id) {
                     e.pos = Some(p.normalized());
@@ -91,7 +91,7 @@ impl App {
                 }
             }
             if resp.drag_stopped() {
-                self.drag_city = None;
+                self.gestures.city = None;
                 let name = |d: &map_core::doc::Document, e: Option<map_core::EntityId>| e.and_then(|e| d.entities.get(&e)).map_or("无归属".to_string(), |x| x.name.clone());
                 match self.doc.move_city(id, p) {
                     Ok(map_core::doc::CityMove::Same) => self.set_status(crate::i18n::tr("已移动城市"), false),
@@ -140,7 +140,7 @@ impl App {
             if let Some((id, i, d)) = self.doc.river_point_at(q, tol).filter(|h| !self.doc.curves.contains_key(&h.0)) {
                 if border_pt.is_none_or(|b| d <= b) {
                     self.begin_pending("移动河流点");
-                    self.drag_river = Some((id, i));
+                    self.gestures.river_point = Some((id, i));
                     return true;
                 }
             } else if border_pt.is_none() {
@@ -153,13 +153,13 @@ impl App {
                         if let Some(pe) = &mut self.pending {
                             pe.changed = true;
                         }
-                        self.drag_river = Some((id, seg + 1));
+                        self.gestures.river_point = Some((id, seg + 1));
                         return true;
                     }
                 }
             }
         }
-        if let Some((id, i)) = self.drag_river {
+        if let Some((id, i)) = self.gestures.river_point {
             if resp.dragged_by(Primary) {
                 if let Some(pt) = self.doc.rivers.get_mut(&id).and_then(|r| r.pts.get_mut(i)) {
                     *pt = p;
@@ -169,7 +169,7 @@ impl App {
                 }
             }
             if resp.drag_stopped() {
-                self.drag_river = None;
+                self.gestures.river_point = None;
                 self.end_pending();
             }
             return true;
@@ -393,7 +393,7 @@ impl App {
         // the city under the cursor (or being dragged) with the city tool
         if self.tool == crate::view::Tool::City {
             let tol = hover.and_then(|h| vg.to_screen(h)).map(|hs| vg.deg_per_px(hs, 8.0)).unwrap_or(0.0);
-            let id = self.drag_city.or_else(|| hover.and_then(|h| self.doc.city_at(h, tol)));
+            let id = self.gestures.city.or_else(|| hover.and_then(|h| self.doc.city_at(h, tol)));
             if let Some(s) = id.and_then(|id| self.doc.entities.get(&id)).and_then(|e| e.pos).and_then(|p| vg.to_screen(p)) {
                 painter.circle_stroke(s, 8.0, Stroke::new(2.0, Color32::from_rgb(230, 80, 20)));
             }
@@ -413,7 +413,7 @@ impl App {
                     continue;
                 }
                 if let Some(s) = vg.to_screen(*q) {
-                    let active = self.drag_river == Some((*id, i));
+                    let active = self.gestures.river_point == Some((*id, i));
                     painter.circle_filled(s, if active { 5.0 } else { 3.5 }, Color32::from_rgb(20, 110, 210));
                     painter.circle_stroke(s, if active { 5.0 } else { 3.5 }, Stroke::new(1.0, Color32::WHITE));
                 }

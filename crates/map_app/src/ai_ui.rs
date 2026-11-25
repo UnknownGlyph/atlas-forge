@@ -11,6 +11,12 @@ use crate::app::App;
 use eframe::egui::{self, Color32, RichText};
 use map_core::Document;
 use std::sync::mpsc;
+use std::time::Instant;
+
+pub(crate) fn elapsed_label(started: Instant) -> String {
+    let seconds = started.elapsed().as_secs();
+    crate::trf!("已用 {seconds} 秒")
+}
 
 enum Msg {
     Step(String),
@@ -39,7 +45,7 @@ pub struct Assistant {
     connections: [Connection; map_ai::Provider::ALL.len()],
     task: String,
     log: Vec<String>,
-    job: Option<mpsc::Receiver<Msg>>,
+    job: Option<(Instant, mpsc::Receiver<Msg>)>,
     /// The history's generation when the task started (the map it worked on).
     base: u64,
     done: Option<Finished>,
@@ -115,7 +121,7 @@ impl App {
         a.textures.clear();
         a.error = None;
         a.base = self.history.generation();
-        a.job = Some(rx);
+        a.job = Some((Instant::now(), rx));
         crate::perf_ui::spawn("AI 助手请求", move || {
             let mut session = map_api::Session::new(doc, "当前地图");
             let net = map_ai::default_transport();
@@ -161,7 +167,7 @@ impl App {
 
     pub(crate) fn poll_assistant(&mut self, ctx: &egui::Context) {
         // what the running task sent
-        if let Some(rx) = &self.ai.job {
+        if let Some((_, rx)) = &self.ai.job {
             loop {
                 match rx.try_recv() {
                     Ok(Msg::Step(s)) => self.ai.log.push(s),
@@ -292,10 +298,11 @@ impl App {
                 (advise, action) = a.advisor.body(ui);
                 return;
             }
-            if busy {
+            if let Some((started, _)) = &a.job {
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new());
                     ui.label(crate::trf!("进行中…（{} 步）", a.log.len().saturating_sub(1)));
+                    ui.weak(elapsed_label(*started));
                 });
             }
             if let Some(e) = &a.error {

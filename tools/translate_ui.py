@@ -14,12 +14,14 @@ from concurrent.futures import ThreadPoolExecutor
 import ctranslate2
 import sentencepiece
 from opencc import OpenCC
+from i18n_catalog import MARKUP, read_json, validate
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGETS = ['ja','ru','de','fr','it','es','pt']
 TOKENS = re.compile(r'\{[^{}]*\}|https?://[^\s)<>，。]+')
 
 HUMAN = {
+    '（自身外观）':'(Individual appearance)', '面不存在':'Face does not exist',
     '地块':'Face', '画板':'Artboard', '资料':'Library', '属性':'Properties',
     '草稿':'Draft','北回归线':'Tropic of Cancer', '相互引力':'Mutual gravity',
     '太阳邻域':'Solar neighborhood','无模型':'No model',
@@ -47,16 +49,15 @@ def english_table():
 
 
 def write_json(path,value):
+    validate(value)
     pending = path.with_suffix('.writing')
     pending.write_text(json.dumps(value,ensure_ascii=False,sort_keys=True,indent=2)+'\n',encoding='utf8')
     pending.replace(path)
 
 
-def read_json(path):
-    try:
-        return json.loads(path.read_text(encoding='utf8'))
-    except FileNotFoundError:
-        return {}
+def existing_catalogue(path):
+    # Old inventories included export templates. Do not carry them forward.
+    return {k:v for k,v in read_json(path).items() if not MARKUP.search(k)} if path.exists() else {}
 
 
 def translate(source, model, threads):
@@ -129,22 +130,22 @@ def main():
     input_keys = read_json(args.inventory)
     locale_dir=ROOT/'assets/i18n'
     verified=english_table()
-    all_keys=sorted(set(input_keys)|verified.keys())
-    en=read_json(locale_dir/'en.json')
+    all_keys=sorted(k for k in set(input_keys)|verified.keys() if not MARKUP.search(k))
+    en=existing_catalogue(locale_dir/'en.json')
     en.update(verified)
     missing=[k for k in all_keys if k not in en]
     en.update(zip(missing,translate(missing,args.models/'zh-en',args.threads)))
     write_json(locale_dir/'en.json',en)
     print('en',len(en),'messages',flush=True)
     cc=OpenCC('s2twp')
-    tw=read_json(locale_dir/'zh-TW.json')
+    tw=existing_catalogue(locale_dir/'zh-TW.json')
     tw.update({k:cc.convert(k) for k in all_keys if k not in tw})
     write_json(locale_dir/'zh-TW.json',tw)
     print('zh-TW',len(tw),'messages',flush=True)
 
     def build(lang):
         path=locale_dir/(lang+'.json')
-        data=read_json(path)
+        data=existing_catalogue(path)
         keys=[k for k in all_keys if k not in data]
         needs=list(dict.fromkeys(en[k] for k in keys))
         translated=dict(zip(needs,translate(needs,args.models/('en-'+lang),max(1,args.threads//2))))

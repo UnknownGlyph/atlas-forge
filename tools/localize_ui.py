@@ -14,6 +14,7 @@ from pathlib import Path
 
 from tree_sitter import Language, Parser
 import tree_sitter_rust
+from i18n_catalog import MARKUP
 
 
 HAN = re.compile(r'[\u3400-\u9fff]')
@@ -39,10 +40,14 @@ PARSER = Parser(Language(tree_sitter_rust.language()))
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def walk(root):
+def walk(root, skip_name_pools=False):
     todo = [root]
     while todo:
         node = todo.pop()
+        if skip_name_pools and node.type == 'const_item':
+            declared = node.child_by_field_name('type')
+            if declared and re.sub(rb'\s+', b'', declared.text) == b'&[&str]':
+                continue
         yield node
         if node.type not in ('string_literal', 'raw_string_literal', 'line_comment', 'block_comment'):
             todo.extend(reversed(node.named_children))
@@ -101,11 +106,11 @@ def collect(root, apply=False):
             data = path.read_bytes()
             tree = PARSER.parse(data).root_node
             edits = []
-            for lit in walk(tree):
+            for lit in walk(tree, skip_name_pools=(crate == 'map_core' and path.name == 'names.rs')):
                 if lit.type not in ('string_literal', 'raw_string_literal'):
                     continue
                 translated = value(lit)
-                if not translated or not HAN.search(translated) or in_test(lit):
+                if not translated or not HAN.search(translated) or MARKUP.search(translated) or in_test(lit):
                     continue
                 entries.add(translated)
                 if not apply or crate != 'map_app':
@@ -132,11 +137,11 @@ def main():
     cli.add_argument('--wrap',action='store_true')
     args = cli.parse_args()
     entries, count = collect(ROOT, args.wrap)
-    tutorial = json.loads((ROOT/'docs/tutorial/lessons.json').read_text(encoding='utf8'))
-    for chapter in tutorial:
-        entries.update(chapter[key] for key in ('title','goal','caption','check','help'))
-        for step in chapter['steps']:
-            entries.update([step['title'],step['body']])
+    for path in (ROOT/'docs/tutorial').rglob('lessons.json'):
+        for chapter in json.loads(path.read_text(encoding='utf8')):
+            entries.update(chapter[key] for key in ('title','goal','caption','check','help'))
+            for step in chapter['steps']:
+                entries.update([step['title'],step['body']])
     if args.inventory:
         args.inventory.parent.mkdir(parents=True, exist_ok=True)
         args.inventory.write_text(json.dumps(sorted(entries), ensure_ascii=False, indent=2)+'\n',encoding='utf8')

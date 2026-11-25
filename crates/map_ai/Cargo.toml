@@ -11,6 +11,7 @@ name = "atlas-agent"
 path = "src/bin/atlas-agent.rs"
 
 [dependencies]
+tempfile = "3"
 map_core.workspace = true
 map_io.workspace = true
 map_api = { path = "../map_api" }

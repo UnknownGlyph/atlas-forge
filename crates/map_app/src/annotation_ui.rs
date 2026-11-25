@@ -167,11 +167,11 @@ impl App {
             let found = origin.and_then(|o| hit(&self.ann_rects.borrow()[vg.kind.index()], o).map(|(id, c)| (id, c - o)));
             if let Some((id, off)) = found {
                 self.begin_pending("移动文字");
-                self.drag_ann = Some((id, off));
+                self.gestures.annotation = Some((id, off));
                 self.selected_ann = Some(id);
             }
         }
-        if let Some((id, off)) = self.drag_ann {
+        if let Some((id, off)) = self.gestures.annotation {
             if resp.dragged_by(Primary) {
                 if let Some(ll) = resp.interact_pointer_pos().and_then(|p| vg.to_lonlat(p + off)) {
                     if let Some(a) = self.doc.annotations.get_mut(&id) {
@@ -183,7 +183,7 @@ impl App {
                 }
             }
             if resp.drag_stopped() {
-                self.drag_ann = None;
+                self.gestures.annotation = None;
                 self.end_pending();
             }
             return true;

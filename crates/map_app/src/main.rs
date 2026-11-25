@@ -29,6 +29,7 @@ mod fonts_ui;
 mod furniture_ui;
 mod help_advisor;
 mod guides_ui;
+mod gestures;
 mod label_boxes;
 mod label_ui;
 mod map_detail;

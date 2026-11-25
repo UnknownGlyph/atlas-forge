@@ -624,3 +624,76 @@ fn random_authoring_keeps_every_invariant() {
     assert!(applied > refused, "most operations should go through: {applied} applied, {refused} refused");
     assert!(problems.is_empty(), "{} problems:\n{}", problems.len(), problems.iter().map(|p| format!("  {p}")).collect::<Vec<_>>().join("\n"));
 }
+
+#[test]
+fn mixed_board_edits_survive_navigation_undo_and_reopen() {
+    use map_core::{doc::LineId, pixel_art::PixelArt, star_chart::StarChart, symbol::{MapSymbol, SymbolKind}};
+    use map_core::{underlay::Blob, world_book::{Attachment, Link, Node, WorldBook, ROOT}};
+
+    for seed in 1..=8 {
+        let mut rng = Rng::new(seed);
+        let mut doc = Document::default();
+        let book = WorldBook::edit(&mut doc);
+        let region = book.add_map(Document::new("region", 6371.0));
+        let city = book.add_map(Document::new("city", 6371.0));
+        for (parent, child) in [(ROOT, region), (region, city)] {
+            book.add_link(Link::new(Node::Map(parent), Node::Map(child), true)).unwrap();
+        }
+        let boards = [ROOT, region, city];
+        let mut history = History::default();
+        for step in 0..32 {
+            let board = pick(&mut rng, &boards).unwrap();
+            WorldBook::switch(&mut doc, board, None).unwrap();
+            let before = doc.clone();
+            history.apply(&mut doc, "mixed edit", |d| {
+                match step % 4 {
+                    0 => {
+                        let event = d.add_event("treaty", step, None);
+                        let book = WorldBook::edit(d);
+                        let article = book.add_article(format!("record {step}"));
+                        book.add_link(Link::new(Node::Event(board, event), Node::Article(article), false))?;
+                    }
+                    1 => {
+                        let id = LineId(d.topo.alloc());
+                        let mut mark = MapSymbol::new(SymbolKind::Site, LonLat::new(f64::from(step), 5.0));
+                        mark.pixels = Some(Arc::new(PixelArt::from_pixels(1, 1, vec![[step as u8, 10, 24, 255]])?));
+                        d.symbols.insert(id, mark);
+                    }
+                    2 => {
+                        let book = WorldBook::edit(d);
+                        let asset = book.add_asset(Attachment {name: "note.txt".into(), bytes: Blob(Arc::new(vec![step as u8; 16]))});
+                        book.add_link(Link::new(Node::Map(board), Node::Asset(asset), false))?;
+                    }
+                    _ => {
+                        let chart = d.star_chart.get_or_insert_with(|| Arc::new(StarChart::default()));
+                        Arc::make_mut(chart).galaxy.name = format!("galaxy {step}");
+                    }
+                }
+                Ok(())
+            }).unwrap();
+            let after = doc.clone();
+            history.undo(&mut doc).unwrap();
+            assert_eq!(doc, before, "undo seed {seed}, step {step}");
+            history.redo(&mut doc).unwrap();
+            assert_eq!(doc, after, "redo seed {seed}, step {step}");
+            if step % 4 == 3 {
+                let encoded = map_io::project::to_bytes(&doc).unwrap();
+                let loaded = map_io::project::from_bytes(&encoded).unwrap();
+                let book = loaded.book.as_ref().unwrap();
+                book.validate().unwrap();
+                let expected = doc.book.as_ref().unwrap();
+                assert_eq!(book.articles, expected.articles);
+                assert_eq!(book.links, expected.links);
+                assert_eq!(book.assets, expected.assets);
+                for id in boards {
+                    let old = expected.map(&doc, id).unwrap();
+                    let new = book.map(&loaded, id).unwrap();
+                    assert_eq!(new.events, old.events);
+                    assert_eq!(new.symbols, old.symbols);
+                    assert_eq!(new.star_chart, old.star_chart);
+                }
+                doc = loaded;
+            }
+        }
+    }
+}

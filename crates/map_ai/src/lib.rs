@@ -5,10 +5,9 @@
 //! draft before and after and applies it as one undo step, or drops it.
 //!
 //! Providers: Gemini (`generateContent` with function declarations) and
-//! OpenAI Responses, Anthropic Messages and OpenAI-compatible chat APIs. HTTPS goes through the
-//! system's `curl` (in Windows 10 and later, macOS and Linux), so no
-//! network library is built in; the key is handed to curl on its standard
-//! input, never on its command line.
+//! OpenAI Responses, Anthropic Messages and OpenAI-compatible chat APIs.
+//! Windows uses PowerShell/.NET by default, other platforms use curl.
+//! Both transports receive credentials through standard input.
 //!
 //! Every text that comes from the map is data, never an instruction (the
 //! system prompt says so); the model cannot reach the file opened, only
@@ -29,33 +28,42 @@ pub trait Transport {
     fn post(&self, url: &str, headers: &[(String, String)], body: &Value, timeout_s: u64) -> Result<(u16, Value), String>;
 }
 
+fn check_metadata(url: &str, headers: &[(String, String)]) -> Result<(), String> {
+    if url.chars().any(char::is_control) || headers.iter().any(|(key, value)| {
+        key.is_empty() || key.contains(':') || key.chars().any(char::is_control) || value.chars().any(char::is_control)
+    }) {
+        return Err("请求地址或 HTTP 请求头无效".into());
+    }
+    Ok(())
+}
+
+fn json_answer(code: u16, body: &[u8]) -> Result<(u16, Value), String> {
+    if std::env::var_os("ATLAS_AI_DEBUG").is_some() {
+        eprintln!("Atlas AI: HTTP {code}, {} response bytes", body.len());
+    }
+    let text = String::from_utf8_lossy(body);
+    let answer = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+        .map_err(|_| format!("HTTP {code}，回答不是 JSON：{}", text.chars().take(300).collect::<String>()))?;
+    Ok((code, answer))
+}
+
 /// HTTPS through the system's curl.
 pub struct Curl;
 
 impl Transport for Curl {
     fn post(&self, url: &str, headers: &[(String, String)], body: &Value, timeout_s: u64) -> Result<(u16, Value), String> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static N: AtomicU64 = AtomicU64::new(0);
-        let file = std::env::temp_dir().join(format!("atlas_ai_{}_{}.json", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
-        std::fs::write(&file, serde_json::to_vec(body).map_err(|e| e.to_string())?).map_err(|e| format!("无法写临时文件：{e}"))?;
-        // the request in curl's config syntax on stdin: the key stays off the command line
+        check_metadata(url, headers)?;
+        // Curl takes its config (including credentials) on stdin. Keep the
+        // JSON payload in a uniquely created file until the child finishes.
+        let mut file = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
+        serde_json::to_writer(&mut file, body).map_err(|e| e.to_string())?;
+        file.flush().map_err(|e| e.to_string())?;
         let q = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
         let mut cfg = format!("url = \"{}\"\nrequest = \"POST\"\nheader = \"Content-Type: application/json\"\n", q(url));
         for (k, v) in headers {
             cfg += &format!("header = \"{}: {}\"\n", q(k), q(v));
         }
-        cfg += &format!("data-binary = \"@{}\"\n", q(&file.display().to_string().replace('\\', "/")));
-        if std::env::var_os("ATLAS_AI_DEBUG").is_some() {
-            // what curl is given, the key masked
-            let mut shown = cfg.clone();
-            for (_, v) in headers {
-                if !v.is_empty() {
-                    shown = shown.replace(v.as_str(), "***");
-                }
-            }
-            let _ = std::fs::write(std::env::temp_dir().join("atlas_ai_curl.txt"), shown);
-            let _ = std::fs::copy(&file, std::env::temp_dir().join("atlas_ai_body.json"));
-        }
+        cfg += &format!("data-binary = \"@{}\"\n", q(&file.path().display().to_string().replace('\\', "/")));
         let mut cmd = std::process::Command::new(if cfg!(windows) { "curl.exe" } else { "curl" });
         // (curl's own \n in the status line: a raw line break in an argument
         // made Windows' curl refuse it with error 43)
@@ -65,75 +73,57 @@ impl Transport for Curl {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x0800_0000); // no console window
         }
-        let child = cmd.spawn();
-        let out = child.and_then(|mut c| {
-            c.stdin.take().map(|mut i| i.write_all(cfg.as_bytes())).transpose()?;
-            c.wait_with_output()
-        });
-        let _ = std::fs::remove_file(&file);
-        let out = out.map_err(|e| format!("无法运行 curl：{e}（需要系统中的 curl）"))?;
-        let text = String::from_utf8_lossy(&out.stdout).to_string();
-        let (body, code) = text.rsplit_once("@@HTTP@@").unwrap_or(("", text.as_str()));
+        let mut child = cmd.spawn().map_err(|e| format!("无法运行 curl：{e}（需要系统中的 curl）"))?;
+        let sent = child.stdin.take().expect("piped stdin").write_all(cfg.as_bytes());
+        let out = child.wait_with_output().map_err(|e| e.to_string())?;
+        sent.map_err(|e| e.to_string())?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let (body, code) = text.rsplit_once("@@HTTP@@").unwrap_or(("", &text));
         let code: u16 = code.trim().parse().unwrap_or(0);
         if code == 0 {
             return Err(format!("网络请求失败：{}", String::from_utf8_lossy(&out.stderr).trim()));
         }
-        let v: Value = serde_json::from_str(body).map_err(|_| format!("HTTP {code}，回答不是 JSON：{}", body.chars().take(300).collect::<String>()))?;
-        Ok((code, v))
+        json_answer(code, body.as_bytes())
     }
 }
 
 /// HTTPS through Windows PowerShell and .NET (every Windows has it). Windows'
 /// own curl 8.8 (Schannel) failed to reach Gemini through a proxy that
 /// renegotiates TLS ("bad argument", error 43); .NET does not. The request
-/// goes in on standard input (key included), the answer comes back in a
-/// file, as UTF-8.
+/// and credentials go through stdin as data. The UTF-8 response comes
+/// back on stdout. The child command line contains only the fixed script.
 pub struct PowerShell;
 
 impl Transport for PowerShell {
     fn post(&self, url: &str, headers: &[(String, String)], body: &Value, timeout_s: u64) -> Result<(u16, Value), String> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static N: AtomicU64 = AtomicU64::new(0);
-        let n = N.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir();
-        let (inp, outp) = (dir.join(format!("atlas_ai_{}_{n}_in.json", std::process::id())), dir.join(format!("atlas_ai_{}_{n}_out.txt", std::process::id())));
-        std::fs::write(&inp, serde_json::to_vec(body).map_err(|e| e.to_string())?).map_err(|e| format!("无法写临时文件：{e}"))?;
-        let q = |s: &str| s.replace('\'', "''");
-        let hs: Vec<String> = headers.iter().map(|(k, v)| format!("'{}' = '{}'", q(k), q(v))).collect();
-        // one line, then a blank one: read from standard input, a statement
-        // spread over lines may never run. The answer is read as UTF-8 bytes:
-        // PowerShell 5.1 took an answer without a charset (DeepSeek's) for
-        // Latin-1, and the model got its own Chinese back garbled.
-        let script = format!(
-            "$ErrorActionPreference = 'Stop'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $h = @{{ {} }}; try {{ $r = Invoke-WebRequest -Uri '{}' -Method Post -Headers $h -ContentType 'application/json; charset=utf-8' -InFile '{}' -UseBasicParsing -MaximumRedirection 0 -TimeoutSec {}; $s = [int]$r.StatusCode; $c = [Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray()) }} catch {{ if ($_.Exception.Response) {{ $s = [int]$_.Exception.Response.StatusCode; $c = (New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())).ReadToEnd() }} else {{ $s = 0; $c = $_.Exception.Message }} }}; [IO.File]::WriteAllText('{}', \"$s`n$c\", (New-Object Text.UTF8Encoding($false)))\n\n",
-            hs.join("; "),
-            q(url),
-            q(&inp.display().to_string()),
-            timeout_s,
-            q(&outp.display().to_string())
-        );
+        check_metadata(url, headers)?;
         let mut cmd = std::process::Command::new("powershell.exe");
-        cmd.args(["-NoProfile", "-NonInteractive", "-Command", "-"]).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+        cmd.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", include_str!("http.ps1")])
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000); // no console window
+            cmd.creation_flags(0x0800_0000);
         }
-        let run = cmd.spawn().and_then(|mut c| {
-            c.stdin.take().map(|mut i| i.write_all(script.as_bytes())).transpose()?;
-            c.wait_with_output()
-        });
-        let _ = std::fs::remove_file(&inp);
-        let out = run.map_err(|e| format!("无法运行 PowerShell：{e}"))?;
-        let text = std::fs::read_to_string(&outp).map_err(|_| format!("网络请求没有结果：{} {}", String::from_utf8_lossy(&out.stderr).trim(), String::from_utf8_lossy(&out.stdout).chars().take(600).collect::<String>()))?;
-        let _ = std::fs::remove_file(&outp);
-        let (code, body) = text.split_once('\n').unwrap_or((text.as_str(), ""));
-        let code: u16 = code.trim().parse().unwrap_or(0);
-        if code == 0 {
-            return Err(format!("网络请求失败：{}", body.trim()));
+        let mut child = cmd.spawn().map_err(|e| format!("无法运行 PowerShell：{e}"))?;
+        let mut input = child.stdin.take().expect("piped stdin");
+        let sent = (|| -> std::io::Result<()> {
+            serde_json::to_writer(&mut input, &json!({"url":url,"headers":headers,"timeout":timeout_s}))?;
+            input.write_all(b"\n")?;
+            serde_json::to_writer(&mut input, body)?;
+            Ok(())
+        })();
+        drop(input);
+        let output = child.wait_with_output().map_err(|e| e.to_string())?;
+        sent.map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err(format!("网络请求失败：{}", String::from_utf8_lossy(&output.stderr).trim()));
         }
-        let v: Value = serde_json::from_str(body).map_err(|_| format!("HTTP {code}，回答不是 JSON：{}", body.chars().take(300).collect::<String>()))?;
-        Ok((code, v))
+        let separator = output.stdout.iter().position(|&b| b == b'\n').ok_or("网络请求没有结果")?;
+        let code = &output.stdout[..separator];
+        let data = &output.stdout[separator + 1..];
+        let status = std::str::from_utf8(code).ok().and_then(|s| s.trim().parse::<u16>().ok()).ok_or("无效的 HTTP 状态码")?;
+        json_answer(status, data)
     }
 }
 

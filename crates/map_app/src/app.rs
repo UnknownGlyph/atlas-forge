@@ -152,11 +152,11 @@ pub struct App {
     pub(crate) draw_layers: std::cell::RefCell<crate::draw_layers::DrawLayers>,
     pub(crate) lifespan_cache: crate::lifespan_ui::LifespanCache,
 
+    pub(crate) gestures: crate::gestures::Gestures,
     pub tool: Tool,
     pub draft: Vec<LonLat>,
     /// Per draft point: snapped onto an existing boundary.
     pub draft_snap: Vec<bool>,
-    pub draft_drag: Option<crate::draw_ui::DraftDrag>,
     /// Trace along existing boundaries between snapped draft points.
     pub trace: bool,
     /// Last traced preview: (from, to) and the path.
@@ -179,11 +179,8 @@ pub struct App {
     pub brush_px: f32,
     pub brush_color_mode: bool,
     pub brush_color: egui::Color32,
-    pub brush_stroke: Vec<egui::Pos2>,
     /// The selected river, a river point being dragged, and the name being typed.
     pub selected_river: Option<map_core::doc::LineId>,
-    /// A city being dragged with the city tool.
-    pub drag_city: Option<EntityId>,
     /// Where each country label was drawn last frame (for the label tool),
     /// and a label being dragged with its offset from the pointer.
     /// Indexed by view (flat, globe): both draw labels in split view.
@@ -235,11 +232,9 @@ pub struct App {
     pub partition: crate::partition_ui::Partition,
     pub event_sel: Option<u32>,
     pub event_text: Option<(u32, String, String)>,
-    pub drag_label: Option<(EntityId, egui::Vec2)>,
     /// Free text: the selected one, one being dragged, where each was drawn
     /// (per view), the text being typed and whether to focus its field.
     pub selected_ann: Option<map_core::doc::LineId>,
-    pub drag_ann: Option<(map_core::doc::LineId, egui::Vec2)>,
     pub ann_rects: std::cell::RefCell<[Vec<(map_core::doc::LineId, egui::Rect)>; 2]>,
     pub ann_text: Option<(map_core::doc::LineId, String)>,
     pub ann_focus: bool,
@@ -251,7 +246,6 @@ pub struct App {
     pub symbol_kind: map_core::symbol::SymbolKind,
     pub(crate) pixel_tools: crate::pixel_ui::PixelTools,
     pub selected_sym: Option<map_core::doc::LineId>,
-    pub drag_sym: Option<(map_core::doc::LineId, egui::Vec2)>,
     pub sym_rects: std::cell::RefCell<[Vec<(map_core::doc::LineId, egui::Rect)>; 2]>,
     pub sym_name: Option<(map_core::doc::LineId, String)>,
     /// The character and the legend text being typed for the selected symbol.
@@ -261,18 +255,11 @@ pub struct App {
     /// The selected hatched area and the name being typed for it.
     pub selected_area: Option<map_core::doc::LineId>,
     pub area_name: Option<(map_core::doc::LineId, String)>,
-    /// The area outline point being dragged with the vertex tool.
-    pub drag_area_pt: Option<(map_core::doc::LineId, usize)>,
     /// The legend text being typed for the selected route, and for the
     /// selected area (each its own, so neither panel resets the other).
     pub route_legend: Option<(map_core::doc::LineId, String)>,
-    /// A selected river, route or area being dragged whole.
-    pub move_drag: Option<crate::select_ui::MoveDrag>,
     /// The drawn features picked with the select tool (see `select_ui`).
     pub picked: std::collections::BTreeSet<map_core::features::FeatureRef>,
-    /// The selection box being dragged: the view it is in, and its
-    /// corners in screen points.
-    pub marquee: Option<(usize, egui::Pos2, egui::Pos2)>,
     /// What was last copied (the system clipboard holds it as text too).
     pub clip: Option<map_core::arrange::Clip>,
     /// The selection panel's angle (degrees) and scale (percent).
@@ -292,12 +279,9 @@ pub struct App {
     pub area_legend: Option<(map_core::doc::LineId, String)>,
     /// The other area chosen for combining with the selected one.
     pub area_partner: Option<map_core::doc::LineId>,
-    pub drag_river: Option<(map_core::doc::LineId, usize)>,
     pub river_name: Option<(map_core::doc::LineId, String)>,
     /// With a year selected, vertex drags are dated territory changes.
     pub vertex_dated: bool,
-    /// A dated vertex drag in progress: where from, and its plan.
-    pub dated_drag: Option<(map_core::redraw::DragFrom, Option<(LonLat, Result<map_core::redraw::Plan, String>)>)>,
     /// Redraw-border preview for a candidate line (draft + snapped cursor).
     pub redraw_preview: Option<(Vec<LonLat>, Result<map_core::redraw::Plan, String>)>,
     /// A border reshape waiting for the user to apply or cancel it.
@@ -310,7 +294,6 @@ pub struct App {
     pub pending: Option<PendingEdit>,
     /// Direct (non-`edit`) changes to settings, coalesced into one undo step.
     settings_pending: Option<Document>,
-    pub drag_vertex: Option<map_core::VertexRef>,
     pub cursor: Option<LonLat>,
 
     pub layout: Layout,
@@ -393,8 +376,7 @@ pub struct App {
     pub pen: Vec<map_core::curve::CurveNode>,
     pub pen_pull: bool,
     pub pen_target: crate::curve_ui::PenTarget,
-    /// An anchor or handle being dragged, and the curve last worked on.
-    pub curve_drag: Option<crate::curve_ui::CurveDrag>,
+    /// The curve last worked on.
     pub curve_focus: Option<map_core::doc::LineId>,
     /// The style each kind of new feature is drawn in, a look copied for
     /// 粘贴样式 (with the style it followed), the style open in the
@@ -464,10 +446,10 @@ impl App {
             detail_cache: Default::default(),
             draw_layers: Default::default(),
             lifespan_cache: Default::default(),
+            gestures: Default::default(),
             tool: Tool::Select,
             draft: vec![],
             draft_snap: vec![],
-            draft_drag: None,
             trace: true,
             trace_preview: None,
             bg_edit: None,
@@ -481,9 +463,7 @@ impl App {
             brush_px: 18.0,
             brush_color_mode: false,
             brush_color: egui::Color32::from_rgba_unmultiplied(165, 79, 35, 220),
-            brush_stroke: Vec::new(),
             selected_river: None,
-            drag_city: None,
             label_rects: Default::default(),
             label_atlas: Default::default(),
             focus: None,
@@ -519,9 +499,7 @@ impl App {
             name_style: map_core::names::NameStyle::Huaxia,
             name_kind: map_core::names::NameKind::Country,
             name_seed: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_secs()),
-            drag_label: None,
             selected_ann: None,
-            drag_ann: None,
             ann_rects: Default::default(),
             ann_text: None,
             ann_focus: false,
@@ -529,33 +507,27 @@ impl App {
             symbol_kind: map_core::symbol::SymbolKind::Peak,
             pixel_tools: Default::default(),
             selected_sym: None,
-            drag_sym: None,
             sym_rects: Default::default(),
             sym_name: None,
             sym_glyph: None,
             sym_legend: None,
             selected_area: None,
             area_name: None,
-            drag_area_pt: None,
             route_legend: None,
             picked: Default::default(),
-            marquee: None,
             clip: None,
             xf_rotate: 15.0,
             xf_scale: 100.0,
             pending_copy: None,
             press_mods: egui::Modifiers::NONE,
-            move_drag: None,
             measure_pts: Vec::new(),
             measure_closed: false,
             feature_filter: String::new(),
             feature_catalog: Default::default(),
             area_legend: None,
             area_partner: None,
-            drag_river: None,
             river_name: None,
             vertex_dated: true,
-            dated_drag: None,
             redraw_preview: None,
             reshape: None,
             selected: None,
@@ -565,7 +537,6 @@ impl App {
             brush: None,
             pending: None,
             settings_pending: None,
-            drag_vertex: None,
             cursor: None,
             layout: crate::shell_ui::layout_named(&prefs.layout),
             cam2d: Camera2D::new(Projection::EqualEarth),
@@ -628,7 +599,6 @@ impl App {
             pen: Vec::new(),
             pen_pull: false,
             pen_target: crate::curve_ui::PenTarget::River,
-            curve_drag: None,
             curve_focus: None,
             draw_style: Default::default(),
             style_clip: None,
@@ -716,7 +686,6 @@ impl App {
     }
 
     fn reset_view_state(&mut self) {
-        self.pixel_tools.close_target();
         self.feature_catalog = Default::default();
         self.history.clear();
         self.book_ui=Default::default();
@@ -745,6 +714,25 @@ impl App {
 
     pub(crate) fn reset_board_view(&mut self) {
         self.stop_timeline_playback();
+        self.pixel_tools.close_target();
+        self.reset_tool_interaction();
+        self.measure_pts.clear();
+        self.measure_closed = false;
+        self.reshape = None;
+        self.pending_copy = None;
+        self.ann_text = None;
+        self.ann_focus = false;
+        self.area_partner = None;
+        self.area_name = None;
+        self.river_name = None;
+        self.sym_name = None;
+        self.sym_glyph = None;
+        self.sym_legend = None;
+        self.area_legend = None;
+        self.route_legend = None;
+        *self.label_rects.get_mut() = Default::default();
+        *self.ann_rects.get_mut() = Default::default();
+        *self.sym_rects.get_mut() = Default::default();
         self.draw_layers = Default::default();
         self.lifespan_cache = Default::default();
         self.reset_studio_navigation();
@@ -772,15 +760,11 @@ impl App {
         self.style_open = None;
         self.style_rename = None;
         self.curve_focus = None;
-        self.curve_drag = None;
         self.active_group = None;
         self.group_rename = None;
         self.picked.clear();
-        self.marquee = None;
-        self.clear_draft();
         self.selected = None;
         self.selected_face = None;
-        self.merge_first = None;
         self.brush = None;
         self.pending = None;
         self.settings_pending = None;
@@ -915,6 +899,7 @@ impl App {
         }
     }
     pub fn redo(&mut self) {
+        self.end_pending();
         let viewing = self.doc.year;
         let board=map_core::world_book::WorldBook::current(&self.doc);
         if let Some(l) = self.history.redo(&mut self.doc) {
@@ -950,6 +935,8 @@ impl App {
         }
     }
     pub(crate) fn after_history_jump(&mut self) {
+        self.gestures = Default::default();
+        self.ul.cancel_alignment();
         self.cell_edit.clear();
         self.text_edit.clear();
         self.layer_name_edit = None;
@@ -1109,12 +1096,11 @@ impl App {
             return;
         }
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            self.end_pending();
             self.land_move = Default::default();
-            self.clear_draft();
-            self.merge_first = None;
+            self.reset_tool_interaction();
             self.measure_pts.clear();
             self.measure_closed = false;
-            self.ann_path = None;
         }
         // [ and ] size the brush
         if self.brush_paint {
@@ -1135,13 +1121,20 @@ impl App {
         }
     }
 
+    fn reset_tool_interaction(&mut self) {
+        self.gestures = Default::default();
+        self.ul.cancel_alignment();
+        self.clear_draft();
+        self.redraw_preview = None;
+        self.ann_path = None;
+        self.merge_first = None;
+    }
+
     pub fn set_tool(&mut self, t: Tool) {
         self.land_move = Default::default();
         if self.tool != t {
             self.end_pending();
-            self.ann_path = None;
-            self.clear_draft();
-            self.merge_first = None;
+            self.reset_tool_interaction();
             self.tool = t;
             if t != Tool::DrawLand && matches!(self.draw_mode, crate::view::DrawMode::Province(_)) {
                 self.draw_mode = crate::view::DrawMode::AddLand;

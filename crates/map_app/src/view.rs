@@ -740,12 +740,12 @@ impl App {
                     let p = origin.and_then(|o| vg.to_lonlat(o)).unwrap_or(p);
                     if let Some((v, _)) = self.doc.topo.nearest_vertex(p, tol) {
                         self.begin_pending("移动顶点");
-                        self.drag_vertex = Some(v);
+                        self.gestures.vertex = Some(v);
                     } else if let Some((e, seg, q)) = self.doc.topo.nearest_on_edge(p, tol) {
                         self.begin_pending("插入并移动顶点");
                         match self.doc.topo.insert_vertex(e, seg, q) {
                             Ok(v) => {
-                                self.drag_vertex = Some(v);
+                                self.gestures.vertex = Some(v);
                                 if let Some(pe) = &mut self.pending {
                                     pe.changed = true;
                                 }
@@ -755,7 +755,7 @@ impl App {
                     }
                 }
                 if resp.dragged_by(Primary) {
-                    if let Some(v) = self.drag_vertex {
+                    if let Some(v) = self.gestures.vertex {
                         let mut trial = self.doc.clone();
                         match trial.topo.move_vertex(v, p) {
                             Ok(()) => {
@@ -769,7 +769,7 @@ impl App {
                         }
                     }
                 }
-                if resp.drag_stopped() && self.drag_vertex.take().is_some() {
+                if resp.drag_stopped() && self.gestures.vertex.take().is_some() {
                     self.end_pending();
                 }
                 if resp.clicked_by(Secondary) {
@@ -952,12 +952,12 @@ impl App {
                         break;
                     }
                 }
-                if let Some((_, Some((at, plan)))) = &self.dated_drag {
+                if let Some((_, Some((at, plan)))) = &self.gestures.dated_vertex {
                     if let Some(s) = vg.to_screen(*at) {
                         self.paint_plan(painter, vg, plan, s, "松开即应用");
                     }
                 }
-                let target = match self.drag_vertex {
+                let target = match self.gestures.vertex {
                     Some(v) => self.doc.topo.vertex_exists(v).then(|| self.doc.topo.position_of(v)),
                     None => self.doc.topo.nearest_vertex(h, tol).map(|x| x.1),
                 };

@@ -60,6 +60,11 @@ pub struct UnderlayState {
 }
 
 impl UnderlayState {
+    pub(crate) fn cancel_alignment(&mut self) {
+        self.drag = None;
+        self.preview = None;
+    }
+
     pub fn new(max_dim: u32) -> Self {
         Self { cache: vec![], terrain: None, max_dim, sel: None, drag: None, preview: None }
     }
@@ -203,7 +208,7 @@ impl App {
             if let (Some((i, px)), Some(p)) = (self.ul.drag.take(), ll) {
                 self.ul.preview = None;
                 if self.edit("添加配准点", move |d| {
-                    d.underlays[i].points.push(ControlPoint { px, ll: p });
+                    d.underlays.get_mut(i).ok_or("参考图不存在")?.points.push(ControlPoint { px, ll: p });
                     Ok(())
                 })
                 .is_some()
@@ -212,8 +217,7 @@ impl App {
                     self.set_status(crate::trf!("已添加配准点 {}：{}，残差均方根 {:.1} 像素", self.doc.underlays[i].points.len(), f.kind.name(), f.rms_px), false);
                 }
             }
-            self.ul.drag = None;
-            self.ul.preview = None;
+            self.ul.cancel_alignment();
             return;
         }
         let Some(i) = self.ul.sel.filter(|i| *i < self.doc.underlays.len()) else {

@@ -351,6 +351,7 @@ impl PixelTools {
     pub fn close_target(&mut self) {
         self.target = None;
         self.open = false;
+        self.placing = false;
         self.editor.finish_stroke();
         self.textures.get_mut().clear();
     }

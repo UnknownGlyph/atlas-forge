@@ -218,7 +218,7 @@ impl App {
             return;
         }
         let cur = self.draw_style_of(kind);
-        let name = cur.and_then(|s| styles.iter().find(|x| x.0 == s)).map_or("（自身外观）".to_string(), |x| x.1.clone());
+        let name = cur.and_then(|s| styles.iter().find(|x| x.0 == s)).map_or(crate::i18n::tr("（自身外观）"), |x| x.1.as_str());
         ui.label(crate::i18n::tr("样式"));
         egui::ComboBox::from_id_salt(("draw-style", kind)).selected_text(name).width(110.0).show_ui(ui, |ui| {
             if ui.selectable_label(cur.is_none(), crate::i18n::tr("（自身外观）")).on_hover_text(crate::i18n::tr("新画的要素不使用样式，外观可逐个设置")).clicked() {
@@ -255,8 +255,8 @@ impl App {
             ui.label(RichText::new(crate::i18n::tr("样式")).strong());
             let text = match (current, links.len()) {
                 (Some(s), _) => self.doc.style(s).map(|x| x.name.clone()).unwrap_or_default(),
-                (None, 1) => "（自身外观）".to_string(),
-                _ => "（多种）".to_string(),
+                (None, 1) => crate::i18n::tr("（自身外观）").to_owned(),
+                _ => crate::i18n::tr("（多种）").to_owned(),
             };
             egui::ComboBox::from_id_salt("style-row").selected_text(text).width(120.0).show_ui(ui, |ui| {
                 if choices.is_empty() {

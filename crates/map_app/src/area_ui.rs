@@ -130,7 +130,7 @@ impl App {
             if let Some((id, i, d)) = self.doc.area_point_at(q, tol).filter(|h| !self.doc.curves.contains_key(&h.0)) {
                 if border_pt.is_none_or(|b| d <= b) {
                     self.begin_pending("移动区域点");
-                    self.drag_area_pt = Some((id, i));
+                    self.gestures.area_point = Some((id, i));
                     self.selected_area = Some(id);
                     return true;
                 }
@@ -142,7 +142,7 @@ impl App {
                             if let Some(pe) = &mut self.pending {
                                 pe.changed = true;
                             }
-                            self.drag_area_pt = Some((id, i));
+                            self.gestures.area_point = Some((id, i));
                             self.selected_area = Some(id);
                         }
                         return true;
@@ -150,14 +150,14 @@ impl App {
                 }
             }
         }
-        if let Some((id, i)) = self.drag_area_pt {
+        if let Some((id, i)) = self.gestures.area_point {
             if resp.dragged_by(Primary) && self.doc.move_area_point(id, i, p).is_ok() {
                 if let Some(pe) = &mut self.pending {
                     pe.changed = true;
                 }
             }
             if resp.drag_stopped() {
-                self.drag_area_pt = None;
+                self.gestures.area_point = None;
                 self.end_pending();
             }
             return true;
@@ -190,7 +190,7 @@ impl App {
                     continue;
                 }
                 if let Some(s) = vg.to_screen(*q) {
-                    let r = if self.drag_area_pt == Some((*id, i)) { 5.0 } else { 3.5 };
+                    let r = if self.gestures.area_point == Some((*id, i)) { 5.0 } else { 3.5 };
                     painter.rect_filled(egui::Rect::from_center_size(s, Vec2::splat(r * 2.0)), 1.0, col);
                     painter.rect_stroke(egui::Rect::from_center_size(s, Vec2::splat(r * 2.0)), 1.0, Stroke::new(1.0, Color32::WHITE), egui::StrokeKind::Outside);
                 }

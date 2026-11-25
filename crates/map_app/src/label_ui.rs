@@ -354,7 +354,7 @@ impl App {
             }));
             painter.add(egui::Shape::mesh(mesh));
             if editing {
-                let strong = self.selected == Some(e) || self.drag_label.is_some_and(|d| d.0 == e);
+                let strong = self.selected == Some(e) || self.gestures.label.is_some_and(|d| d.0 == e);
                 let col = if place.is_some() { Color32::from_rgb(230, 80, 20) } else { Color32::from_gray(120) };
                 painter.rect_stroke(all, 2.0, Stroke::new(if strong { 2.0 } else { 0.8 }, col), egui::StrokeKind::Outside);
             }
@@ -366,7 +366,7 @@ impl App {
     pub fn label_input(&mut self, resp: &egui::Response, vg: &ViewGeom) {
         use egui::PointerButton::Primary;
         // free text lies on top of country labels
-        if self.drag_label.is_none() && self.annotation_input(resp, vg) {
+        if self.gestures.label.is_none() && self.annotation_input(resp, vg) {
             return;
         }
         let hit = |rects: &[(EntityId, Rect)], at: Pos2| rects.iter().rev().find(|(_, r)| r.contains(at)).map(|(e, r)| (*e, r.center()));
@@ -375,11 +375,11 @@ impl App {
             let found = origin.and_then(|o| hit(&self.label_rects.borrow()[vg.kind.index()], o).map(|(e, c)| (e, c - o)));
             if let Some((e, off)) = found {
                 self.begin_pending("移动标注");
-                self.drag_label = Some((e, off));
+                self.gestures.label = Some((e, off));
                 self.select_country(e);
             }
         }
-        if let Some((e, off)) = self.drag_label {
+        if let Some((e, off)) = self.gestures.label {
             if resp.dragged_by(Primary) {
                 if let Some(ll) = resp.interact_pointer_pos().and_then(|p| vg.to_lonlat(p + off)) {
                     if let Some(ent) = self.doc.entities.get_mut(&e) {
@@ -392,7 +392,7 @@ impl App {
                 }
             }
             if resp.drag_stopped() {
-                self.drag_label = None;
+                self.gestures.label = None;
                 self.end_pending();
                 self.set_status(crate::i18n::tr("标注已放置：所有年份相同，始终显示；国家属性中可旋转、缩放、隐藏或恢复自动"), false);
             }

@@ -164,11 +164,11 @@ impl App {
             // keep the grab offset from the symbol's own point, not its box
             if let Some((id, off)) = found.and_then(|(id, o)| self.doc.symbols.get(&id).and_then(|s| vg.to_screen(s.at)).map(|c| (id, c - o))) {
                 self.begin_pending("移动符号");
-                self.drag_sym = Some((id, off));
+                self.gestures.symbol = Some((id, off));
                 self.selected_sym = Some(id);
             }
         }
-        if let Some((id, off)) = self.drag_sym {
+        if let Some((id, off)) = self.gestures.symbol {
             if resp.dragged_by(Primary) {
                 if let Some(ll) = resp.interact_pointer_pos().and_then(|p| vg.to_lonlat(p + off)) {
                     if let Some(s) = self.doc.symbols.get_mut(&id) {
@@ -180,7 +180,7 @@ impl App {
                 }
             }
             if resp.drag_stopped() {
-                self.drag_sym = None;
+                self.gestures.symbol = None;
                 self.end_pending();
             }
             return;

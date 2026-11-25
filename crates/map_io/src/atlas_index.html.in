@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{name} 地图集</title>
+<style>
+body{{font-family:system-ui,"Microsoft YaHei",sans-serif;margin:24px auto;max-width:1200px;padding:0 16px;color:#222;background:#fff}}
+h1{{margin-bottom:4px}}
+nav a{{margin-right:16px}}
+figure{{margin:0 0 32px}}
+img{{max-width:100%;border:1px solid #ccc}}
+figcaption{{color:#555;margin-top:4px}}
+</style>
+<h1>{name} 地图集</h1>
+<p>{layouts} 个版式，{years}，共 {maps} 幅。</p>

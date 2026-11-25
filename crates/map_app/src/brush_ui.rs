@@ -15,25 +15,25 @@ impl App {
         use egui::PointerButton::Primary;
         if resp.drag_started_by(Primary) {
             let origin = resp.ctx.input(|i| i.pointer.press_origin()).unwrap_or(pos);
-            self.brush_stroke = vec![origin];
+            self.gestures.brush_stroke = vec![origin];
         }
-        if resp.dragged_by(Primary) && !self.brush_stroke.is_empty() {
+        if resp.dragged_by(Primary) && !self.gestures.brush_stroke.is_empty() {
             let step = (self.brush_px * 0.25).max(1.0);
-            if self.brush_stroke.last().is_none_or(|l| l.distance(pos) >= step) {
-                self.brush_stroke.push(pos);
+            if self.gestures.brush_stroke.last().is_none_or(|l| l.distance(pos) >= step) {
+                self.gestures.brush_stroke.push(pos);
             }
         }
-        if resp.drag_stopped() && !self.brush_stroke.is_empty() {
-            self.brush_stroke.push(pos);
+        if resp.drag_stopped() && !self.gestures.brush_stroke.is_empty() {
+            self.gestures.brush_stroke.push(pos);
             self.commit_brush(vg);
         } else if resp.clicked_by(Primary) {
-            self.brush_stroke = vec![pos];
+            self.gestures.brush_stroke = vec![pos];
             self.commit_brush(vg);
         }
     }
 
     fn commit_brush(&mut self, vg: &ViewGeom) {
-        let stroke = std::mem::take(&mut self.brush_stroke);
+        let stroke = std::mem::take(&mut self.gestures.brush_stroke);
         if self.bg_edit.is_some() {
             return self.set_status(crate::i18n::tr("正在处理上一次绘制，请稍候"), true);
         }
@@ -70,10 +70,10 @@ impl App {
     pub fn draw_brush(&self, painter: &egui::Painter, vg: &ViewGeom, hover: Option<LonLat>) {
         let fill = if self.brush_color_mode { self.brush_color } else { self.preview_fill() };
         let r = self.brush_px;
-        for w in self.brush_stroke.windows(2) {
+        for w in self.gestures.brush_stroke.windows(2) {
             painter.line_segment([w[0], w[1]], Stroke::new(r * 2.0, fill));
         }
-        for p in &self.brush_stroke {
+        for p in &self.gestures.brush_stroke {
             painter.circle_filled(*p, r, fill);
         }
         if let Some(s) = hover.and_then(|h| vg.to_screen(h)) {

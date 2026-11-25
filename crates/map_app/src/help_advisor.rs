@@ -4,14 +4,14 @@ use crate::{
 };
 use eframe::egui;
 use map_core::Document;
-use std::{sync::mpsc, time::Duration};
+use std::{sync::mpsc, time::{Duration, Instant}};
 
 #[derive(Default)]
 pub(crate) struct Advisor {
     prompt: String,
     pub online: bool,
     turns: Vec<(String, Answer)>,
-    job: Option<(String, mpsc::Receiver<Answer>)>,
+    job: Option<(String, Instant, mpsc::Receiver<Answer>)>,
 }
 
 struct Answer {
@@ -177,7 +177,7 @@ impl Advisor {
         }
         let (tx, rx) = mpsc::channel();
         self.prompt.clear();
-        self.job = Some((question.clone(), rx));
+        self.job = Some((question.clone(), Instant::now(), rx));
         let catalog = actions::table()
             .iter()
             .filter(|a| !a.hint.is_empty())
@@ -214,10 +214,10 @@ impl Advisor {
     }
 
     pub(crate) fn body(&mut self, ui: &mut egui::Ui) -> (bool, Option<Act>) {
-        if let Some((_, job)) = &self.job {
+        if let Some((_, _, job)) = &self.job {
             match job.try_recv() {
                 Ok(answer) => {
-                    if let Some((question, _)) = self.job.take() {
+                    if let Some((question, _, _)) = self.job.take() {
                         if self.turns.len() == 32 {
                             self.turns.remove(0);
                         }
@@ -252,9 +252,12 @@ impl Advisor {
                         }
                         ui.separator();
                     }
-                    if let Some((question, _)) = &self.job {
+                    if let Some((question, started, _)) = &self.job {
                         ui.strong(question);
-                        ui.spinner();
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.weak(crate::ai_ui::elapsed_label(*started));
+                        });
                     }
                 });
         }

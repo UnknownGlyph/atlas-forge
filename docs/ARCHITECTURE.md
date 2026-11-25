@@ -5,6 +5,20 @@
 
 ---
 
+## 0.2.x 创作模块与维护边界（2026-11-25）
+
+| 模块与入口 | 数据归属和生命周期 | 验证入口 |
+|---|---|---|
+| 地图工具与撤销，`map_app` | `App` 负责窗口、文档及调度。`Gestures` 集中保存当前画板和工具的拖动句柄。切工具先结算已经发生的可撤销编辑，再清除预览。进入其他画板时同时清除屏幕命中框、测量和像素编辑目标。 | `frame_replay::switching_boards_and_tools_discards_old_drag_targets` 用同 ID 的两条河流验证切换。 |
+| 世界资料、世界观与独立画板，`world_book`、`worldview` | 活动画板位于顶层 `Document`，其余画板由 `WorldBook` 保存。地图对象引用带所属画板 ID。文档、事件、附件和画板链接按项目 ID 关联。存盘前在副本上切回根画板。 | `map_io/tests/world_book.rs`、`worldview.rs`、`soak.rs` |
+| 气候、环境和图表，`climate`、`environment`、`visualization` | 每张画板的参考结果、区域范围和可视化配置随该画板保存。界面管理后台作业、当前预览和 GPU 纹理。 | `map_io/tests/climate.rs`、`environment.rs`、`authoring_flow.rs` |
+| 星图与模型，`star_chart`、`map_io::model` | 轨道参数保存在画板的星图里，模型通过附件 ID 引用资源。星图的兼容格式取决于实际使用的轨道字段。 | `map_io/tests/star_chart.rs`、`world_book.rs` |
+| 像素材质、区域和外交，`pixel_art`、`paper`、`diplomacy` | 像素标志引用符号里的像素图，画布及外交资料由对应画板持有。打开工程后，共同图案可在内存中共享。 | `map_io/tests/pixel_art.rs`、`paper_and_diplomacy.rs` |
+| 自动化和 AI，`map_api::Session`、`map_ai::Transport` | 查询、草稿和正式采用有各自的入口。四种模型协议共用草稿操作。Windows 默认传输用固定的 PowerShell/.NET 程序通过管道接收地址、请求头和正文，走 curl 的路径使用临时请求文件。 | `map_api/tests`、`map_ai/tests/transport.rs` 及各提供商的离线会话回放 |
+| 出版和性能记录，`map_io::dossier`、`atlas`、`map_perf` | 出版器拥有 HTML/CSS、图片和字体的格式规则，翻译目录只供界面查找消息。性能录制将帧、操作、资源采样写为独立的 JSONL。 | 地图集导出测试、资料导出测试、`map_perf` 报告测试 |
+
+`map_io::project::content_version` 决定每个画板所需的最低读取版本，根图和非活动画板都参与判断。`mixed_board_edits_survive_navigation_undo_and_reopen` 补充原有的地理拓扑压力测试，交叉执行资料链接、像素标志、星图编辑、画板切换、撤销重做与保存回读。
+
 ## 1. 可行性与关键技术难点
 
 整体可行。功能面很宽，但真正决定成败、且后期难以修改的难点集中在少数几处：
