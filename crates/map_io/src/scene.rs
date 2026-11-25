@@ -533,10 +533,9 @@ pub fn build_scene(doc: &Document, theme: &ThemeResult, o: &ExportOptions) -> Sc
             add_line(&mut s, &pts, c, wd * k);
             // a map theme's bands along the coast, widest first (sorted below)
             if class == 3 && st.coast_glow_width > 0.0 {
-                let pieces: Vec<Vec<P2>> = s.lines[from..].iter().map(|l| l.pts.clone()).collect();
                 for (c, f) in st.glow_bands().into_iter().zip([2.0, 4.0 / 3.0, 2.0 / 3.0]) {
-                    for p in &pieces {
-                        s.glow.push(SceneLine { color: c, width: st.coast_glow_width * f * k, pts: p.clone(), dash: None });
+                    for line in &s.lines[from..] {
+                        s.glow.push(SceneLine { color: c, width: st.coast_glow_width * f * k, pts: line.pts.clone(), dash: None });
                     }
                 }
             }
@@ -1280,12 +1279,6 @@ fn dot_poly(c: [f32; 2], r: f32) -> Vec<P2> {
         .collect()
 }
 
-/// The largest 1, 2 or 5 × 10ⁿ not above `t`.
-fn nice_length(t: f64) -> f64 {
-    let p = 10f64.powf(t.log10().floor());
-    [5.0, 2.0, 1.0].into_iter().map(|m| m * p).find(|v| *v <= t).unwrap_or(p)
-}
-
 /// A length for the scale bar: whole numbers without decimals.
 fn km_text(v: f64) -> String {
     if v >= 1.0 {
@@ -1320,7 +1313,7 @@ fn furniture(s: &mut Scene, doc: &Document, m: &Mapper, o: &ExportOptions, k: f3
     let bar_top = h - 34.0 * k;
     if o.scale_bar {
         if let Some(kpp) = km_px(m.h * 0.5) {
-            let nice = nice_length(160.0 * k as f64 * kpp);
+            let nice = map_core::measure::scale_bar_length(160.0 * k as f64 * kpp);
             let len = (nice / kpp) as f32;
             let bh = 6.0 * k;
             // in its usual place (lower right), or where the layout view put its box
@@ -1464,7 +1457,7 @@ fn swatch(key: &LegendKey, r: [f32; 4], column: [f32; 4], k: f32) -> Vec<LegendP
             }
             let ring = vec![[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
             let gap = (spacing * k).clamp(3.0, h * 0.45);
-            let (stripes, dots) = map_core::area::fill_pattern(&[ring.clone()], *pattern, gap, *angle, None);
+            let (stripes, dots) = map_core::area::fill_pattern(std::slice::from_ref(&ring), *pattern, gap, *angle, None);
             for [p, q] in stripes {
                 parts.push(LegendPart::Line(SceneLine { color: *color, width: map_core::area::HATCH_WIDTH * k, pts: px(&[p, q]), dash: None }));
             }

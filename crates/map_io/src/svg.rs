@@ -1,6 +1,8 @@
 //! SVG export: real vector paths (even-odd fill for holes), text labels, legend.
 
+use crate::markup::escape as esc;
 use crate::scene::{legend_layout, text_width, title_box, LegendPart, Scene, SceneLine};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use std::fmt::Write;
 
 /// The fonts the picture asks for when a label names none (or the one it
@@ -17,10 +19,6 @@ fn op(c: [u8; 4]) -> String {
         format!(" fill-opacity=\"{:.3}\"", c[3] as f32 / 255.0)
     }
 }
-fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
-}
-
 /// A line as a path (round caps and joins, dashed when it says so).
 fn line_path(l: &SceneLine) -> String {
     let mut d = String::new();
@@ -98,7 +96,7 @@ pub fn render(s: &Scene) -> String {
     // the hill shading over the land, as a picture
     if let Some(px) = &s.shade {
         if let Some(png) = png_bytes(s.width, s.height, px) {
-            let _ = writeln!(o, r#"<image id="hill-shading" x="0" y="0" width="{}" height="{}" href="data:image/png;base64,{}"/>"#, s.width, s.height, base64(&png));
+            let _ = writeln!(o, r#"<image id="hill-shading" x="0" y="0" width="{}" height="{}" href="data:image/png;base64,{}"/>"#, s.width, s.height, STANDARD.encode(png));
         }
     }
     o.push_str("</g>\n<g id=\"lines\" fill=\"none\" stroke-linejoin=\"round\" stroke-linecap=\"round\">\n");
@@ -239,33 +237,4 @@ fn png_bytes(w: u32, h: u32, rgba: &[u8]) -> Option<Vec<u8>> {
     let mut out = std::io::Cursor::new(Vec::new());
     img.write_to(&mut out, image::ImageFormat::Png).ok()?;
     Some(out.into_inner())
-}
-
-/// Standard base64 (with padding).
-fn base64(b: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut o = String::with_capacity(b.len().div_ceil(3) * 4);
-    for c in b.chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
-        for k in 0..4 {
-            if k <= c.len() {
-                o.push(T[(n >> (18 - 6 * k) & 63) as usize] as char);
-            } else {
-                o.push('=');
-            }
-        }
-    }
-    o
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn base64_as_everyone_writes_it() {
-        assert_eq!(super::base64(b""), "");
-        assert_eq!(super::base64(b"f"), "Zg==");
-        assert_eq!(super::base64(b"fo"), "Zm8=");
-        assert_eq!(super::base64(b"foo"), "Zm9v");
-        assert_eq!(super::base64(b"foobar"), "Zm9vYmFy");
-    }
 }

@@ -6,13 +6,20 @@ use crate::view::{ViewGeom, ViewKind};
 use eframe::egui::{self, Color32, Stroke};
 use map_core::geom::LonLat;
 use map_core::projection::Projection;
+use map_core::terrain::Terrain;
 use map_core::underlay::{Blob, ControlPoint, Underlay};
+use map_core::Document;
 use map_render::camera::{Camera2D, GlobeCamera};
 use map_render::underlay::{RgbaImage, UnderlayFrame, UnderlayUniform};
 use std::sync::{mpsc, Arc};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// At most this many pixels are kept on the GPU per image (~250 MB with mips).
 const MAX_PIXELS: u64 = 48 << 20;
+
+// The GPU may still hold the last board's texture when UI caches are reset.
+static REFERENCE_KEYS: AtomicU64 = AtomicU64::new(1);
+static TERRAIN_KEYS: AtomicU64 = AtomicU64::new(0x7E77_A1A0_0000_0000);
 
 enum Decode {
     Running(mpsc::Receiver<Result<map_io::underlay::Decoded, String>>),
@@ -26,9 +33,22 @@ struct Entry {
     state: Decode,
 }
 
+impl Entry {
+    fn new(blob: Blob, state: Decode) -> Self {
+        Self { blob, key: REFERENCE_KEYS.fetch_add(1, Ordering::Relaxed), state }
+    }
+}
+
+struct TerrainRaster {
+    source: Arc<Terrain>,
+    radius_km: f64,
+    key: u64,
+    image: Arc<RgbaImage>,
+}
+
 pub struct UnderlayState {
     cache: Vec<Entry>,
-    next_key: u64,
+    terrain: Option<TerrainRaster>,
     /// Largest texture side the GPU accepts.
     pub max_dim: u32,
     /// Underlay shown in the panel and moved by the alignment tool.
@@ -41,7 +61,29 @@ pub struct UnderlayState {
 
 impl UnderlayState {
     pub fn new(max_dim: u32) -> Self {
-        Self { cache: vec![], next_key: 1, max_dim, sel: None, drag: None, preview: None }
+        Self { cache: vec![], terrain: None, max_dim, sel: None, drag: None, preview: None }
+    }
+
+    fn current_terrain(&self, doc: &Document) -> Option<&TerrainRaster> {
+        let source = doc.terrain.as_ref()?;
+        self.terrain.as_ref().filter(|raster| {
+            Arc::ptr_eq(&raster.source, source) && raster.radius_km.to_bits() == doc.radius().to_bits()
+        })
+    }
+
+    pub(crate) fn refresh_terrain(&mut self, doc: &Document) {
+        if self.current_terrain(doc).is_some() {
+            return;
+        }
+        self.terrain = doc.terrain.as_ref().filter(|_| doc.style.hillshade > 0.0).map(|source| {
+            let radius_km = doc.radius();
+            TerrainRaster {
+                source: source.clone(),
+                radius_km,
+                key: TERRAIN_KEYS.fetch_add(1, Ordering::Relaxed),
+                image: Arc::new(RgbaImage { w: source.w, h: source.h, pixels: source.shade(radius_km, 1.0) }),
+            }
+        });
     }
 }
 
@@ -65,8 +107,7 @@ impl App {
                     let _ = tx.send(map_io::underlay::decode(&bytes, max_dim, MAX_PIXELS));
                     ctx.request_repaint();
                 });
-                self.ul.cache.push(Entry { blob: u.image.clone(), key: self.ul.next_key, state: Decode::Running(rx) });
-                self.ul.next_key += 1;
+                self.ul.cache.push(Entry::new(u.image.clone(), Decode::Running(rx)));
             }
         }
         for e in &mut self.ul.cache {
@@ -88,16 +129,15 @@ impl App {
     pub fn underlay_frames(&self, kind: ViewKind, cam: &Camera2D, globe: &GlobeCamera, w: f32, h: f32) -> Vec<UnderlayFrame> {
         let mut out = vec![];
         // the terrain's hill shading, over the land, under the lines
-        if let (Some(t), Some((ptr, img))) = (self.doc.terrain.as_ref(), self.terrain_img.as_ref()) {
-            let k = self.doc.style.hillshade.clamp(0.0, 1.0);
-            if k > 0.0 {
-                let g = t.georef();
-                let uniform = match kind {
-                    ViewKind::Flat => UnderlayUniform::for_2d(&g, [t.w, t.h], k, cam, w, h),
-                    ViewKind::Globe => UnderlayUniform::for_globe(&g, [t.w, t.h], k, globe, w, h),
-                };
-                out.push(UnderlayFrame { key: 0x7E77_A1A0_0000_0000 ^ *ptr as u64, image: img.clone(), uniform, above_land: true });
-            }
+        let opacity = self.doc.style.hillshade.clamp(0.0, 1.0);
+        if let Some(raster) = self.ul.current_terrain(&self.doc).filter(|_| opacity > 0.0) {
+            let georef = raster.source.georef();
+            let size = [raster.image.w, raster.image.h];
+            let uniform = match kind {
+                ViewKind::Flat => UnderlayUniform::for_2d(&georef, size, opacity, cam, w, h),
+                ViewKind::Globe => UnderlayUniform::for_globe(&georef, size, opacity, globe, w, h),
+            };
+            out.push(UnderlayFrame { key: raster.key, image: raster.image.clone(), uniform, above_land: true });
         }
         for i in 0..self.doc.underlays.len() {
             let u = self.underlay_shown(i);
@@ -369,5 +409,57 @@ impl App {
                 Ok(())
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use map_core::world_book::{WorldBook, ROOT};
+
+    #[test]
+    fn hillshade_tracks_radius_and_boards_and_defers_hidden_work() {
+        let mut doc = Document::new("root", 10.0);
+        doc.terrain = Some(Arc::new(Terrain::new(4, 2, vec![1, 2, 4, 8, 2, 4, 8, 16])));
+        doc.style.hillshade = 0.0;
+        let child = WorldBook::edit(&mut doc).add_map(Document::default());
+        let mut state = UnderlayState::new(4096);
+        state.refresh_terrain(&doc);
+        assert!(state.terrain.is_none());
+
+        doc.style.hillshade = 1.0;
+        state.refresh_terrain(&doc);
+        let raster = state.current_terrain(&doc).unwrap();
+        let (key, image) = (raster.key, raster.image.clone());
+        doc.style.hillshade = 0.5;
+        state.refresh_terrain(&doc);
+        assert_eq!(state.current_terrain(&doc).unwrap().key, key);
+
+        doc.meta.planet_radius_km = 100_000.0;
+        assert!(state.current_terrain(&doc).is_none());
+        state.refresh_terrain(&doc);
+        let resized = state.current_terrain(&doc).unwrap();
+        assert_ne!(resized.key, key);
+        assert_ne!(resized.image.pixels, image.pixels);
+        let resized_key = resized.key;
+
+        WorldBook::switch(&mut doc, child, None).unwrap();
+        state.refresh_terrain(&doc);
+        assert!(state.terrain.is_none());
+        WorldBook::switch(&mut doc, ROOT, None).unwrap();
+        state.refresh_terrain(&doc);
+        assert_ne!(state.current_terrain(&doc).unwrap().key, resized_key);
+    }
+
+    #[test]
+    fn replacing_reference_cache_allocates_new_texture_keys() {
+        let blob = Blob::default();
+        let entry = || Entry::new(blob.clone(), Decode::Running(mpsc::channel().1));
+        let mut state = UnderlayState::new(4096);
+        state.cache.push(entry());
+        let previous = state.cache[0].key;
+        state = UnderlayState::new(4096);
+        state.cache.push(entry());
+        assert_ne!(state.cache[0].key, previous);
     }
 }

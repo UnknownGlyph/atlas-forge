@@ -84,6 +84,12 @@ impl Readback {
     }
 }
 
+fn mean_channel_difference(a: &[u8], b: &[u8]) -> f64 {
+    assert_eq!(a.len(), b.len());
+    let total: u64 = a.iter().zip(b).map(|(&x, &y)| u64::from(x.abs_diff(y))).sum();
+    total as f64 / a.len() as f64
+}
+
 fn main() {
     let path = std::env::args_os()
         .nth(1)
@@ -171,6 +177,7 @@ fn main() {
         geometry: scene.chunks().clone(),
         colors: (scene.color_gen, scene.colors.clone()),
         overlay: (1, Arc::new(vec![])),
+        hover_overlay: (1, Arc::new(vec![])),
         glow: (1, Arc::new(glow)),
         graticule: true,
         draw_overlay: true,
@@ -180,9 +187,12 @@ fn main() {
     };
     let mut gpu = MapGpu::new(&device, format, 4);
     let mut camera = GlobeCamera::default();
-    let mut draw = |frame: &FrameData, readback: Option<&Readback>| {
+    let mut draw = |frame: &FrameData, readback: Option<&Readback>, glass: Option<map_render::gpu::GlassPatch>| {
         let mut encoder = device.create_command_encoder(&Default::default());
         gpu.prepare(&device, &queue, &mut encoder, frame);
+        if let Some(patch) = glass {
+            gpu.prepare_glass(&device, &queue, &mut encoder, frame, patch);
+        }
         {
             let attachments = [Some(RenderPassColorAttachment {
                 view: &texture,
@@ -198,6 +208,9 @@ fn main() {
                 ..Default::default()
             });
             gpu.paint(&mut pass, frame.view_id);
+            if glass.is_some() {
+                gpu.paint_glass(&mut pass, frame.view_id);
+            }
         }
         if let Some(r) = readback {
             r.copy(&mut encoder);
@@ -207,7 +220,7 @@ fn main() {
             .poll(PollType::wait_indefinitely())
             .expect("frame complete");
     };
-    draw(&frame, None);
+    draw(&frame, None, None);
     for (label, detail) in [
         ("vector", GlobeDetail::Full),
         ("moving", GlobeDetail::Moving),
@@ -219,7 +232,7 @@ fn main() {
             camera.center_lat = 25.0 * (i as f64 / 12.0).sin();
             frame.uniform = ViewUniform::for_globe(&camera, 0.0, w as f32, h as f32, &colors);
             let t = Instant::now();
-            draw(&frame, None);
+            draw(&frame, None, None);
             if i >= 8 {
                 times.push(t.elapsed().as_secs_f64() * 1000.0);
             }
@@ -239,17 +252,12 @@ fn main() {
     frame.uniform = ViewUniform::for_globe(&camera, 0.0, w as f32, h as f32, &colors);
     let mut render_pixels = |frame: &mut FrameData, detail| {
         frame.globe_detail = detail;
-        draw(frame, Some(&readback));
+        draw(frame, Some(&readback), None);
         readback.read(&device)
     };
     let full = render_pixels(&mut frame, GlobeDetail::Full);
     let moving = render_pixels(&mut frame, GlobeDetail::Moving);
-    let error = full
-        .iter()
-        .zip(&moving)
-        .map(|(&a, &b)| u64::from(a.abs_diff(b)))
-        .sum::<u64>() as f64
-        / full.len() as f64;
+    let error = mean_channel_difference(&full, &moving);
     assert!(
         error < 7.0,
         "moving globe does not match full geometry: {error:.2}"
@@ -261,16 +269,28 @@ fn main() {
     let restored = render_pixels(&mut frame, GlobeDetail::Full);
     assert!(restored == full, "restored chunks differ from the original rendering");
 
+    let mut selection = Vec::new();
+    let mut hovered = Vec::new();
+    let visible_line = [[172.0, 21.0], [178.0, 25.0]];
+    tess::push_polyline(&visible_line, tess::class::SELECT, &mut selection);
+    tess::push_polyline(&visible_line, tess::class::HOVER, &mut hovered);
+    let mut combined = selection.clone();
+    combined.extend_from_slice(&hovered);
+    frame.overlay = (2, Arc::new(combined));
+    let before_split = render_pixels(&mut frame, GlobeDetail::Full);
+    assert!(before_split != full, "the test overlay is outside the visible globe");
+    frame.overlay = (3, Arc::new(selection));
+    frame.hover_overlay = (2, Arc::new(hovered));
+    let after_split = render_pixels(&mut frame, GlobeDetail::Full);
+    assert!(before_split == after_split, "separate hover lines changed overlay compositing");
+    frame.overlay = (4, Arc::new(vec![]));
+    frame.hover_overlay = (3, Arc::new(vec![]));
+
     frame.colors.0 += 1;
     frame.colors.1 = Arc::new(vec![[0.92, 0.18, 0.16, 1.0]; frame.colors.1.len()]);
     let invalidated = render_pixels(&mut frame, GlobeDetail::Moving);
     let updated = render_pixels(&mut frame, GlobeDetail::Full);
-    let diagnostic = invalidated
-        .iter()
-        .zip(&updated)
-        .map(|(&a, &b)| u64::from(a.abs_diff(b)))
-        .sum::<u64>() as f64
-        / updated.len() as f64;
+    let diagnostic = mean_channel_difference(&invalidated, &updated);
     let mid = (h as usize / 2 * w as usize + w as usize / 2) * 4;
     assert!(
         diagnostic < 0.05,
@@ -278,5 +298,27 @@ fn main() {
         &invalidated[mid..mid + 4],
         &updated[mid..mid + 4]
     );
-    println!("Date line screenshot error: {error:.2}/255 per channel; removed and restored chunks verified; stale colors correctly fall back to vectors");
+    let patch = map_render::gpu::GlassPatch {
+        bounds: [0.35, 0.4, 0.65, 0.6], pixels_per_point: 1.0, dark: false, backdrop: [0.8; 3],
+    };
+    let mut glass_pixels = |frame: &FrameData| {
+        draw(frame, Some(&readback), Some(patch));
+        readback.read(&device)
+    };
+    let red = glass_pixels(&frame);
+    assert!(red != updated, "glass was not drawn");
+    let slots = frame.colors.1.len();
+    frame.colors = (frame.colors.0 + 1, Arc::new(vec![[0.1, 0.4, 0.9, 1.0]; slots]));
+    let blue = glass_pixels(&frame);
+    assert!(red != blue, "color change did not reach the viewport");
+    frame.colors = (frame.colors.0 + 1, Arc::new(vec![[0.92, 0.18, 0.16, 1.0]; slots * 4 + 256]));
+    assert!(glass_pixels(&frame) == red, "resizing the color buffer changed the glass or viewport");
+    frame.globe_detail = GlobeDetail::Prewarm;
+    draw(&frame, None, None);
+    frame.globe_detail = GlobeDetail::Moving;
+    draw(&frame, Some(&readback), None);
+    let resized_motion = readback.read(&device);
+    let motion_error = mean_channel_difference(&updated, &resized_motion);
+    assert!(motion_error < 7.0, "resized colors did not reach the motion atlas: {motion_error:.2}");
+    println!("Date line screenshot error: {error:.2}/255 per channel; chunk restoration, overlay order, glass and color invalidation verified");
 }

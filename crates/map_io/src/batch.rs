@@ -5,6 +5,7 @@
 
 use crate::scene::{self, ExportOptions};
 use map_core::doc::Document;
+use map_core::playback::Sample;
 use map_core::theme::FixedScale;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -250,10 +251,10 @@ enum Sink {
 }
 
 impl Sink {
-    fn open(job: &AnimJob, w: u32, h: u32) -> Result<Sink, String> {
-        match job.kind {
+    fn open(kind: Animation, path: &Path, frame_ms: u32, w: u32, h: u32) -> Result<Sink, String> {
+        match kind {
             Animation::Gif => {
-                let f = std::fs::File::create(&job.path).map_err(|e| format!("{}: {e}", job.path.display()))?;
+                let f = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
                 let mut enc = image::codecs::gif::GifEncoder::new_with_speed(std::io::BufWriter::new(f), 10);
                 enc.set_repeat(image::codecs::gif::Repeat::Infinite).map_err(|e| e.to_string())?;
                 Ok(Sink::Gif(enc))
@@ -261,10 +262,10 @@ impl Sink {
             Animation::Mp4 => {
                 let child = std::process::Command::new("ffmpeg")
                     .args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{w}x{h}")])
-                    .args(["-framerate", &format!("1000/{}", job.frame_ms.max(1)), "-i", "-"])
+                    .args(["-framerate", &format!("1000/{}", frame_ms.max(1)), "-i", "-"])
                     // H.264 needs even sizes; 30 fps output so players seek smoothly
                     .args(["-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2,fps=30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart"])
-                    .arg(&job.path)
+                    .arg(path)
                     .stdin(std::process::Stdio::piped())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::piped())
@@ -275,11 +276,11 @@ impl Sink {
         }
     }
 
-    fn push(&mut self, img: &image::RgbaImage, ms: u32, frame_ms: u32) -> Result<(), String> {
+    fn push(&mut self, img: image::RgbaImage, ms: u32, frame_ms: u32) -> Result<(), String> {
         match self {
             Sink::Gif(enc) => {
                 let delay = image::Delay::from_numer_denom_ms(ms, 1);
-                enc.encode_frame(image::Frame::from_parts(img.clone(), 0, 0, delay)).map_err(|e| format!("GIF 编码失败：{e}"))
+                enc.encode_frame(image::Frame::from_parts(img, 0, 0, delay)).map_err(|e| format!("GIF 编码失败：{e}"))
             }
             Sink::Ffmpeg(child) => {
                 use std::io::Write;
@@ -323,44 +324,63 @@ impl Sink {
 /// rendered a batch at a time on all cores. On cancel or error the partial
 /// file is removed; cancel returns Ok(None).
 pub fn export_animation(doc: &Document, job: &AnimJob, done: &AtomicUsize, cancel: &AtomicBool) -> Result<Option<PathBuf>, String> {
-    write_animation(doc,job,None,done,cancel)
+    let mut schedule: Vec<_> = job.years.iter().map(|&year| Sample { year, hold_ms: job.frame_ms }).collect();
+    if let Some(last) = schedule.last_mut() {
+        last.hold_ms = job.frame_ms.saturating_mul(2);
+    }
+    write_animation(doc, job, &schedule, job.frame_ms, done, cancel)
 }
 
 pub fn export_scheduled(
     doc: &Document,
     job: &AnimJob,
-    schedule: &[map_core::playback::Sample],
+    schedule: &[Sample],
     done: &AtomicUsize,
     cancel: &AtomicBool,
 ) -> Result<Option<PathBuf>, String> {
     if schedule.iter().any(|s| s.hold_ms == 0 || s.hold_ms % 40 != 0) {
         return Err("视频时间表的间隔无效。".into());
     }
-    let mut job=job.clone();
-    job.years=schedule.iter().map(|s|s.year).collect();
-    job.frame_ms=40;
-    write_animation(doc,&job,Some(schedule),done,cancel)
+    write_animation(doc, job, schedule, 40, done, cancel)
 }
 
-fn write_animation(doc:&Document, output:&AnimJob, schedule:Option<&[map_core::playback::Sample]>,done:&AtomicUsize,cancel:&AtomicBool)->Result<Option<PathBuf>,String>{
+fn write_animation(
+    doc: &Document, job: &AnimJob, schedule: &[Sample], frame_ms: u32,
+    done: &AtomicUsize, cancel: &AtomicBool,
+) -> Result<Option<PathBuf>, String> {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
-    let session = NEXT.fetch_add(1,Ordering::Relaxed);
-    let mut job = output.clone();
-    job.path = output.path.with_file_name(format!(".atlas-render-{}-{session}.{}",std::process::id(),output.kind.ext()));
-    // Keep the requested file intact until the whole export has succeeded.
-    let result = render_animation(doc,&job,schedule,done,cancel);
-    if matches!(&result,Ok(Some(_))) && !cancel.load(Ordering::Relaxed) {
-        let commit = std::fs::rename(&job.path,&output.path).map_err(|e|format!("视频写入失败：{e}"));
-        if commit.is_ok() { return Ok(Some(output.path.clone())); }
-        let _=std::fs::remove_file(&job.path);
-        commit?;
+    let session = NEXT.fetch_add(1, Ordering::Relaxed);
+    let temporary = job.path.with_file_name(format!(".atlas-render-{}-{session}.{}", std::process::id(), job.kind.ext()));
+    let mut sink = None;
+    let rendered = render_frames(doc, job, schedule, done, cancel, |img, hold_ms| {
+        let encoder = match &mut sink {
+            Some(encoder) => encoder,
+            None => sink.insert(Sink::open(job.kind, &temporary, frame_ms, img.width(), img.height())?),
+        };
+        encoder.push(img, hold_ms, frame_ms)
+    });
+    let result = match rendered {
+        Ok(true) => sink.unwrap().finish().and_then(|()| {
+            if cancel.load(Ordering::Relaxed) { return Ok(None); }
+            std::fs::rename(&temporary, &job.path).map_err(|e| format!("视频写入失败：{e}"))?;
+            Ok(Some(job.path.clone()))
+        }),
+        stopped => {
+            if let Some(encoder) = sink { encoder.abort(); }
+            stopped.map(|_| None)
+        }
+    };
+    if !matches!(result, Ok(Some(_))) {
+        let _ = std::fs::remove_file(&temporary);
     }
-    let _=std::fs::remove_file(&job.path);
-    result.map(|_|None)
+    result
 }
 
-fn render_animation(doc: &Document, job: &AnimJob, schedule: Option<&[map_core::playback::Sample]>, done: &AtomicUsize, cancel: &AtomicBool) -> Result<Option<PathBuf>, String> {
-    if job.years.is_empty() {
+fn render_frames(
+    doc: &Document, job: &AnimJob, schedule: &[Sample], done: &AtomicUsize, cancel: &AtomicBool,
+    mut push: impl FnMut(image::RgbaImage, u32) -> Result<(), String>,
+) -> Result<bool, String> {
+    if schedule.is_empty() {
         return Err("没有要导出的年份".into());
     }
     let pixels = u64::from(job.opts.width).saturating_mul(u64::from(job.opts.height)).max(1);
@@ -368,46 +388,23 @@ fn render_animation(doc: &Document, job: &AnimJob, schedule: Option<&[map_core::
     let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).min(memory_workers);
     let fixed = map_core::theme::fixed_scale(doc);
     let fixed = fixed.as_ref();
-    let mut sink: Option<Sink> = None;
-    let fail = |sink: Option<Sink>, e: String| {
-        if let Some(s) = sink {
-            s.abort();
-        }
-        let _ = std::fs::remove_file(&job.path);
-        e
-    };
-    for (ci, chunk) in job.years.chunks(workers).enumerate() {
+    for chunk in schedule.chunks(workers) {
         if cancel.load(Ordering::Relaxed) {
-            fail(sink, String::new());
-            return Ok(None);
+            return Ok(false);
         }
         let frames: Vec<Result<image::RgbaImage, String>> = std::thread::scope(|s| {
-            let hs: Vec<_> = chunk.iter().map(|y| s.spawn(move || render_frame(doc, *y, job, fixed))).collect();
+            let hs: Vec<_> = chunk.iter().map(|sample| s.spawn(move || render_frame(doc, sample.year, job, fixed))).collect();
             hs.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("渲染线程意外退出".into()))).collect()
         });
-        for (k, f) in frames.into_iter().enumerate() {
+        for (frame, sample) in frames.into_iter().zip(chunk) {
             if cancel.load(Ordering::Relaxed) {
-                fail(sink,String::new());
-                return Ok(None);
+                return Ok(false);
             }
-            let img = match f {
-                Ok(i) => i,
-                Err(e) => return Err(fail(sink, e)),
-            };
-            if sink.is_none() {
-                sink = Some(Sink::open(job, img.width(), img.height()).map_err(|e| fail(None, e))?);
-            }
-            let index = ci * workers + k;
-            let last = index + 1 == job.years.len();
-            let ms = schedule.map_or_else(|| if last { job.frame_ms.saturating_mul(2) } else { job.frame_ms }, |s|s[index].hold_ms);
-            if let Err(e) = sink.as_mut().unwrap().push(&img, ms, job.frame_ms) {
-                return Err(fail(sink, e));
-            }
+            push(frame?, sample.hold_ms)?;
             done.fetch_add(1, Ordering::Relaxed);
         }
     }
-    sink.unwrap().finish().map_err(|e| fail(None, e))?;
-    Ok(Some(job.path.clone()))
+    Ok(true)
 }
 
 #[cfg(test)]

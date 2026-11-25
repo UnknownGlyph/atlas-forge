@@ -35,6 +35,7 @@ pub fn to_bytes(doc: &Document) -> Result<Vec<u8>, String> {
     stored.format_version = version;
     let body = rmp_serde::to_vec_named(&stored).map_err(|e| format!("序列化失败: {e}"))?;
     let packed = lz4_flex::compress_prepend_size(&body);
+    drop(body);
     let mut out = Vec::with_capacity(packed.len() + 12);
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(&version.to_le_bytes());
@@ -80,16 +81,19 @@ pub fn from_bytes(bytes: &[u8]) -> Result<Document, String> {
     }
     let body = lz4_flex::decompress_size_prepended(&bytes[12..]).map_err(|e| format!("解压失败: {e}"))?;
     let mut doc: Document = rmp_serde::from_slice(&body).map_err(|e| format!("文件损坏: {e}"))?;
+    drop(body);
     if let Some(book) = doc.book.as_mut() {
         book.validate()?;
         let boards = &mut Arc::make_mut(book).boards;
         let ids: Vec<_> = boards.keys().copied().collect();
         for id in ids {
-            if let Some(board) = boards.get_mut(&id).and_then(|board|board.doc.as_mut()) { restore(Arc::make_mut(board), version)?; }
+            if let Some(board) = boards.get_mut(&id).and_then(|board| board.doc.as_mut()) {
+                restore(Arc::make_mut(board))?;
+            }
         }
         WorldBook::switch(&mut doc, ROOT, None)?;
     }
-    restore(&mut doc, version)?;
+    restore(&mut doc)?;
     Ok(doc)
 }
 
@@ -99,7 +103,7 @@ fn validate_generated(doc: &Document) -> Result<(), String> {
     Ok(())
 }
 
-fn restore(doc: &mut Document, version: u32) -> Result<(), String> {
+fn restore(doc: &mut Document) -> Result<(), String> {
     if doc.home_view.is_some_and(|view| !view.valid()) {
         return Err("工程默认视角的经纬度无效".into());
     }
@@ -108,21 +112,19 @@ fn restore(doc: &mut Document, version: u32) -> Result<(), String> {
     if let Some(p) = &doc.climate { p.validate_storage()?; }
     validate_generated(doc)?;
     if let Some(chart) = &doc.star_chart { chart.validate()?; }
-    migrate(doc, version);
-    if doc.symbols.values().any(|symbol| symbol.pixels.is_some()) {
-        let mut seen = std::collections::HashSet::new();
-        let shared: Vec<_> = doc.symbols.iter().filter_map(|(&id, symbol)| {
-            let art = symbol.pixels.as_ref()?;
-            if let Some(same) = seen.get(art) {
-                Some((id, Arc::clone(same)))
-            } else {
-                seen.insert(art.clone());
-                None
-            }
-        }).collect();
-        for (id, art) in shared {
-            doc.symbols.get_mut(&id).unwrap().pixels = Some(art);
+    doc.format_version = FORMAT_VERSION;
+    let mut seen = std::collections::HashSet::new();
+    let shared: Vec<_> = doc.symbols.iter().filter_map(|(&id, symbol)| {
+        let art = symbol.pixels.as_ref()?;
+        if let Some(same) = seen.get(art) {
+            Some((id, Arc::clone(same)))
+        } else {
+            seen.insert(art.clone());
+            None
         }
+    }).collect();
+    for (id, art) in shared {
+        doc.symbols.get_mut(&id).unwrap().pixels = Some(art);
     }
     // merges before the fix could leave a unit its own parent
     doc.drop_self_parents();
@@ -136,9 +138,7 @@ fn restore(doc: &mut Document, version: u32) -> Result<(), String> {
     ensure_rev_above(max_rev);
     let ids: Vec<_> = doc.topo.faces.keys().copied().collect();
     for f in ids {
-        let mut face = doc.topo.faces[&f].clone();
-        face.rev = map_core::topo::next_rev();
-        doc.topo.faces.insert(f, face);
+        doc.topo.faces.get_mut(&f).unwrap().rev = map_core::topo::next_rev();
     }
     Ok(())
 }
@@ -150,16 +150,9 @@ pub(crate) fn without_revs(d: &Document) -> Document {
     let mut d = d.clone();
     let ids: Vec<_> = d.topo.faces.keys().copied().collect();
     for f in ids {
-        let mut face = d.topo.faces[&f].clone();
-        face.rev = 0;
-        d.topo.faces.insert(f, face);
+        d.topo.faces.get_mut(&f).unwrap().rev = 0;
     }
     d
-}
-
-/// Hook for future format migrations.
-fn migrate(doc: &mut Document, _from: u32) {
-    doc.format_version = FORMAT_VERSION;
 }
 
 /// Save atomically: write a temp file, flush it to disk, then rename over

@@ -19,6 +19,7 @@ name = "atlas-script"
 path = "src/bin/atlas-script.rs"
 
 [dependencies]
+base64.workspace = true
 map_core.workspace = true
 map_io.workspace = true
 serde_json.workspace = true

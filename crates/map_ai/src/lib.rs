@@ -186,8 +186,11 @@ fn gemini_schema(v: &Value) -> Value {
             "type" => {
                 let t = match x {
                     Value::Array(ts) => {
-                        let ts: Vec<&str> = ts.iter().filter_map(Value::as_str).filter(|t| *t != "null").collect();
-                        if ts.len() == 1 { ts[0] } else { "string" }
+                        let mut types = ts.iter().filter_map(Value::as_str).filter(|t| *t != "null");
+                        match (types.next(), types.next()) {
+                            (Some(only), None) => only,
+                            _ => "string",
+                        }
                     }
                     Value::String(t) => t.as_str(),
                     _ => "string",
@@ -211,11 +214,9 @@ fn gemini_schema(v: &Value) -> Value {
 }
 
 fn shorten(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.to_string()
-    } else {
-        format!("{}……（已截断，共 {} 字）", s.chars().take(n).collect::<String>(), s.chars().count())
-    }
+    let mut chars = s.char_indices();
+    let Some((end, _)) = chars.nth(n) else { return s.to_owned() };
+    format!("{}……（已截断，共 {} 字）", &s[..end], n + 1 + chars.count())
 }
 
 /// Run `task` on the session with the model: the model calls tools until it

@@ -343,7 +343,7 @@ impl WorldBook {
             let mut archive = doc.book.take().unwrap();
             let book = Arc::make_mut(&mut archive);
             let next = book.boards.get_mut(&id).unwrap().doc.take().unwrap();
-            let previous = std::mem::replace(doc, (*next).clone());
+            let previous = std::mem::replace(doc, Arc::unwrap_or_clone(next));
             book.boards.get_mut(&active).unwrap().doc = Some(Arc::new(previous));
             book.current = id;
             doc.book = Some(archive);

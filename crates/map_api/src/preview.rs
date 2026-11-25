@@ -75,7 +75,8 @@ pub fn render(s: &Session, args: &Value, ctx: &Context) -> ApiResult {
         };
         o.bounds = Some(projected_bounds(&o, &pts).ok_or_else(|| ApiError::BadRequest("聚焦的实体在该年没有领土".into()))?);
     }
-    map_io::batch::write_one(&d, format, &o, s.font.as_deref(), &path).map_err(ApiError::Failed)?;
+    let font = s.preview_font.get_or_init(map_io::png::find_system_font);
+    map_io::batch::write_one(&d, format, &o, font.as_deref(), &path).map_err(ApiError::Failed)?;
 
     // where things are in the image
     let pm = PixelMap::new(&o);

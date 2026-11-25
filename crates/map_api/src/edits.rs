@@ -137,11 +137,6 @@ fn field_value(kind: FieldKind, value: &Value) -> Result<Option<FieldValue>, Api
 }
 
 impl Session {
-    /// The draft (made from the world on the first edit).
-    fn draft_mut(&mut self) -> &mut Document {
-        self.draft.get_or_insert_with(|| self.doc.clone())
-    }
-
     /// Answer a request that may edit: `edit.*` and `draft.*` change or
     /// report on the draft; anything else is answered as by [`Session::handle`].
     pub fn handle_mut(&mut self, req: &Value) -> Value {
@@ -150,9 +145,10 @@ impl Session {
             return self.handle(req);
         }
         let id = req.get("id").cloned().unwrap_or(Value::Null);
-        let args = req.get("args").cloned().unwrap_or(json!({}));
+        let empty = Value::Object(serde_json::Map::new());
+        let args = req.get("args").unwrap_or(&empty);
         let out = if args.is_object() {
-            self.context(req.get("context")).and_then(|ctx| self.edit(op, &args, &ctx))
+            self.context(req.get("context")).and_then(|ctx| self.edit(op, args, &ctx))
         } else {
             Err(ApiError::BadRequest("args 必须是对象".into()))
         };
@@ -189,7 +185,7 @@ impl Session {
         // worked on a copy set to the request's year and layer, kept only when it holds
         let (year0, layer0) = (self.doc.year, self.doc.active_layer);
         // (the draft is made only by an edit that holds)
-        let mut d = self.draft.clone().unwrap_or_else(|| self.doc.clone());
+        let mut d = self.doc().clone();
         d.set_layer_and_year(ctx.layer, ctx.year).map_err(ApiError::BadRequest)?;
         let when = ctx.year.map_or("所有年份".to_string(), |y| format!("{y} 年起"));
         let (result, note) = match op {
@@ -366,7 +362,7 @@ impl Session {
         };
         d.topo.validate().map_err(|e| ApiError::Failed(format!("编辑后拓扑无效，未采用：{e}")))?;
         d.set_layer_and_year(layer0, year0).map_err(ApiError::Failed)?;
-        *self.draft_mut() = d;
+        self.draft = Some(d);
         self.log.push(note.clone());
         Ok(json!({"done": note, "result": result, "edits_in_draft": self.log.len()}))
     }

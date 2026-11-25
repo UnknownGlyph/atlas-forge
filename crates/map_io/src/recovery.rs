@@ -66,7 +66,12 @@ pub fn write_crash_log(dir: &Path, text: &str) -> std::io::Result<PathBuf> {
 
 /// Flush a new file next to `path`, then atomically replace `path`.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::{ErrorKind, Write};
+    use std::io::Write;
+    write_atomic_with(path, |file| file.write_all(bytes))
+}
+
+pub(crate) fn write_atomic_with(path: &Path, write: impl FnOnce(&mut File) -> std::io::Result<()>) -> std::io::Result<()> {
+    use std::io::ErrorKind;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
@@ -81,7 +86,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
             Err(error) => return Err(error),
         }
     };
-    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    let written = write(&mut file).and_then(|()| file.sync_all());
     drop(file);
     let result = written.and_then(|()| fs::rename(&temporary, path));
     if result.is_err() {
@@ -224,7 +229,15 @@ mod tests {
                 });
             }
         });
-        assert!(contents.contains(&fs::read(&path).unwrap()));
+        let committed = fs::read(&path).unwrap();
+        assert!(contents.contains(&committed));
+        let failed = write_atomic_with(&path, |file| {
+            use std::io::Write;
+            file.write_all(b"incomplete header")?;
+            Err(std::io::Error::other("payload failed"))
+        });
+        assert!(failed.is_err());
+        assert_eq!(fs::read(&path).unwrap(), committed);
         assert_eq!(fs::read(&old_temporary).unwrap(), b"earlier save");
         let occupied = dir.join("directory.atlas");
         fs::create_dir(&occupied).unwrap();

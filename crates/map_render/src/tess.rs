@@ -807,6 +807,29 @@ mod tests {
     }
 
     #[test]
+    fn switching_and_editing_boards_matches_fresh_geometry() {
+        use map_core::world_book::{WorldBook, ROOT};
+
+        let mut doc = map_core::sample::grid_world(20, 12, 4, 42);
+        let child = WorldBook::edit(&mut doc).add_map(Document::default());
+        let mut cache = SceneCache::default();
+        for board in [ROOT, child, ROOT, child, ROOT] {
+            WorldBook::switch(&mut doc, board, None).unwrap();
+            cache.update_geometry(&doc, 0.0);
+            let mut fresh = SceneCache::default();
+            fresh.update_geometry(&doc, 0.0);
+            assert_eq!(fill_signature(&cache), fill_signature(&fresh));
+            assert_eq!(line_signature(&cache), line_signature(&fresh));
+            if board == child && cache.vertex_count() == 0 {
+                let ring = [(1.0, 1.0), (4.0, 1.0), (2.0, 4.0)].map(|(x, y)| LonLat::new(x, y));
+                doc.add_ring_face(&ring, FaceKind::Land).unwrap();
+                cache.update_geometry(&doc, 0.0);
+                assert!(cache.vertex_count() > 0);
+            }
+        }
+    }
+
+    #[test]
     fn chunked_updates_equal_a_full_rebuild() {
         use map_core::history::History;
         use map_core::sample::Rng;

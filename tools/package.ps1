@@ -16,17 +16,23 @@ $target = Join-Path $root "target\package"
 if (-not $NoBuild) {
     $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
     $flags = @("--remap-path-prefix=$root=atlas-forge", "--remap-path-prefix=$cargoHome=cargo", "-Clink-arg=/PDBALTPATH:%_PDB%")
-    $env:CARGO_ENCODED_RUSTFLAGS = $flags -join [char]0x1f
-    $env:CARGO_TARGET_DIR = $target
-    & "$PSScriptRoot\cargo-msvc.cmd" build --locked --release -p map_app -p map_api -p map_ai -p map_perf
-    $code = $LASTEXITCODE
-    Remove-Item Env:\CARGO_ENCODED_RUSTFLAGS, Env:\CARGO_TARGET_DIR
-    if ($code -ne 0) { throw "构建失败" }
+    $previousFlags = $env:CARGO_ENCODED_RUSTFLAGS
+    $previousTarget = $env:CARGO_TARGET_DIR
+    try {
+        $env:CARGO_ENCODED_RUSTFLAGS = $flags -join [char]0x1f
+        $env:CARGO_TARGET_DIR = $target
+        & "$PSScriptRoot\cargo-msvc.cmd" build --locked --release -p map_app -p map_api -p map_ai -p map_perf
+        if ($LASTEXITCODE -ne 0) { throw "构建失败" }
+    } finally {
+        $env:CARGO_ENCODED_RUSTFLAGS = $previousFlags
+        $env:CARGO_TARGET_DIR = $previousTarget
+    }
 }
 $bin = Join-Path $target "release"
 $name = "AtlasForge-$version-windows-x64"
 $dist = Join-Path $root "dist"
 $run = Join-Path $target ("stage-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $run | Out-Null
 $out = Join-Path $run $name
 New-Item -ItemType Directory -Force (Join-Path $out "示例"), (Join-Path $out "fonts") | Out-Null
 $programs = "atlas.exe", "atlas-query.exe", "atlas-mcp.exe", "atlas-agent.exe", "atlas-script.exe", "atlas-perf.exe"
@@ -86,4 +92,8 @@ New-Item -ItemType Directory -Force -Path $dist | Out-Null
 $stagedZip = Join-Path $run "$name.zip"
 Compress-Archive -LiteralPath $out -DestinationPath $stagedZip
 Move-Item -LiteralPath $stagedZip -Destination $zip -Force
+$stage = (Resolve-Path -LiteralPath $run).ProviderPath
+if ([IO.Path]::GetDirectoryName($stage) -eq (Resolve-Path -LiteralPath $target).ProviderPath -and [IO.Path]::GetFileName($stage) -match '^stage-[0-9a-f]{32}$') {
+    Remove-Item -Recurse -LiteralPath $stage -Force -ErrorAction Continue
+}
 Write-Host "已生成 $zip（$([math]::Round((Get-Item $zip).Length / 1MB, 1)) MB）"

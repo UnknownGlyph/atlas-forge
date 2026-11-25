@@ -87,16 +87,16 @@ fn main() {
         let them = ms(t);
         assert!(!th.legend.is_empty());
 
-        let dir = std::env::temp_dir().join("atlas_bench.atlas");
+        let scratch = tempfile::tempdir().expect("benchmark directory");
+        let path = scratch.path().join("atlas_bench.atlas");
         let t = Instant::now();
-        map_io::project::save(&dir, &doc).unwrap();
+        map_io::project::save(&path, &doc).unwrap();
         let save = ms(t);
-        let size = std::fs::metadata(&dir).unwrap().len() as f64 / 1024.0;
+        let size = std::fs::metadata(&path).unwrap().len() as f64 / 1024.0;
         let t = Instant::now();
-        let back = map_io::project::load(&dir).unwrap();
+        let back = map_io::project::load(&path).unwrap();
         let load = ms(t);
         assert_eq!(back.topo.faces.len(), doc.topo.faces.len());
-        let _ = std::fs::remove_file(&dir);
 
         // drawing over existing land: local splice (falls back to a whole
         // rebuild) vs always rebuilding the whole world
@@ -223,7 +223,8 @@ fn history(nx: usize, ny: usize, events: usize, refine_km: Option<f64>) {
     println!("- 整理地块：合并 {merged} 个，{:.0} ms", ms(t));
 
     doc.set_year(None);
-    let path = std::env::temp_dir().join("atlas_history_bench.atlas");
+    let scratch = tempfile::tempdir().expect("benchmark directory");
+    let path = scratch.path().join("atlas_history_bench.atlas");
     let t = Instant::now();
     map_io::project::save(&path, &doc).unwrap();
     let save = ms(t);
@@ -234,9 +235,7 @@ fn history(nx: usize, ny: usize, events: usize, refine_km: Option<f64>) {
     assert_eq!(back.owner_changes, doc.owner_changes);
     // ATLAS_BENCH_KEEP: leave the world there (to open it in the application)
     if std::env::var_os("ATLAS_BENCH_KEEP").is_some() {
-        println!("- 世界保留在 {}", path.display());
-    } else {
-        let _ = std::fs::remove_file(&path);
+        println!("- 世界保留在 {}", scratch.keep().join("atlas_history_bench.atlas").display());
     }
 }
 

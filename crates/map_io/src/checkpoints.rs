@@ -4,7 +4,7 @@ use crate::{project, recovery};
 use map_core::Document;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -198,13 +198,13 @@ impl Store {
         if header.len() > MAX_HEADER {
             return Err("保存点名称过长".into());
         }
-        let mut bytes = Vec::with_capacity(12 + header.len() + payload.len());
-        bytes.extend_from_slice(MAGIC);
-        bytes.extend_from_slice(&(header.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(&header);
-        bytes.extend_from_slice(payload);
         let _lock = self.lock().map_err(|e| e.to_string())?;
-        recovery::write_atomic(&self.path(&entry.id)?, &bytes).map_err(|e| e.to_string())?;
+        recovery::write_atomic_with(&self.path(&entry.id)?, |file| {
+            file.write_all(MAGIC)?;
+            file.write_all(&(header.len() as u32).to_le_bytes())?;
+            file.write_all(&header)?;
+            file.write_all(payload)
+        }).map_err(|e| e.to_string())?;
         if entry.kind == Kind::Automatic {
             self.trim_locked(keep)?;
         }
@@ -265,8 +265,9 @@ impl Store {
             if out.exists() {
                 continue;
             }
-            let bytes = fs::read(self.path(&entry.id)?).map_err(|e| e.to_string())?;
-            recovery::write_atomic(&out, &bytes).map_err(|e| e.to_string())?;
+            let mut source = File::open(self.path(&entry.id)?).map_err(|e| e.to_string())?;
+            recovery::write_atomic_with(&out, |file| io::copy(&mut source, file).map(|_| ()))
+                .map_err(|e| e.to_string())?;
         }
         destination.trim_locked(keep)
     }

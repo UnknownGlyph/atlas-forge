@@ -8,12 +8,6 @@ use crate::view::{ViewGeom, ViewKind};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Pos2, Rect, Stroke, Vec2};
 use map_core::geom::LonLat;
 
-/// The largest 1, 2 or 5 × 10ⁿ not above `t`.
-fn nice(t: f64) -> f64 {
-    let p = 10f64.powf(t.log10().floor());
-    [5.0, 2.0, 1.0].into_iter().map(|m| m * p).find(|v| *v <= t).unwrap_or(p)
-}
-
 impl App {
     /// The scale bar and north arrow, in the lower left of a view.
     pub fn draw_furniture(&self, painter: &egui::Painter, vg: &ViewGeom) {
@@ -28,7 +22,7 @@ impl App {
         if !km_per_px.is_finite() || km_per_px <= 0.0 {
             return;
         }
-        let len_km = nice(km_per_px * (r.width() as f64 * 0.22).min(180.0));
+        let len_km = map_core::measure::scale_bar_length(km_per_px * (r.width() as f64 * 0.22).min(180.0));
         let len_px = (len_km / km_per_px) as f32;
         let ink = Color32::from_gray(30);
         let paper = Color32::from_rgba_unmultiplied(255, 255, 255, 200);

@@ -14,9 +14,6 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Build
-        run: cargo build --workspace --release --all-targets
-      - name: Test
-        run: cargo test --workspace --release --no-fail-fast
-      - name: Clippy
-        run: cargo clippy --workspace --release --all-targets
+      - name: Build, test and lint
+        shell: cmd
+        run: tools\check.cmd

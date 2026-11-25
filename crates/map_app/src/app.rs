@@ -61,6 +61,65 @@ pub struct PendingEdit {
 
 type TestWorld = Result<(Document, Option<map_core::testworld::TestWorldReport>), String>;
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct Selection {
+    entity: Option<EntityId>,
+    face: Option<FaceId>,
+    merge: Option<FaceId>,
+}
+
+#[derive(Default)]
+struct Highlight {
+    selection: Selection,
+    faces: HashSet<FaceId>,
+}
+
+impl Highlight {
+    fn update(&mut self, doc: &Document, selection: Selection, ownership_changed: bool) -> bool {
+        if selection == self.selection && !(selection.entity.is_some() && ownership_changed) {
+            return false;
+        }
+        self.selection = selection;
+        self.faces.clear();
+        if let Some(entity) = selection.entity {
+            self.faces.extend(doc.faces_of_tree(entity));
+        } else {
+            self.faces.extend(selection.face);
+        }
+        self.faces.extend(selection.merge);
+        true
+    }
+}
+
+#[cfg(test)]
+mod highlight_tests {
+    use super::*;
+
+    #[test]
+    fn reuses_selection_until_ownership_or_selection_changes() {
+        let mut doc = map_core::sample::demo_world();
+        let (&face, &entity) = doc.owner.iter().next().unwrap();
+        let mut highlight = Highlight::default();
+        let selection = Selection { entity: Some(entity), ..Selection::default() };
+        assert!(highlight.update(&doc, selection, false));
+        assert!(highlight.faces.contains(&face));
+        assert!(!highlight.update(&doc, selection, false));
+        doc.assign(face, None).unwrap();
+        assert!(highlight.update(&doc, selection, true));
+        assert!(!highlight.faces.contains(&face));
+        let face_selection = Selection { face: Some(face), ..Selection::default() };
+        assert!(highlight.update(&doc, face_selection, false));
+        assert_eq!(highlight.faces, HashSet::from([face]));
+        assert!(!highlight.update(&doc, face_selection, true));
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct OverlayKey {
+    geometry: u64,
+    focus: Option<(u32, u64)>,
+}
+
 pub struct App {
     pub doc: Document,
     pub history: History,
@@ -76,15 +135,16 @@ pub struct App {
     pub fixed_scale: Option<theme::FixedScale>,
     fixed_src: Option<Document>,
     pub overlay: (u64, Arc<Vec<LineInstance>>),
+    pub hover_overlay: (u64, Arc<Vec<LineInstance>>),
+    hover_key: Option<(FaceId, u64)>,
+    highlight: Highlight,
     /// The coast bands, and the line generation they were made from.
     pub glow: (u64, Arc<Vec<LineInstance>>),
     glow_src: Option<(u64, bool)>,
-    /// The terrain's hill shading as a picture, and the terrain it is of.
-    pub terrain_img: Option<(usize, Arc<map_render::underlay::RgbaImage>)>,
-    overlay_key: Option<(Vec<FaceId>, Option<FaceId>, u64, Option<(u32, u64)>)>,
+    overlay_key: Option<OverlayKey>,
     /// Boundary lines of the overlay layer and the document state they were
     /// built from (topology, layers, ownership, entities, year, style).
-    layer_lines: Arc<Vec<LineInstance>>,
+    layer_lines: Vec<LineInstance>,
     layer_src: Option<(Document, f64)>,
     pub labels: Vec<(EntityId, map_core::labels::LabelPath)>,
     label_cache: map_core::labels::LabelCache,
@@ -389,11 +449,13 @@ impl App {
             fixed_scale: None,
             fixed_src: None,
             overlay: (0, Arc::new(vec![])),
+            hover_overlay: (0, Arc::new(vec![])),
+            hover_key: None,
+            highlight: Highlight::default(),
             glow: (0, Arc::new(vec![])),
             glow_src: None,
-            terrain_img: None,
             overlay_key: None,
-            layer_lines: Arc::new(vec![]),
+            layer_lines: vec![],
             layer_src: None,
             labels: vec![],
             label_cache: Default::default(),
@@ -925,10 +987,11 @@ impl App {
     /// rebuilt when its inputs changed.
     pub(crate) fn refresh_derived(&mut self) {
         let d = &self.doc;
-        let theme_stale = self.theme_src.as_ref().is_none_or(|s| {
-            !(s.owner.ptr_eq(&d.owner)
-                && s.entities.ptr_eq(&d.entities)
-                && s.values.ptr_eq(&d.values)
+        let ownership_changed = self.theme_src.as_ref().is_none_or(|s| {
+            !s.owner.ptr_eq(&d.owner) || !s.entities.ptr_eq(&d.entities)
+        });
+        let theme_stale = ownership_changed || self.theme_src.as_ref().is_some_and(|s| {
+            !(s.values.ptr_eq(&d.values)
                 && s.fields.ptr_eq(&d.fields)
                 && s.topo.faces.ptr_eq(&d.topo.faces)
                 && s.layers.ptr_eq(&d.layers)
@@ -939,18 +1002,13 @@ impl App {
                 && s.year == d.year)
         });
         self.last_stats = self.scene.update_geometry(&self.doc, self.cam2d.lon0);
-        let mut highlight: HashSet<FaceId> = HashSet::new();
-        if let Some(e) = self.selected {
-            highlight.extend(self.doc.faces_of_tree(e));
-        } else if let Some(f) = self.selected_face {
-            highlight.insert(f);
-        }
-        highlight.extend(self.merge_first);
-        let sel: Vec<FaceId> = {
-            let mut v: Vec<FaceId> = highlight.iter().copied().collect();
-            v.sort();
-            v
+        let exists = |face: &FaceId| d.topo.faces.contains_key(face);
+        let selection = Selection {
+            entity: self.selected,
+            face: self.selected_face.filter(exists),
+            merge: self.merge_first.filter(exists),
         };
+        let selection_changed = self.highlight.update(d, selection, ownership_changed);
         if theme_stale {
             self.refresh_fixed_scale();
             self.theme = theme::evaluate_with(&self.doc, self.fixed_scale.as_ref());
@@ -962,6 +1020,7 @@ impl App {
         let layer_stale = self.layer_src.as_ref().is_none_or(|(s, l0)| {
             let d = &self.doc;
             !(s.topo.edges.ptr_eq(&d.topo.edges)
+                && s.topo.nodes.ptr_eq(&d.topo.nodes)
                 && s.topo.faces.ptr_eq(&d.topo.faces)
                 && s.layers.ptr_eq(&d.layers)
                 && s.owner.ptr_eq(&d.owner)
@@ -972,37 +1031,44 @@ impl App {
                 && *l0 == lon0)
         });
         if layer_stale {
-            self.layer_lines = Arc::new(match self.doc.overlay_layer() {
+            self.layer_lines = match self.doc.overlay_layer() {
                 Some(l) => map_render::tess::edge_lines(&self.doc, &self.doc.layer_border_edges(l), lon0, map_render::tess::class::LAYER_OVERLAY),
                 None => vec![],
-            });
+            };
             self.layer_src = Some((self.doc.clone(), lon0));
         }
-        let key = (sel.clone(), self.hover_face, self.scene.line_gen, self.focus_view.as_ref().zip(self.focus).map(|(v, id)| (id, v.gen)));
-        if layer_stale || theme_stale || self.last_stats.fill_rebuilt || self.overlay_key.as_ref() != Some(&key) {
+        let key = OverlayKey {
+            geometry: self.scene.geometry_gen,
+            focus: self.focus_view.as_ref().zip(self.focus).map(|(view, id)| (id, view.gen)),
+        };
+        let focus_changed = self.overlay_key.is_none_or(|previous| previous.focus != key.focus);
+        let highlight = &self.highlight.faces;
+        if theme_stale || self.last_stats.fill_rebuilt || selection_changed || focus_changed {
             let faded = self.focus_colors(&self.theme.face_colors);
-            self.scene.update_colors(self.doc.style.ocean, faded.as_ref().unwrap_or(&self.theme.face_colors), &highlight);
+            self.scene.update_colors(self.doc.style.ocean, faded.as_ref().unwrap_or(&self.theme.face_colors), highlight);
+        }
+        if layer_stale || selection_changed || self.overlay_key != Some(key) {
             // the other layer's boundaries go under the selection outline
-            let mut lines: Vec<LineInstance> = self.layer_lines.as_ref().clone();
+            let mut lines = self.layer_lines.clone();
             // so does the land a local view's years changed
             if let Some(v) = &self.focus_view {
                 lines.extend(map_render::tess::outline_lines(&self.doc, &v.changed, lon0, map_render::tess::class::FOCUS));
             }
-            lines.extend(map_render::tess::outline_lines(&self.doc, &highlight, lon0, map_render::tess::class::SELECT));
-            if let Some(h) = self.hover_face.filter(|h| !highlight.contains(h)) {
-                lines.extend(map_render::tess::outline_lines(&self.doc, &HashSet::from([h]), lon0, map_render::tess::class::HOVER));
-            }
+            lines.extend(map_render::tess::outline_lines(&self.doc, highlight, lon0, map_render::tess::class::SELECT));
             self.overlay = (self.overlay.0 + 1, Arc::new(lines));
             self.overlay_key = Some(key);
         }
-        // the terrain's hill shading, made once per terrain
-        let tkey = self.doc.terrain.as_ref().map(|t| Arc::as_ptr(t) as usize);
-        if tkey != self.terrain_img.as_ref().map(|x| x.0) {
-            self.terrain_img = self.doc.terrain.as_ref().map(|t| {
-                let px = t.shade(self.doc.radius(), 1.0);
-                (Arc::as_ptr(t) as usize, Arc::new(map_render::underlay::RgbaImage { w: t.w, h: t.h, pixels: px }))
+        let hover_key = self.hover_face
+            .filter(|face| !highlight.contains(face) && self.doc.topo.faces.contains_key(face))
+            .map(|face| (face, key.geometry));
+        if hover_key != self.hover_key {
+            let lines = hover_key.map_or_else(Vec::new, |(face, _)| {
+                map_render::tess::outline_lines(&self.doc, &HashSet::from([face]), lon0, map_render::tess::class::HOVER)
             });
+            self.hover_overlay = (self.hover_overlay.0 + 1, Arc::new(lines));
+            self.hover_key = hover_key;
         }
+        self.ul.refresh_terrain(&self.doc);
         // the coast bands of a map theme, from the coast lines
         let glow_key = (self.scene.line_gen, self.doc.style.coast_glow_width > 0.0);
         if self.glow_src != Some(glow_key) {

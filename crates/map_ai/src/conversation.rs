@@ -14,21 +14,17 @@ struct Turn {
     calls: Vec<Call>,
 }
 
-struct Conversation<'a> {
-    config: &'a Config,
+struct Conversation {
+    api: Api,
     url: String,
     headers: Vec<(String, String)>,
-    tools: Vec<Value>,
-    history: Vec<Value>,
-    instructions: &'a str,
+    body: Value,
 }
 
-impl<'a> Conversation<'a> {
-    fn new(config: &'a Config, prompt: String, instructions: &'a str, drawing: bool) -> Self {
-        let specs = map_api::mcp::tool_specs()
-            .into_iter()
-            .filter(|t| drawing && t["name"] != "draft_save");
-        let tools = specs.map(|mut t| {
+fn drawing_tools(api: Api) -> Vec<Value> {
+    map_api::mcp::tool_specs().into_iter()
+        .filter(|t| t["name"] != "draft_save")
+        .map(|mut t| {
             // Files are written by the host when asked by the user. The
             // model can request a preview without giving it a filename.
             if t["name"] == "preview_render" {
@@ -36,22 +32,17 @@ impl<'a> Conversation<'a> {
                     p.remove("path");
                 }
             }
-            match config.api {
+            match api {
                 Api::Gemini => json!({"name": t["name"], "description": t["description"], "parameters": gemini_schema(&t["parameters"])}),
                 Api::OpenAi => json!({"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["parameters"]}}),
                 Api::Responses => json!({"type":"function","name":t["name"],"description":t["description"],"parameters":t["parameters"],"strict":false}),
                 Api::Anthropic => json!({"name":t["name"],"description":t["description"],"input_schema":t["parameters"]}),
             }
-        }).collect();
-        let initial = match config.api {
-            Api::Gemini => json!({"role":"user","parts":[{"text":prompt}]}),
-            _ => json!({"role":"user","content":prompt}),
-        };
-        let mut history = Vec::new();
-        if config.api == Api::OpenAi {
-            history.push(json!({"role":"system","content":instructions}));
-        }
-        history.push(initial);
+        }).collect()
+}
+
+impl Conversation {
+    fn new(config: &Config, prompt: String, instructions: &str, drawing: bool) -> Self {
         let endpoint = match config.api {
             Api::Gemini => config.endpoint(&format!(
                 "/models/{}:generateContent",
@@ -61,35 +52,30 @@ impl<'a> Conversation<'a> {
             Api::Responses => config.endpoint("/responses"),
             Api::Anthropic => config.endpoint("/messages"),
         };
-        Self {
-            config,
-            url: endpoint,
-            headers: config.headers(),
-            tools,
-            history,
-            instructions,
-        }
-    }
-
-    fn request(&self) -> Value {
-        let model = &self.config.model;
-        let mut body = match self.config.api {
+        let model = &config.model;
+        let user = || json!({"role":"user","content":prompt});
+        let mut body = match config.api {
             Api::Gemini => {
-                json!({"systemInstruction":{"parts":[{"text":self.instructions}]},"contents":self.history,"tools":[{"functionDeclarations":self.tools}]})
+                json!({"systemInstruction":{"parts":[{"text":instructions}]},"contents":[{"role":"user","parts":[{"text":prompt}]}]})
             }
-            Api::OpenAi => json!({"model":model,"messages":self.history,"tools":self.tools}),
+            Api::OpenAi => json!({"model":model,"messages":[{"role":"system","content":instructions},user()]}),
             Api::Responses => {
-                json!({"model":model,"instructions":self.instructions,"input":self.history,"tools":self.tools,"store":false,"include":["reasoning.encrypted_content"]})
+                json!({"model":model,"instructions":instructions,"input":[user()],"store":false,"include":["reasoning.encrypted_content"]})
             }
             Api::Anthropic => {
-                json!({"model":model,"system":self.instructions,"messages":self.history,"tools":self.tools,"max_tokens":4096})
+                json!({"model":model,"system":instructions,"messages":[user()],"max_tokens":4096})
             }
         };
-        if self.tools.is_empty() {
-            body.as_object_mut().unwrap().remove("tools");
+        if drawing {
+            let tools = Value::Array(drawing_tools(config.api));
+            body["tools"] = if config.api == Api::Gemini {
+                json!([{"functionDeclarations":tools}])
+            } else {
+                tools
+            };
         }
-        if let Some(effort) = &self.config.effort {
-            match self.config.api {
+        if let Some(effort) = &config.effort {
+            match config.api {
                 Api::Gemini => {
                     body["generationConfig"] = json!({"thinkingConfig":{"thinkingLevel":effort}})
                 }
@@ -98,11 +84,21 @@ impl<'a> Conversation<'a> {
                 Api::Anthropic => {} // the Messages preset uses Claude's default
             }
         }
-        body
+        Self { api: config.api, url: endpoint, headers: config.headers(), body }
+    }
+
+    /// Append provider turns and tool replies directly to the next request.
+    fn history(&mut self) -> &mut Vec<Value> {
+        let field = match self.api {
+            Api::Gemini => "contents",
+            Api::Responses => "input",
+            Api::OpenAi | Api::Anthropic => "messages",
+        };
+        self.body[field].as_array_mut().expect("history initialized with the prompt")
     }
 
     fn tool_reply(&self, call: &Call, text: String, error: bool) -> Value {
-        match self.config.api {
+        match self.api {
             Api::Gemini => {
                 let mut v = json!({"name":call.name,"response":{"ok":!error,"content":text}});
                 if let Some(id) = &call.id {
@@ -123,10 +119,10 @@ impl<'a> Conversation<'a> {
     }
 
     fn append_replies(&mut self, replies: Vec<Value>) {
-        match self.config.api {
-            Api::Gemini => self.history.push(json!({"role":"user","parts":replies})),
-            Api::Anthropic => self.history.push(json!({"role":"user","content":replies})),
-            _ => self.history.extend(replies),
+        match self.api {
+            Api::Gemini => self.history().push(json!({"role":"user","parts":replies})),
+            Api::Anthropic => self.history().push(json!({"role":"user","content":replies})),
+            _ => self.history().extend(replies),
         }
     }
 }
@@ -324,7 +320,7 @@ pub(crate) fn run(
         let (status, answer) = net.post(
             &convo.url,
             &convo.headers,
-            &convo.request(),
+            &convo.body,
             config.timeout_s,
         )?;
         if !(200..300).contains(&status) {
@@ -350,7 +346,7 @@ pub(crate) fn run(
         if turn.calls.is_empty() {
             return Ok(outcome);
         }
-        convo.history.extend(turn.history);
+        convo.history().extend(turn.history);
         let mut replies = Vec::new();
         for item in turn.calls {
             on_step(Step::Call(item.name.clone(), item.args.clone()));
@@ -377,7 +373,7 @@ pub(crate) fn answer_help(
     const HELP: &str = "你是 Atlas Forge 的使用助手。依据给出的实际菜单、工具和检查结果回答当前问题。说明操作入口、具体步骤和检查方法。区分已确认的项目状态与可能原因。避免编造没有列出的工具或检查结果。你没有修改项目的权限，也不能代替用户执行命令。";
     config.validate()?;
     let convo = Conversation::new(config, prompt, HELP, false);
-    let (status, answer) = net.post(&convo.url, &convo.headers, &convo.request(), config.timeout_s)?;
+    let (status, answer) = net.post(&convo.url, &convo.headers, &convo.body, config.timeout_s)?;
     if !(200..300).contains(&status) {
         let message = answer["error"]["message"].as_str().unwrap_or("服务端没有返回可读的错误信息");
         let masked = if config.key.is_empty() { message.to_owned() } else { message.replace(&config.key, "***") };

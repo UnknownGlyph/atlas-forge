@@ -5,17 +5,27 @@
 //! and one column per field. Unknown columns create new fields; the type is
 //! Number if every non-empty cell parses as a number, otherwise Text.
 
-use map_core::doc::{format_num, Document, EntityKind, FieldKind, Value, AREA_KEY};
+use map_core::doc::{format_num, Document, EntityId, EntityKind, FieldDef, FieldId, FieldKind, Value, AREA_KEY};
+use map_core::stats::Stats;
+
+/// A field and its provenance in the selected year, shared by CSV and GeoJSON.
+pub(crate) fn field_cell(doc: &Document, stats: &Stats<'_>, entity: EntityId, id: FieldId, field: &FieldDef) -> (Option<Value>, Option<String>) {
+    if field.expr.is_some() {
+        let stat = stats.stat(entity, &field.key);
+        (stat.value.map(Value::Num), doc.year.map(|_| stat.tag()))
+    } else {
+        let (value, source) = doc.value_with_source(entity, id);
+        (value, doc.year.map(|_| source.tag()))
+    }
+}
 
 pub fn export(doc: &Document) -> String {
-    let stats = map_core::stats::Stats::new(doc);
-    let areas = stats.areas().clone();
+    let stats = Stats::new(doc);
     let mut w = csv::Writer::from_writer(Vec::new());
-    let fields: Vec<_> = doc.fields.iter().map(|(id, f)| (*id, f.clone())).collect();
     let mut header = vec!["code".to_string(), "name".into(), "kind".into(), AREA_KEY.into()];
     // with a year selected each field gets a `<key>_source` column
     let sources = doc.year.is_some();
-    for (_, f) in &fields {
+    for f in doc.fields.values() {
         header.push(f.key.clone());
         if sources {
             header.push(format!("{}_source", f.key));
@@ -28,17 +38,11 @@ pub fn export(doc: &Document) -> String {
             EntityKind::Region => "region",
             EntityKind::City => "city",
         };
-        let mut row = vec![e.code.clone(), e.name.clone(), kind.into(), areas.get(id).map(|a| format_num(*a)).unwrap_or_default()];
-        for (fid, f) in &fields {
-            let cell = if f.expr.is_some() {
-                stats.value(*id, &f.key).map(format_num).unwrap_or_default()
-            } else {
-                doc.raw_value(*id, *fid).map(|v| v.display()).unwrap_or_default()
-            };
-            row.push(cell);
-            if sources {
-                row.push(if f.expr.is_some() { stats.stat(*id, &f.key).tag() } else { doc.source_of(*id, &f.key).tag() });
-            }
+        let mut row = vec![e.code.clone(), e.name.clone(), kind.into(), stats.areas().get(id).map(|a| format_num(*a)).unwrap_or_default()];
+        for (fid, f) in &doc.fields {
+            let (value, source) = field_cell(doc, &stats, *id, *fid, f);
+            row.push(value.map(|v| v.display()).unwrap_or_default());
+            row.extend(source);
         }
         let _ = w.write_record(&row);
     }

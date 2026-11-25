@@ -218,12 +218,13 @@ pub fn is_web(link: &str) -> bool {
 pub fn asset_id(uri: &str) -> Option<BookId> {
     uri.strip_prefix("atlas-asset:")?.parse().ok()
 }
-fn escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
+fn escape(text: &str) -> std::borrow::Cow<'_, str> {
+    let escaped = crate::markup::escape(text);
+    if escaped.contains('\'') {
+        escaped.replace('\'', "&#39;").into()
+    } else {
+        escaped
+    }
 }
 fn title_text(text: &str) -> String {
     text.replace(['\n', '\r'], " ")

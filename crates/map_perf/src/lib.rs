@@ -297,10 +297,7 @@ fn collect(
             output.flush()?;
             due = now + SAMPLE_INTERVAL;
         }
-        match receiver.recv_timeout(
-            due.saturating_duration_since(Instant::now())
-                .min(Duration::from_millis(100)),
-        ) {
+        match receiver.recv_timeout(due.saturating_duration_since(Instant::now())) {
             Ok(Some(entry)) => write_entry(&mut output, &entry)?,
             Ok(None) => break,
             Err(RecvTimeoutError::Timeout) => {}
@@ -320,4 +317,51 @@ fn collect(
         },
     )?;
     output.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stopping_wakes_an_idle_writer_and_preserves_a_full_queue() {
+        for full in [false, true] {
+            let (sender, receiver) = mpsc::sync_channel(1);
+            let trace = Trace(Arc::new(State {
+                origin: Instant::now(),
+                sender,
+                recording: AtomicBool::new(true),
+                dropped: AtomicU64::new(0),
+            }));
+            if full {
+                trace.emit(Record::Marker {
+                    label: "last".into(),
+                });
+            }
+            let recording = Recording {
+                path: PathBuf::new(),
+                trace: trace.clone(),
+                worker: None,
+            };
+            recording.stop_writer();
+            assert!(!trace.0.recording.load(Ordering::Acquire));
+            if !full {
+                assert!(
+                    matches!(receiver.try_recv(), Ok(None)),
+                    "idle receiver must wake"
+                );
+            }
+            let mut output = Vec::new();
+            collect(&trace, receiver, &mut output).unwrap();
+            let records: Vec<serde_json::Value> = serde_json::Deserializer::from_slice(&output)
+                .into_iter()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(records.len(), 1 + usize::from(full));
+            assert_eq!(records.last().unwrap()["kind"], "end");
+            if full {
+                assert_eq!(records[0]["label"], "last");
+            }
+        }
+    }
 }

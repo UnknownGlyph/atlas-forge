@@ -110,3 +110,19 @@ fn unknown_protocol_versions_get_the_newest() {
     let a = session(&[json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "1999-01-01"}})], &[]);
     assert_eq!(a[0]["result"]["protocolVersion"], map_api::mcp::PROTOCOLS[0]);
 }
+
+#[test]
+fn text_only_preview_returns_metadata_and_removes_its_scratch_file() {
+    let mut session = map_api::Session::from_arg("--demo").unwrap();
+    let (text, error) = map_api::mcp::call(
+        &mut session,
+        "preview_render",
+        &json!({"width": 256, "height": 160}),
+    );
+    assert!(!error, "{text}");
+    let response: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(response["result"]["format"], "png");
+    assert!(!response["result"]["objects"].as_array().unwrap().is_empty());
+    let scratch = response["result"]["path"].as_str().unwrap();
+    assert!(!std::path::Path::new(scratch).exists());
+}

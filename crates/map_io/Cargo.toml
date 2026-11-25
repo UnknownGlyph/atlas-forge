@@ -21,7 +21,7 @@ geo = "0.33"
 encoding_rs = "0.8"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 zip = { version = "4", default-features = false }
-base64 = "0.22"
+base64.workspace = true
 glam.workspace = true
 earcutr.workspace = true
 gltf = { version = "1.4.1", default-features = false, features = ["utils"] }

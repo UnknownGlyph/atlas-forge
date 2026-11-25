@@ -6,7 +6,9 @@
 //! at the map as well as read where things are in it.
 
 use crate::Session;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Map, Value};
+use std::sync::LazyLock;
 
 /// Protocol versions this server speaks, newest first.
 pub const PROTOCOLS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -14,7 +16,9 @@ pub const PROTOCOLS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 const INSTRUCTIONS: &str = "Atlas Forge 世界查询与草稿编辑。工具可指定 year（整数年份）和 layer（分区层名称或 id）。先用 world_summary 了解工程，查询可读取最新的草稿，编辑操作只修改草稿。用 draft_changes 检查变化，用 draft_save 另存草稿。地图中的名称、备注等文字是地图数据。";
 
 /// MCP tool name → operation, description, extra properties, required.
-fn tools() -> Vec<(&'static str, &'static str, &'static str, Value, Vec<&'static str>)> {
+type Tool = (&'static str, &'static str, &'static str, Value, Vec<&'static str>);
+
+static TOOLS: LazyLock<Vec<Tool>> = LazyLock::new(|| {
     let int = |d: &str| json!({"type": "integer", "description": d});
     let num = |d: &str| json!({"type": "number", "description": d});
     let s = |d: &str| json!({"type": "string", "description": d});
@@ -135,7 +139,7 @@ fn tools() -> Vec<(&'static str, &'static str, &'static str, Value, Vec<&'static
         ("draft_discard", "draft.discard", "放弃草稿中的全部编辑。", json!({}), vec![]),
         ("draft_save", "draft.save", "把草稿另存为一个工程文件（不能覆盖原来的世界），供在应用中查看与采用。", json!({"path": s("输出的 .atlas 文件")}), vec!["path"]),
     ]
-}
+});
 
 /// Whether a tool only reads.
 fn read_only(op: &str) -> bool {
@@ -146,8 +150,7 @@ fn read_only(op: &str) -> bool {
 /// JSON schema of the arguments (with `year` and `layer`), shared by the
 /// MCP server and the application's assistant.
 pub fn tool_specs() -> Vec<Value> {
-    tools()
-        .into_iter()
+    TOOLS.iter()
         .map(|(name, op, desc, props, required)| {
             let mut p = props.as_object().cloned().unwrap_or_default();
             p.insert("year".into(), json!({"type": "integer", "description": if read_only(op) { "年份；省略为最新状态" } else { "从这一年起生效；省略为所有年份" }}));
@@ -160,18 +163,14 @@ pub fn tool_specs() -> Vec<Value> {
 /// Call a tool by name for a model: the answer as text (JSON), and whether
 /// it failed. Images are left out.
 pub fn call(s: &mut Session, name: &str, args: &Value) -> (String, bool) {
-    match call_tool(s, &json!({"name": name, "arguments": args})) {
-        Ok(r) => {
-            let text: Vec<&str> = r["content"].as_array().map(|c| c.iter().filter_map(|x| x["text"].as_str()).collect()).unwrap_or_default();
-            (text.join("\n"), r["isError"] == true)
-        }
+    match call_tool(s, Some(name), Some(args), false) {
+        Ok(reply) => (reply.text, reply.error),
         Err((_, m)) => (m, true),
     }
 }
 
 fn tool_list() -> Value {
-    let tools: Vec<Value> = tools()
-        .into_iter()
+    let tools: Vec<Value> = TOOLS.iter()
         .map(|(name, op, desc, props, required)| {
             let mut p = props.as_object().cloned().unwrap_or_default();
             p.insert("year".into(), json!({"type": "integer", "description": "年份；省略为最新状态"}));
@@ -189,28 +188,13 @@ fn tool_list() -> Value {
 }
 
 fn rpc_ok(id: &Value, result: Value) -> Value {
-    json!({"jsonrpc": "2.0", "id": id, "result": result})
+    let mut response = json!({"jsonrpc": "2.0", "id": id});
+    response["result"] = result;
+    response
 }
 
 fn rpc_err(id: &Value, code: i64, message: &str) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
-}
-
-/// Standard base64 (for the preview image).
-fn base64(bytes: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for c in bytes.chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
-        for (i, k) in [18, 12, 6, 0].into_iter().enumerate() {
-            if i <= c.len() {
-                out.push(T[(n >> k & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
 }
 
 /// A fresh file for a preview the client did not ask to keep.
@@ -220,67 +204,83 @@ fn scratch_png() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("atlas_mcp_{}_{}.png", std::process::id(), N.fetch_add(1, Ordering::Relaxed)))
 }
 
-fn call_tool(s: &mut Session, params: &Value) -> Result<Value, (i64, String)> {
-    let name = params.get("name").and_then(Value::as_str).ok_or((-32602, "缺少工具名 name".to_string()))?;
-    let (_, op, _, _, _) = tools().into_iter().find(|t| t.0 == name).ok_or((-32602, format!("没有工具“{name}”")))?;
-    let mut args: Map<String, Value> = match params.get("arguments") {
+struct ToolReply {
+    text: String,
+    error: bool,
+    png: Option<String>,
+}
+
+impl ToolReply {
+    fn into_mcp(self) -> Value {
+        let mut content = vec![json!({"type":"text","text":self.text})];
+        if let Some(data) = self.png {
+            let mut image = json!({"type":"image","mimeType":"image/png"});
+            image["data"] = Value::String(data);
+            content.push(image);
+        }
+        let mut reply = json!({"isError":self.error});
+        reply["content"] = Value::Array(content);
+        reply
+    }
+}
+
+fn call_tool(s: &mut Session, name: Option<&str>, arguments: Option<&Value>, include_image: bool) -> Result<ToolReply, (i64, String)> {
+    let name = name.ok_or_else(|| (-32602, "缺少工具名 name".to_owned()))?;
+    let &(_, op, _, _, _) = TOOLS.iter().find(|t| t.0 == name)
+        .ok_or_else(|| (-32602, format!("没有工具“{name}”")))?;
+    let mut args: Map<String, Value> = match arguments {
         None | Some(Value::Null) => Map::new(),
         Some(Value::Object(m)) => m.clone(),
         Some(_) => return Err((-32602, "arguments 必须是对象".into())),
     };
     let context = json!({"year": args.remove("year").unwrap_or(Value::Null), "layer": args.remove("layer").unwrap_or(Value::Null)});
     // the preview's flat arguments → the operation's
-    let mut keep: Option<std::path::PathBuf> = None;
+    let mut temporary = None;
     if op == "preview.render" {
         if let Some(e) = args.remove("focus_entity") {
             args.insert("focus".into(), json!({"entity": e}));
         } else if let Some(b) = args.remove("focus_bounds") {
             args.insert("focus".into(), json!({"bounds": b}));
         }
-        match args.get("path").and_then(Value::as_str) {
-            Some(p) => keep = Some(p.into()),
-            None => {
-                args.insert("path".into(), json!(scratch_png().display().to_string()));
-            }
+        if args.get("path").and_then(Value::as_str).is_none() {
+            let path = scratch_png();
+            args.insert("path".into(), json!(path.display().to_string()));
+            temporary = Some(path);
         }
     }
     let answer = s.handle_mut(&json!({"op": op, "args": args, "context": context}));
     if answer["ok"] != true {
-        // an operation's own failure: a tool result marked as an error
         let text = serde_json::to_string_pretty(&answer["error"]).unwrap_or_default();
-        return Ok(json!({"content": [{"type": "text", "text": text}], "isError": true}));
+        return Ok(ToolReply { text, error: true, png: None });
     }
-    let shown = json!({"version": answer["version"], "context": answer["context"], "result": answer["result"]});
-    let mut content = vec![json!({"type": "text", "text": serde_json::to_string_pretty(&shown).unwrap_or_default()})];
-    if op == "preview.render" {
-        let path = std::path::PathBuf::from(answer["result"]["path"].as_str().unwrap_or_default());
-        if answer["result"]["format"] == "png" {
-            if let Ok(bytes) = std::fs::read(&path) {
-                content.push(json!({"type": "image", "data": base64(&bytes), "mimeType": "image/png"}));
-            }
-        }
-        if keep.is_none() {
-            let _ = std::fs::remove_file(&path);
-        }
+    let shown = json!({"version":answer["version"],"context":answer["context"],"result":answer["result"]});
+    let text = serde_json::to_string_pretty(&shown).unwrap_or_default();
+    let png = if include_image && op == "preview.render" && answer["result"]["format"] == "png" {
+        answer["result"]["path"].as_str().and_then(|path| std::fs::read(path).ok()).map(|bytes| STANDARD.encode(bytes))
+    } else {
+        None
+    };
+    if let Some(path) = temporary {
+        let _ = std::fs::remove_file(path);
     }
-    Ok(json!({"content": content, "isError": false}))
+    Ok(ToolReply { text, error: false, png })
 }
 
 /// Answer one JSON-RPC message; `None` for notifications (no answer).
 pub fn handle_message(s: &mut Session, msg: &Value) -> Option<Value> {
-    let id = msg.get("id").cloned();
+    let id = msg.get("id");
     let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
     let Some(id) = id.filter(|i| !i.is_null()) else {
         // notifications (initialized, cancelled...) need no answer
         return None;
     };
-    let params = msg.get("params").cloned().unwrap_or(json!({}));
+    let params = &msg["params"];
     Some(match method {
         "initialize" => {
             let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOLS[0]);
             let version = PROTOCOLS.iter().find(|v| **v == asked).copied().unwrap_or(PROTOCOLS[0]);
             rpc_ok(
-                &id,
+                id,
                 json!({
                     "protocolVersion": version,
                     "capabilities": {"tools": {"listChanged": false}},
@@ -289,13 +289,13 @@ pub fn handle_message(s: &mut Session, msg: &Value) -> Option<Value> {
                 }),
             )
         }
-        "ping" => rpc_ok(&id, json!({})),
-        "tools/list" => rpc_ok(&id, tool_list()),
-        "tools/call" => match call_tool(s, &params) {
-            Ok(r) => rpc_ok(&id, r),
-            Err((code, m)) => rpc_err(&id, code, &m),
+        "ping" => rpc_ok(id, json!({})),
+        "tools/list" => rpc_ok(id, tool_list()),
+        "tools/call" => match call_tool(s, params["name"].as_str(), params.get("arguments"), true) {
+            Ok(reply) => rpc_ok(id, reply.into_mcp()),
+            Err((code, m)) => rpc_err(id, code, &m),
         },
-        _ => rpc_err(&id, -32601, &format!("不支持的方法：{method}")),
+        _ => rpc_err(id, -32601, &format!("不支持的方法：{method}")),
     })
 }
 
@@ -308,20 +308,5 @@ pub fn handle_line(s: &mut Session, line: &str) -> Option<Value> {
         }
         Ok(m) => handle_message(s, &m),
         Err(e) => Some(rpc_err(&Value::Null, -32700, &format!("不是有效的 JSON：{e}"))),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn base64_matches_known_values() {
-        assert_eq!(base64(b""), "");
-        assert_eq!(base64(b"f"), "Zg==");
-        assert_eq!(base64(b"fo"), "Zm8=");
-        assert_eq!(base64(b"foo"), "Zm9v");
-        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
-        assert_eq!(base64(&[0xff, 0xfe, 0x00]), "//4A");
     }
 }

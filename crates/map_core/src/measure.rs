@@ -63,3 +63,11 @@ impl Document {
         geom::spherical_area(&un, self.radius()).abs()
     }
 }
+
+/// Largest standard scale-bar distance (1, 2 or 5 times a power of ten)
+/// within the given positive distance.
+pub fn scale_bar_length(distance: f64) -> f64 {
+    let power = 10f64.powf(distance.log10().floor());
+    [5.0, 2.0, 1.0].into_iter().map(|unit| unit * power)
+        .find(|value| *value <= distance).unwrap_or(power)
+}

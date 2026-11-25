@@ -11,9 +11,9 @@ use map_core::topo::{FaceKind, BACKGROUND};
 use map_core::LonLat;
 use serde_json::{json, Map, Value};
 
-fn polygon_coords(poly: &PlanarPolygon) -> Vec<Value> {
-    let mut rings = vec![poly.outer.clone()];
-    rings.extend(poly.holes.iter().cloned());
+fn polygon_coords(poly: PlanarPolygon) -> Vec<Value> {
+    let mut rings = vec![poly.outer];
+    rings.extend(poly.holes);
     split_strip(&rings)
         .into_iter()
         .map(|part| {
@@ -33,12 +33,28 @@ fn round(v: f64) -> f64 {
     (v * 1e7).round() / 1e7
 }
 
-fn geometry(parts: Vec<Value>) -> Value {
-    if parts.len() == 1 {
-        json!({"type": "Polygon", "coordinates": parts[0]})
+fn geometry(single: &str, multiple: &str, mut parts: Vec<Value>) -> Value {
+    let (kind, coords) = if parts.len() == 1 {
+        (single, parts.pop().unwrap())
     } else {
-        json!({"type": "MultiPolygon", "coordinates": parts})
-    }
+        (multiple, Value::Array(parts))
+    };
+    let mut geometry = json!({"type": kind});
+    geometry["coordinates"] = coords;
+    geometry
+}
+
+fn feature(properties: Value, geometry: Value) -> Value {
+    let mut feature = json!({"type": "Feature"});
+    feature["properties"] = properties;
+    feature["geometry"] = geometry;
+    feature
+}
+
+fn collection(features: Vec<Value>) -> String {
+    let mut collection = json!({"type": "FeatureCollection"});
+    collection["features"] = Value::Array(features);
+    collection.to_string()
 }
 
 /// The background face as a polygon: the whole lon/lat rectangle minus the
@@ -51,12 +67,11 @@ fn background_polygon(doc: &Document) -> PlanarPolygon {
 /// One feature per country (dissolved), with all numeric/text attributes.
 pub fn export_countries(doc: &Document) -> String {
     let stats = map_core::stats::Stats::new(doc);
-    let areas = stats.areas().clone();
     let mut feats = Vec::new();
     for id in doc.countries() {
-        let mut parts: Vec<Value> = doc.dissolve(id).iter().flat_map(polygon_coords).collect();
+        let mut parts: Vec<Value> = doc.dissolve(id).into_iter().flat_map(polygon_coords).collect();
         if doc.owner.get(&BACKGROUND) == Some(&id) {
-            parts.extend(polygon_coords(&background_polygon(doc)));
+            parts.extend(polygon_coords(background_polygon(doc)));
         }
         if parts.is_empty() {
             continue;
@@ -66,27 +81,22 @@ pub fn export_countries(doc: &Document) -> String {
         props.insert("code".into(), json!(e.code));
         props.insert("name".into(), json!(e.name));
         props.insert("color".into(), json!(format!("#{:02x}{:02x}{:02x}", e.color[0], e.color[1], e.color[2])));
-        props.insert("area_km2".into(), json!(areas.get(&id).copied().unwrap_or(0.0)));
+        props.insert("area_km2".into(), json!(stats.areas().get(&id).copied().unwrap_or(0.0)));
         for (fid, f) in doc.fields.iter() {
-            let v = if f.expr.is_some() {
-                stats.value(id, &f.key).map(|x| json!(x))
-            } else {
-                doc.raw_value(id, *fid).map(|v| match v {
-                    map_core::Value::Num(x) => json!(x),
-                    map_core::Value::Bool(b) => json!(b),
-                    map_core::Value::Text(t) => json!(t),
-                })
-            };
-            props.insert(f.key.clone(), v.unwrap_or(Value::Null));
-            // with a year selected, where each value comes from
-            if doc.year.is_some() {
-                let tag = if f.expr.is_some() { stats.stat(id, &f.key).tag() } else { doc.source_of(id, &f.key).tag() };
-                props.insert(format!("{}_source", f.key), json!(tag));
+            let (value, source) = crate::table::field_cell(doc, &stats, id, *fid, f);
+            props.insert(f.key.clone(), match value {
+                Some(map_core::Value::Num(x)) => Value::from(x),
+                Some(map_core::Value::Bool(b)) => Value::Bool(b),
+                Some(map_core::Value::Text(t)) => Value::String(t),
+                None => Value::Null,
+            });
+            if let Some(tag) = source {
+                props.insert(format!("{}_source", f.key), Value::String(tag));
             }
         }
-        feats.push(json!({"type": "Feature", "properties": props, "geometry": geometry(parts)}));
+        feats.push(feature(Value::Object(props), geometry("Polygon", "MultiPolygon", parts)));
     }
-    serde_json::to_string(&json!({"type": "FeatureCollection", "features": feats})).unwrap()
+    collection(feats)
 }
 
 /// One feature per topological face (land and water), with its owner.
@@ -103,20 +113,17 @@ pub fn export_faces(doc: &Document) -> String {
             let (outer, holes) = doc.topo.face_planar(*fid);
             PlanarPolygon { outer, holes }
         };
-        let parts = polygon_coords(&poly);
+        let parts = polygon_coords(poly);
         let owner = doc.owner.get(fid).and_then(|e| doc.entities.get(e));
-        feats.push(json!({
-            "type": "Feature",
-            "properties": {
-                "face_id": fid.0,
-                "kind": if f.kind == FaceKind::Land { "land" } else { "water" },
-                "owner_code": owner.map(|e| e.code.clone()),
-                "owner_name": owner.map(|e| e.name.clone()),
-            },
-            "geometry": geometry(parts),
-        }));
+        let properties = json!({
+            "face_id": fid.0,
+            "kind": if f.kind == FaceKind::Land { "land" } else { "water" },
+            "owner_code": owner.map(|e| &e.code),
+            "owner_name": owner.map(|e| &e.name),
+        });
+        feats.push(feature(properties, geometry("Polygon", "MultiPolygon", parts)));
     }
-    serde_json::to_string(&json!({"type": "FeatureCollection", "features": feats})).unwrap()
+    collection(feats)
 }
 
 /// One feature per river or route: a LineString, or a MultiLineString when
@@ -132,18 +139,11 @@ pub fn export_rivers(doc: &Document) -> String {
             .filter(|p| p.len() >= 2)
             .map(|p| Value::Array(p.iter().map(|q| json!([round(q[0]), round(q[1])])).collect()))
             .collect();
-        let geometry = match parts.len() {
-            0 => continue,
-            1 => json!({"type": "LineString", "coordinates": parts[0]}),
-            _ => json!({"type": "MultiLineString", "coordinates": parts}),
-        };
-        feats.push(json!({
-            "type": "Feature",
-            "properties": {"name": r.name, "kind": if r.route.is_some() { "route" } else { "river" }, "length_km": (doc.river_length_km(*id) * 10.0).round() / 10.0},
-            "geometry": geometry,
-        }));
+        if parts.is_empty() { continue; }
+        let properties = json!({"name": r.name, "kind": if r.route.is_some() { "route" } else { "river" }, "length_km": (doc.river_length_km(*id) * 10.0).round() / 10.0});
+        feats.push(feature(properties, geometry("LineString", "MultiLineString", parts)));
     }
-    serde_json::to_string(&json!({"type": "FeatureCollection", "features": feats})).unwrap()
+    collection(feats)
 }
 
 /// Line features as rivers (or routes, for `"kind": "route"`, in the default
@@ -204,12 +204,7 @@ fn ring_points(v: &Value) -> Option<Vec<LonLat>> {
 }
 
 pub fn import(doc: &mut Document, text: &str) -> Result<ImportReport, String> {
-    let root: Value = serde_json::from_str(text).map_err(|e| format!("GeoJSON 解析失败: {e}"))?;
-    let features: Vec<Value> = match root["type"].as_str() {
-        Some("FeatureCollection") => root["features"].as_array().cloned().unwrap_or_default(),
-        Some("Feature") => vec![root.clone()],
-        _ => vec![json!({"type": "Feature", "properties": {}, "geometry": root})],
-    };
+    let features = features(text)?;
     let mut rep = ImportReport::default();
     for r in rivers_from(&features) {
         doc.rivers.insert(map_core::doc::LineId(doc.topo.alloc()), r);
@@ -276,11 +271,14 @@ pub struct TopologyImport {
 }
 
 fn features(text: &str) -> Result<Vec<Value>, String> {
-    let root: Value = serde_json::from_str(text).map_err(|e| format!("GeoJSON 解析失败: {e}"))?;
+    let mut root: Value = serde_json::from_str(text).map_err(|e| format!("GeoJSON 解析失败: {e}"))?;
     Ok(match root["type"].as_str() {
-        Some("FeatureCollection") => root["features"].as_array().cloned().unwrap_or_default(),
+        Some("FeatureCollection") => match root["features"].take() {
+            Value::Array(items) => items,
+            _ => Vec::new(),
+        },
         Some("Feature") => vec![root],
-        _ => vec![json!({"type": "Feature", "properties": {}, "geometry": root})],
+        _ => vec![feature(json!({}), root)],
     })
 }
 

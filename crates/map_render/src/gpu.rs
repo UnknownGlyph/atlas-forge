@@ -76,6 +76,8 @@ pub struct FrameData {
     pub geometry: Arc<GeometryChunks>,
     pub colors: (u64, Arc<Vec<[f32; 4]>>),
     pub overlay: (u64, Arc<Vec<LineInstance>>),
+    /// The hovered boundary, updated independently from stable overlays.
+    pub hover_overlay: (u64, Arc<Vec<LineInstance>>),
     /// Bands along the coasts, drawn over the sea and under the land.
     pub glow: (u64, Arc<Vec<LineInstance>>),
     pub graticule: bool,
@@ -151,10 +153,46 @@ fn sync_chunks<T: Pod>(bufs: &mut HashMap<ChunkId, DynBuf>, chunks: &[Chunk<T>],
     }
 }
 
-struct ViewRes {
-    ubuf: wgpu::Buffer,
+struct MapCamera {
+    uniform: wgpu::Buffer,
     bind: wgpu::BindGroup,
     color_serial: u64,
+}
+
+impl MapCamera {
+    fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, colors: &DynBuf, label: &str) -> Self {
+        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: std::mem::size_of::<ViewUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind = Self::bind_buffers(device, layout, &uniform, &colors.buf);
+        Self { uniform, bind, color_serial: colors.serial }
+    }
+
+    fn bind_buffers(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, uniform: &wgpu::Buffer, colors: &wgpu::Buffer) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("map camera and face colors"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: colors.as_entire_binding() },
+            ],
+        })
+    }
+
+    fn update(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::BindGroupLayout, colors: &DynBuf, view: &ViewUniform) {
+        if self.color_serial != colors.serial {
+            self.bind = Self::bind_buffers(device, layout, &self.uniform, &colors.buf);
+            self.color_serial = colors.serial;
+        }
+        queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(view));
+    }
+}
+
+struct ViewRes {
+    camera: MapCamera,
     graticule: bool,
     draw_overlay: bool,
     moving: bool,
@@ -198,7 +236,7 @@ struct MotionAtlas {
     sampler: wgpu::Sampler,
     fill_pipe: wgpu::RenderPipeline,
     line_pipe: wgpu::RenderPipeline,
-    uniform: wgpu::Buffer,
+    camera: MapCamera,
     key: Option<AtlasKey>,
 }
 
@@ -214,6 +252,7 @@ pub struct MapGpu {
     lines: HashMap<ChunkId, DynBuf>,
     geometry: Option<Arc<GeometryChunks>>,
     overlay: DynBuf,
+    hover_overlay: DynBuf,
     glow: DynBuf,
     colors: DynBuf,
     views: HashMap<u32, ViewRes>,
@@ -316,6 +355,7 @@ impl MapGpu {
             lines: HashMap::new(),
             geometry: None,
             overlay: DynBuf::new(device, v, "overlay"),
+            hover_overlay: DynBuf::new(device, v, "hover overlay"),
             glow: DynBuf::new(device, v, "coast glow"),
             colors: DynBuf::new(device, wgpu::BufferUsages::STORAGE, "colors"),
             views: HashMap::new(),
@@ -335,37 +375,19 @@ impl MapGpu {
             self.geometry = Some(Arc::clone(&f.geometry));
         }
         self.overlay.upload(device, queue, f.overlay.0, &f.overlay.1, v);
+        self.hover_overlay.upload(device, queue, f.hover_overlay.0, &f.hover_overlay.1, v);
         self.glow.upload(device, queue, f.glow.0, &f.glow.1, v);
         self.colors.upload(device, queue, f.colors.0, &f.colors.1, wgpu::BufferUsages::STORAGE);
         self.underlay.prepare(device, queue, f.view_id, &f.underlays);
-        let serial = self.colors.serial;
-        let needs_new = self.views.get(&f.view_id).is_none_or(|v| v.color_serial != serial);
-        if needs_new {
-            let ubuf = match self.views.remove(&f.view_id) {
-                Some(v) => v.ubuf,
-                None => device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("view uniform"),
-                    size: std::mem::size_of::<ViewUniform>() as u64,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }),
-            };
-            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("map bind"),
-                layout: &self.bgl,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: self.colors.buf.as_entire_binding() },
-                ],
-            });
-            self.views.insert(f.view_id, ViewRes { ubuf, bind, color_serial: serial, graticule: f.graticule, draw_overlay: f.draw_overlay, moving: false });
-        }
         let moving = self.prepare_motion(device, queue, encoder, f);
-        let vr = self.views.get_mut(&f.view_id).unwrap();
+        let vr = self.views.entry(f.view_id).or_insert_with(|| ViewRes {
+            camera: MapCamera::new(device, &self.bgl, &self.colors, "view uniform"),
+            graticule: f.graticule, draw_overlay: f.draw_overlay, moving,
+        });
         vr.graticule = f.graticule;
         vr.draw_overlay = f.draw_overlay;
         vr.moving = moving;
-        queue.write_buffer(&vr.ubuf, 0, bytemuck::bytes_of(&f.uniform));
+        vr.camera.update(device, queue, &self.bgl, &self.colors, &f.uniform);
     }
 
     fn prepare_motion(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, f: &FrameData) -> bool {
@@ -390,11 +412,7 @@ impl MapGpu {
                     fills: AtlasLayer::target(device, &self.underlay, &sampler),
                     lines: AtlasLayer::target(device, &self.underlay, &sampler),
                     glow: None, sampler, fill_pipe, line_pipe,
-                    uniform: device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("motion atlas uniform"), size: std::mem::size_of::<ViewUniform>() as u64,
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    }),
+                    camera: MapCamera::new(device, &self.bgl, &self.colors, "motion atlas uniform"),
                     key: None,
                 }
             });
@@ -410,19 +428,12 @@ impl MapGpu {
                 for width in &mut view.line_width {
                     width[0] *= 0.65;
                 }
-                queue.write_buffer(&atlas.uniform, 0, bytemuck::bytes_of(&view));
-                let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("motion atlas bind"),
-                    layout: &self.bgl,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: atlas.uniform.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: self.colors.buf.as_entire_binding() },
-                    ],
-                });
-                bake_layer(encoder, &atlas.fills, &atlas.fill_pipe, &bind, self.fill.values(), |pass, b| pass.draw(0..b.len, 0..1));
-                bake_layer(encoder, &atlas.lines, &atlas.line_pipe, &bind, self.lines.values(), |pass, b| pass.draw(0..6, 0..b.len));
+                atlas.camera.update(device, queue, &self.bgl, &self.colors, &view);
+                let bind = &atlas.camera.bind;
+                bake_layer(encoder, &atlas.fills, &atlas.fill_pipe, bind, self.fill.values(), |pass, b| pass.draw(0..b.len, 0..1));
+                bake_layer(encoder, &atlas.lines, &atlas.line_pipe, bind, self.lines.values(), |pass, b| pass.draw(0..6, 0..b.len));
                 if let Some(glow) = &atlas.glow {
-                    bake_layer(encoder, glow, &atlas.line_pipe, &bind, std::iter::once(&self.glow), |pass, b| pass.draw(0..6, 0..b.len));
+                    bake_layer(encoder, glow, &atlas.line_pipe, bind, std::iter::once(&self.glow), |pass, b| pass.draw(0..6, 0..b.len));
                 }
                 atlas.key = Some(key);
             }
@@ -440,12 +451,13 @@ impl MapGpu {
     pub fn paint(&self, pass: &mut wgpu::RenderPass<'_>, view_id: u32) {
         let Some(vr) = self.views.get(&view_id) else { return };
         let atlas = self.motion_atlas.as_ref().filter(|_| vr.moving);
-        pass.set_bind_group(0, &vr.bind, &[]);
+        let camera = &vr.camera.bind;
+        pass.set_bind_group(0, camera, &[]);
         pass.set_pipeline(&self.fill_pipe);
         pass.set_vertex_buffer(0, self.ocean.slice(..));
         pass.draw(0..self.ocean_count, 0..1);
         self.underlay.paint(pass, view_id, false);
-        pass.set_bind_group(0, &vr.bind, &[]);
+        pass.set_bind_group(0, camera, &[]);
         // the coast bands: over the sea, the land is drawn over their inner half
         if let Some(glow) = atlas.and_then(|a| a.glow.as_ref()) {
             self.underlay.paint_slot(pass, &glow.slot);
@@ -464,7 +476,7 @@ impl MapGpu {
             }
         }
         self.underlay.paint(pass, view_id, true);
-        pass.set_bind_group(0, &vr.bind, &[]);
+        pass.set_bind_group(0, camera, &[]);
         pass.set_pipeline(&self.line_pipe);
         if vr.graticule {
             pass.set_vertex_buffer(0, self.grat.slice(..));
@@ -478,11 +490,13 @@ impl MapGpu {
                 pass.draw(0..6, 0..b.len);
             }
         }
-        if vr.draw_overlay && self.overlay.len > 0 {
-            pass.set_bind_group(0, &vr.bind, &[]);
+        if vr.draw_overlay && (self.overlay.len > 0 || self.hover_overlay.len > 0) {
+            pass.set_bind_group(0, camera, &[]);
             pass.set_pipeline(&self.line_pipe);
-            pass.set_vertex_buffer(0, self.overlay.buf.slice(..));
-            pass.draw(0..6, 0..self.overlay.len);
+            for buffer in [&self.overlay, &self.hover_overlay].into_iter().filter(|buffer| buffer.len > 0) {
+                pass.set_vertex_buffer(0, buffer.buf.slice(..));
+                pass.draw(0..6, 0..buffer.len);
+            }
         }
     }
 }

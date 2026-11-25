@@ -242,7 +242,7 @@ fn downsample(points: &mut Vec<[f64; 2]>, duration: f64) {
     *points = reduced;
 }
 
-fn read(input: impl BufRead) -> io::Result<Report> {
+fn read(mut input: impl BufRead) -> io::Result<Report> {
     let mut interacting = Vec::new();
     let (mut frames, mut intervals, mut worst) = (Vec::new(), Vec::new(), Vec::<Value>::new());
     let (mut series, mut operation_ms) = (BTreeMap::new(), BTreeMap::<String, Vec<f64>>::new());
@@ -252,8 +252,12 @@ fn read(input: impl BufRead) -> io::Result<Report> {
     let (mut duration, mut discarded_lines, mut header, mut dropped_records) =
         (0.0f64, 0, None, None);
     let mut slow_frames = [0; 3];
-    for line in input.split(b'\n') {
-        let line = line?;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if input.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
         if line.trim_ascii().is_empty() {
             continue;
         }

@@ -565,18 +565,14 @@ impl App {
         let rows = (rect.height() / step) as usize;
         if columns * rows <= 6000 {
             let origin = rect.left_top() + egui::vec2(step * 0.5, step * 0.5);
-            for row in 0..=rows {
-                for column in 0..=columns {
+            painter.extend((0..=rows).flat_map(|row| {
+                (0..=columns).filter_map(move |column| {
                     let at = origin + egui::vec2(column as f32 * step, row as f32 * step);
-                    if rect.contains(at) {
-                        painter.rect_filled(
-                            egui::Rect::from_center_size(at, egui::vec2(1.6, 1.6)),
-                            0.0,
-                            p.dots,
-                        );
-                    }
-                }
-            }
+                    rect.contains(at).then(|| egui::Shape::rect_filled(
+                        egui::Rect::from_center_size(at, egui::vec2(1.6, 1.6)), 0.0, p.dots,
+                    ))
+                })
+            }));
         }
         if let Some(board) = board {
             soft_shadow(painter, board, 2.0, p.shadow);

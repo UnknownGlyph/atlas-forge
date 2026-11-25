@@ -1,6 +1,6 @@
 //! The studio's control material samples a small GPU rendering of the map.
 //! The swapchain stays write-only and the renderer never reads pixels to the CPU.
-use super::{map_pipeline, map_program, FrameData, MapGpu, MapMesh, ViewUniform, ATLAS_FORMAT};
+use super::{map_pipeline, map_program, FrameData, MapCamera, MapGpu, MapMesh, ViewUniform, ATLAS_FORMAT};
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
 
@@ -37,7 +37,7 @@ struct Source {
 struct View {
     size: [u32; 2],
     image: wgpu::TextureView,
-    camera: wgpu::Buffer,
+    camera: MapCamera,
     material: wgpu::Buffer,
     last_material: Option<Material>,
     surface: wgpu::BindGroup,
@@ -151,6 +151,7 @@ impl View {
         layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
         size: [u32; 2],
+        camera: MapCamera,
     ) -> Self {
         let [width, height] = size;
         let image = device
@@ -170,7 +171,6 @@ impl View {
                 view_formats: &[],
             })
             .create_view(&Default::default());
-        let camera = buffer::<ViewUniform>(device, "studio glass map camera");
         let material = buffer::<Material>(device, "studio glass panel geometry");
         let surface = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("studio glass surface"),
@@ -221,10 +221,8 @@ impl MapGpu {
             .get(&frame.view_id)
             .is_none_or(|view| view.size != size)
         {
-            glass.views.insert(
-                frame.view_id,
-                View::new(device, &glass.layout, &glass.sampler, size),
-            );
+            let camera = MapCamera::new(device, &self.bgl, &self.colors, "studio glass map camera");
+            glass.views.insert(frame.view_id, View::new(device, &glass.layout, &glass.sampler, size, camera));
         }
         let view = glass
             .views
@@ -260,21 +258,7 @@ impl MapGpu {
             return;
         }
         view.source = Some(source);
-        queue.write_buffer(&view.camera, 0, bytemuck::bytes_of(&camera));
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("studio glass map source"),
-            layout: &self.bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: view.camera.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.colors.buf.as_entire_binding(),
-                },
-            ],
-        });
+        view.camera.update(device, queue, &self.bgl, &self.colors, &camera);
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: &view.image,
             depth_slice: None,
@@ -297,7 +281,7 @@ impl MapGpu {
         let [x, y, width, height] = sample_rect;
         pass.set_scissor_rect(x, y, width, height);
         pass.set_pipeline(&glass.map);
-        pass.set_bind_group(0, &bind, &[]);
+        pass.set_bind_group(0, &view.camera.bind, &[]);
         pass.set_vertex_buffer(0, self.ocean.slice(..));
         pass.draw(0..self.ocean_count, 0..1);
         for chunk in self.fill.values().filter(|chunk| chunk.len > 0) {

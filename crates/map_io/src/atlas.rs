@@ -4,6 +4,7 @@
 //! year, so a colour means the same value throughout the atlas.
 
 use crate::batch::{title_for, write_with, year_tag, Format};
+use crate::markup::escape as esc;
 use crate::scene::ExportOptions;
 use map_core::doc::Document;
 use map_core::layout::Layout;
@@ -131,10 +132,6 @@ pub fn export_atlas(doc: &Document, job: &AtlasJob, done: &AtomicUsize, cancel: 
     Ok(files)
 }
 
-fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
-}
-
 /// The contents page: one section per layout, its maps in year order.
 fn index_html(doc: &Document, job: &AtlasJob, list: &[Item]) -> String {
     let name = esc(&doc.meta.name);
@@ -157,7 +154,7 @@ fn index_html(doc: &Document, job: &AtlasJob, list: &[Item]) -> String {
         for it in list.iter().filter(|it| it.page == p) {
             let cap = match (it.title.is_empty(), it.year) {
                 (false, _) => esc(&it.title),
-                (true, Some(y)) => format!("{y} 年"),
+                (true, Some(y)) => format!("{y} 年").into(),
                 (true, None) => esc(&l.name),
             };
             h.push_str(&format!("<figure><img src=\"{}\" alt=\"{cap}\" loading=\"lazy\"><figcaption>{cap}</figcaption></figure>\n", esc(&it.file)));

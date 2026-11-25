@@ -22,6 +22,7 @@ mod queries;
 
 use map_core::doc::{Document, LayerId, POLITICAL};
 use serde_json::{json, Value};
+use std::sync::OnceLock;
 
 /// Version of the request and answer formats.
 pub const API_VERSION: &str = "0.1";
@@ -32,7 +33,7 @@ pub struct Session {
     version: String,
     /// Where the world came from (a file path, or how it was made).
     source: String,
-    font: Option<Vec<u8>>,
+    preview_font: OnceLock<Option<Vec<u8>>>,
     /// The world as edited so far (`edit.*`), which reads see; None
     /// before the first edit (see the `edits` module).
     draft: Option<Document>,
@@ -107,7 +108,7 @@ impl Session {
             Ok(b) => format!("{:016x}", fnv(&b)),
             Err(_) => "unknown".into(),
         };
-        Session { doc, version, source: source.into(), font: map_io::png::find_system_font(), draft: None, log: Vec::new() }
+        Session { doc, version, source: source.into(), preview_font: OnceLock::new(), draft: None, log: Vec::new() }
     }
 
     /// Open a saved project.

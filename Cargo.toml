@@ -9,6 +9,7 @@ license = "MIT"
 repository = "https://github.com/UnknownGlyph/atlas-forge"
 
 [workspace.dependencies]
+base64 = "0.22"
 map_core = { path = "crates/map_core" }
 map_io = { path = "crates/map_io" }
 map_render = { path = "crates/map_render" }

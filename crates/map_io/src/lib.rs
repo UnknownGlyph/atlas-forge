@@ -16,6 +16,7 @@ pub mod clip;
 pub mod fonts;
 pub mod geojson;
 pub mod gaia_csv;
+mod markup;
 pub mod model;
 pub mod pdf;
 pub mod png;

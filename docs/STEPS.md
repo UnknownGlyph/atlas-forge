@@ -93,7 +93,7 @@ Linux、macOS 暂缓：这一步只做 Windows，代码保持跨平台可编译�
 
 ## M8 第四步——三百万三角形下的帧时间：国名按固定字号阶梯排版（2026-11-16）
 
-**测量方法**（新增，供以后用）：`map_bench history 10 6 240 1`（边界细化到约 1 km）加 `ATLAS_BENCH_KEEP=1` 保留生成的世界（`%TEMP%\atlas_history_bench.atlas`，2 574 312 个三角形，1 244 691 个顶点，840 个面）；应用以 `ATLAS_PROFILE=1` 启动时，每帧在标准错误输出 `FRAME ui … derived … panels … views … rest … dt …`、每个视图的 `OVERLAYS`、平面图叠加层的 `PARTS features … line_names … countries …`（不设该变量时不输出）。在应用里反复缩放后对这些行求平均与最大值。注意：状态栏的"帧 / UI"是平滑值，应用空闲不重绘时停在最后的数上（加载那一帧的 795 ms 会让它显示 37 ms 很久），不能当作当前帧时间。
+**测量方法**（新增，供以后用）：`map_bench history 10 6 240 1`（边界细化到约 1 km）加 `ATLAS_BENCH_KEEP=1` 保留生成的世界（文件位置见命令末行，2 574 312 个三角形，1 244 691 个顶点，840 个面）；应用以 `ATLAS_PROFILE=1` 启动时，每帧在标准错误输出 `FRAME ui … derived … panels … views … rest … dt …`、每个视图的 `OVERLAYS`、平面图叠加层的 `PARTS features … line_names … countries …`（不设该变量时不输出）。在应用里反复缩放后对这些行求平均与最大值。注意：状态栏的"帧 / UI"是平滑值，应用空闲不重绘时停在最后的数上（加载那一帧的 795 ms 会让它显示 37 ms 很久），不能当作当前帧时间。
 
 **发现**：应用一帧的 CPU 时间平均 12.8 ms、最慢 75 ms，其中视图的叠加层占大头；叠加层里国名平均 5.9 ms / 视图、最慢 21 ms，要素 0.25 ms、线名 0.05 ms。原因：缩放时每个国名的合适字号每帧都不同，egui 对每个新字号都要把字形重新栅格化并放进字形图集（图集也越长越大）。
 

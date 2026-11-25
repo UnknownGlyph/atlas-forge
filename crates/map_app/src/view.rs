@@ -549,6 +549,7 @@ impl App {
             geometry: self.scene.chunks().clone(),
             colors: (self.scene.color_gen, self.scene.colors.clone()),
             overlay: self.overlay.clone(),
+            hover_overlay: self.hover_overlay.clone(),
             glow: self.glow.clone(),
             graticule: self.graticule && vg.paper.is_none(),
             draw_overlay: !light_overlays,
