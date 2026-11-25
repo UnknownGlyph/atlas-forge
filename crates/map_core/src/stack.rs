@@ -92,9 +92,11 @@ impl Document {
     pub fn remove_group(&mut self, g: GroupId) -> TResult<usize> {
         let i = self.groups.iter().position(|x| x.id == g).ok_or("图层不存在")?;
         self.groups.remove(i);
-        let before = self.group_of.len();
-        self.group_of.retain(|_, x| *x != g);
-        Ok(before - self.group_of.len())
+        let members: Vec<_> = self.group_of.iter().filter_map(|(id, group)| (*group == g).then_some(*id)).collect();
+        for id in &members {
+            self.group_of.remove(id);
+        }
+        Ok(members.len())
     }
 
     /// Move a group to place `to` in the stack (0 is the bottom).

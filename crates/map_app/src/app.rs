@@ -147,8 +147,10 @@ pub struct App {
     layer_lines: Vec<LineInstance>,
     layer_src: Option<(Document, f64)>,
     pub labels: Vec<(EntityId, map_core::labels::LabelPath)>,
-    label_cache: map_core::labels::LabelCache,
+    pub(crate) label_cache: map_core::labels::LabelCache,
     pub(crate) detail_cache: crate::map_detail::DetailCache,
+    pub(crate) draw_layers: std::cell::RefCell<crate::draw_layers::DrawLayers>,
+    pub(crate) lifespan_cache: crate::lifespan_ui::LifespanCache,
 
     pub tool: Tool,
     pub draft: Vec<LonLat>,
@@ -460,6 +462,8 @@ impl App {
             labels: vec![],
             label_cache: Default::default(),
             detail_cache: Default::default(),
+            draw_layers: Default::default(),
+            lifespan_cache: Default::default(),
             tool: Tool::Select,
             draft: vec![],
             draft_snap: vec![],
@@ -741,6 +745,8 @@ impl App {
 
     pub(crate) fn reset_board_view(&mut self) {
         self.stop_timeline_playback();
+        self.draw_layers = Default::default();
+        self.lifespan_cache = Default::default();
         self.reset_studio_navigation();
         self.replay = Default::default();
         self.diplomacy_ui = Default::default();
@@ -875,12 +881,12 @@ impl App {
         let t = Instant::now();
         let _measurement = crate::perf_ui::span("工程", "写入工程与备份");
         // the file being replaced kept as .bak1 (and two older ones)
-        match map_io::project::save_with_backups(&path, &self.doc, 3) {
-            Ok(()) => {
-                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        match map_io::project::save_snapshot(&path, &self.doc, 3) {
+            Ok(bytes) => {
+                let size = bytes.len();
                 self.set_status(crate::trf!("已保存 {}（{:.1} KB，{:.0} ms）", path.display(), size as f64 / 1024.0, t.elapsed().as_secs_f64() * 1e3), false);
                 self.note_recent(&path);
-                if let Err(e) = self.autosave.saved_project(&path,self.history.generation()) {
+                if let Err(e) = self.autosave.saved_project(&path, self.history.generation(), bytes) {
                     self.set_status(crate::trf!("已保存工程，保存点迁移仍待重试：{e}"),true);
                 }
                 self.path = Some(path);
@@ -1695,7 +1701,7 @@ impl eframe::App for App {
         }
         let closing = self.confirm_close || self.allow_close || ctx.input(|i| i.viewport().close_requested());
         if !closing {
-            if let Some(e) = self.autosave.tick(&ctx, &self.doc, self.path.clone(), self.history.generation(), self.dirty, busy) {
+            if let Some(e) = self.autosave.tick(&ctx, &self.doc, self.path.as_deref(), self.history.generation(), self.dirty, busy) {
                 self.set_status(crate::trf!("自动保存失败：{e}"), true);
             }
         }

@@ -5,10 +5,12 @@
 //! the vertex shader applies any 2D projection or the globe transform.
 
 use bytemuck::{Pod, Zeroable};
-use map_core::doc::Document;
+use imbl::{ordmap::DiffItem, OrdMap};
+use map_core::doc::{Document, Entity, EntityId, LineFeature, LineId};
+use map_core::stack::GroupId;
 use map_core::geom::{self, P2};
 use map_core::topo::{FaceId, FaceKind, Topology, BACKGROUND};
-use map_core::topo::{Edge, EdgeId};
+use map_core::topo::{Edge, EdgeId, Face, Node, NodeId};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
@@ -212,13 +214,14 @@ fn edge_class(doc: &Document, left: FaceId, right: FaceId) -> Option<u32> {
             if a == b {
                 return Some(class::FACE);
             }
-            if doc.top_ancestor(*a) != doc.top_ancestor(*b) {
-                return Some(class::BORDER);
-            }
-            let a: Vec<_> = doc.ancestors(*a).collect();
-            let b: Vec<_> = doc.ancestors(*b).collect();
-            let shared = a.iter().rev().zip(b.iter().rev()).take_while(|(a, b)| a == b).count();
+            // Only the top three levels select distinct line styles.
+            let lineage = |owner| doc.ancestors(owner).fold([None; 3], |[root, second, _], id| {
+                [Some(id), root, second]
+            });
+            let shared = lineage(*a).into_iter().zip(lineage(*b))
+                .take_while(|(a, b)| a.is_some() && a == b).count();
             Some(match shared {
+                0 => class::BORDER,
                 1 => class::INTERNAL,
                 2 => class::DISTRICT,
                 _ => class::LOCAL,
@@ -294,12 +297,52 @@ pub struct SceneCache {
     line_members: BTreeMap<ChunkId, BTreeSet<EdgeId>>,
     lines: BTreeMap<ChunkId, Chunk<LineInstance>>,
     chunks: Arc<GeometryChunks>,
-    last: Option<Document>,
+    last: Option<GeometrySource>,
     /// Changes whenever any line chunk changes.
     pub line_gen: u64,
     pub geometry_gen: u64,
     pub colors: Arc<Vec<[f32; 4]>>,
     pub color_gen: u64,
+}
+
+/// Hold the persistent tables that determine meshes and line classification.
+struct GeometrySource {
+    nodes: OrdMap<NodeId, Node>,
+    edges: OrdMap<EdgeId, Edge>,
+    faces: OrdMap<FaceId, Face>,
+    owners: OrdMap<FaceId, EntityId>,
+    entities: OrdMap<EntityId, Entity>,
+    rivers: OrdMap<LineId, LineFeature>,
+    group_of: OrdMap<LineId, GroupId>,
+    groups: Vec<GroupId>,
+}
+
+impl GeometrySource {
+    fn capture(doc: &Document) -> Self {
+        Self {
+            nodes: doc.topo.nodes.clone(), edges: doc.topo.edges.clone(), faces: doc.topo.faces.clone(),
+            owners: doc.owner.clone(), entities: doc.entities.clone(), rivers: doc.rivers.clone(),
+            group_of: doc.group_of.clone(), groups: doc.groups.iter().map(|group| group.id).collect(),
+        }
+    }
+
+    fn same_rivers(&self, doc: &Document) -> bool {
+        self.rivers.ptr_eq(&doc.rivers) && (doc.rivers.is_empty() || (
+            self.group_of.ptr_eq(&doc.group_of) && self.groups.iter().copied().eq(doc.groups.iter().map(|g| g.id))
+        ))
+    }
+
+    fn matches(&self, doc: &Document) -> bool {
+        self.faces.ptr_eq(&doc.topo.faces) && self.edges.ptr_eq(&doc.topo.edges)
+            && self.nodes.ptr_eq(&doc.topo.nodes) && self.owners.ptr_eq(&doc.owner)
+            && self.entities.ptr_eq(&doc.entities) && self.same_rivers(doc)
+    }
+}
+
+fn changed_keys<'a, K: Ord + Copy, V: PartialEq>(old: &'a OrdMap<K, V>, new: &'a OrdMap<K, V>) -> impl Iterator<Item = K> + 'a {
+    old.diff(new).map(|change| match change {
+        DiffItem::Add(key, _) | DiffItem::Remove(key, _) | DiffItem::Update { old: (key, _), .. } => *key,
+    })
 }
 
 pub fn rgba(c: [u8; 4]) -> [f32; 4] {
@@ -330,9 +373,9 @@ fn river_instances(doc: &Document, lon0: f64) -> Vec<LineInstance> {
 }
 
 /// Edges bounding any of `faces` in `doc`.
-fn edges_of_faces(doc: &Document, faces: &BTreeSet<FaceId>, out: &mut BTreeSet<EdgeId>) {
+fn edges_of_faces(records: &OrdMap<FaceId, Face>, faces: &BTreeSet<FaceId>, out: &mut BTreeSet<EdgeId>) {
     for f in faces {
-        if let Some(face) = doc.topo.faces.get(f) {
+        if let Some(face) = records.get(f) {
             for r in std::iter::once(&face.outer).chain(face.holes.iter()).flatten() {
                 out.insert(r.edge);
             }
@@ -372,33 +415,26 @@ impl SceneCache {
             self.lon0 = lon0;
             self.valid = true;
         }
+        if self.last.as_ref().is_some_and(|previous| previous.matches(doc)) {
+            st.ms = t0.elapsed().as_secs_f64() * 1e3;
+            return st;
+        }
         let prev = self.last.take();
 
         // ---- fills
-        let faces_same = prev.as_ref().is_some_and(|p| p.topo.faces.ptr_eq(&doc.topo.faces));
+        let mut changed_faces: BTreeSet<FaceId> = match &prev {
+            Some(old) => changed_keys(&old.faces, &doc.topo.faces).collect(),
+            None => doc.topo.faces.keys().copied().collect(),
+        };
         let mut dirty: BTreeSet<ChunkId> = BTreeSet::new();
-        if !faces_same {
-            let removed: Vec<FaceId> = self.meshes.keys().filter(|f| !doc.topo.faces.contains_key(*f)).copied().collect();
-            for f in removed {
-                let (_, c, _) = self.meshes.remove(&f).unwrap();
-                if let Some(m) = self.fill_members.get_mut(&c) {
-                    m.remove(&f);
-                }
-                dirty.insert(c);
-                if let Some(s) = self.slots.remove(&f) {
-                    self.free_slots.push(s);
-                }
-            }
-            for (fid, face) in doc.topo.faces.iter() {
-                if *fid == BACKGROUND || self.meshes.get(fid).map(|m| m.0) == Some(face.rev) {
-                    continue;
-                }
+        for fid in &changed_faces {
+            if *fid == BACKGROUND { continue; }
+            if let Some(face) = doc.topo.faces.get(fid) {
+                if self.meshes.get(fid).is_some_and(|m| m.0 == face.rev) { continue; }
                 let c = chunk_of(&face.bbox, lon0);
                 if let Some((_, old, _)) = self.meshes.get(fid) {
                     if *old != c {
-                        if let Some(m) = self.fill_members.get_mut(old) {
-                            m.remove(fid);
-                        }
+                        if let Some(m) = self.fill_members.get_mut(old) { m.remove(fid); }
                         dirty.insert(*old);
                     }
                 }
@@ -408,6 +444,14 @@ impl SceneCache {
                 self.slot(*fid);
                 dirty.insert(c);
                 st.faces_retessellated += 1;
+            } else if let Some((_, c, _)) = self.meshes.remove(fid) {
+                if let Some(m) = self.fill_members.get_mut(&c) {
+                    m.remove(fid);
+                }
+                dirty.insert(c);
+                if let Some(s) = self.slots.remove(fid) {
+                    self.free_slots.push(s);
+                }
             }
         }
         for c in &dirty {
@@ -433,25 +477,17 @@ impl SceneCache {
         let mut changed_edges = BTreeSet::new();
         let mut rivers_dirty = full;
         if let Some(p) = &prev {
-            let same = p.topo.edges.ptr_eq(&doc.topo.edges)
-                && p.topo.faces.ptr_eq(&doc.topo.faces)
-                && p.owner.ptr_eq(&doc.owner)
-                && p.entities.ptr_eq(&doc.entities)
-                && p.rivers.ptr_eq(&doc.rivers)
-                && p.group_of == doc.group_of
-                && p.groups.len() == doc.groups.len()
-                && p.topo.nodes.ptr_eq(&doc.topo.nodes);
-            if !same {
-                let cs = map_core::change::ChangeSet::between(p, doc);
-                // a changed parent can turn borders into internal lines anywhere
-                full = cs.entities.iter().any(|e| p.entities.get(e).map(|x| x.parent) != doc.entities.get(e).map(|x| x.parent));
-                // a river moved into or out of a layer changes hands between this mesh and the overlay
-                rivers_dirty = cs.rivers || p.group_of != doc.group_of || p.groups.len() != doc.groups.len();
-                dirty_edges.extend(cs.edges.iter().copied());
-                changed_edges = cs.edges;
-                let faces: BTreeSet<FaceId> = cs.faces.union(&cs.owners).copied().collect();
-                edges_of_faces(p, &faces, &mut dirty_edges);
-                edges_of_faces(doc, &faces, &mut dirty_edges);
+            full = p.entities.diff(&doc.entities).any(|change| match change {
+                DiffItem::Update { old: (_, a), new: (_, b) } => a.parent != b.parent,
+                _ => true,
+            });
+            rivers_dirty = !p.same_rivers(doc);
+            if !full {
+                changed_edges.extend(changed_keys(&p.edges, &doc.topo.edges));
+                dirty_edges.extend(&changed_edges);
+                changed_faces.extend(changed_keys(&p.owners, &doc.owner));
+                edges_of_faces(&p.faces, &changed_faces, &mut dirty_edges);
+                edges_of_faces(&doc.topo.faces, &changed_faces, &mut dirty_edges);
             }
         }
         let mut dirty_lines: BTreeSet<ChunkId> = BTreeSet::new();
@@ -471,7 +507,7 @@ impl SceneCache {
             });
             if !changed_edges.contains(eid) && next == self.edge_display.get(eid).copied()
                 && !prev.as_ref().is_some_and(|p| doc.topo.edges.get(eid).is_some_and(|e|
-                    p.topo.nodes.get(&e.a) != doc.topo.nodes.get(&e.a) || p.topo.nodes.get(&e.b) != doc.topo.nodes.get(&e.b)))
+                    p.nodes.get(&e.a) != doc.topo.nodes.get(&e.a) || p.nodes.get(&e.b) != doc.topo.nodes.get(&e.b)))
             {
                 continue;
             }
@@ -525,7 +561,7 @@ impl SceneCache {
                 line_count: self.lines.values().map(|chunk| chunk.data.len()).sum(),
             });
         }
-        self.last = Some(doc.clone());
+        self.last = Some(GeometrySource::capture(doc));
         st.ms = t0.elapsed().as_secs_f64() * 1e3;
         st
     }
@@ -804,6 +840,30 @@ mod tests {
         let mut v: Vec<_> = c.line_chunks().iter().flat_map(|ch| ch.data.iter().map(|l| (l.p0[0].to_bits(), l.p0[1].to_bits(), l.p1[0].to_bits(), l.p1[1].to_bits(), l.class)).collect::<Vec<_>>()).collect();
         v.sort_unstable();
         v
+    }
+
+    #[test]
+    fn replacing_a_group_with_the_same_group_count_reclassifies_rivers() {
+        use map_core::features::FeatureRef;
+
+        let mut doc = map_core::sample::demo_world();
+        let river = LineId(doc.topo.alloc());
+        doc.rivers.insert(river, LineFeature {
+            name: "river".into(), pts: vec![LonLat::new(1.0, 1.0), LonLat::new(1.0, 5.0)],
+            route: None, legend: String::new(), show_name: false, hidden: false,
+        });
+        let group = doc.add_group("waters");
+        doc.set_group(&[FeatureRef::River(river)], Some(group)).unwrap();
+        let mut cache = SceneCache::default();
+        cache.update_geometry(&doc, 0.0);
+        let grouped = cache.line_count();
+        let next = GroupId(doc.topo.alloc());
+        doc.groups.iter_mut().find(|g| g.id == group).unwrap().id = next;
+        cache.update_geometry(&doc, 0.0);
+        assert!(cache.line_count() > grouped);
+        let mut reference = SceneCache::default();
+        reference.update_geometry(&doc, 0.0);
+        assert_eq!(line_signature(&cache), line_signature(&reference));
     }
 
     #[test]

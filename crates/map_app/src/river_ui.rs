@@ -256,15 +256,16 @@ impl App {
 
     /// Every route, styled: dashes and dots in screen space, an arrowhead
     /// on the end. Drawn over the map, under labels.
-    pub fn draw_routes(&self, painter: &egui::Painter, vg: &ViewGeom, pass: map_core::stack::DrawPass) {
+    pub fn draw_routes(&self, painter: &egui::Painter, vg: &ViewGeom, layer: &crate::draw_layers::LayerFeatures) {
         use egui::Shape;
         let detail = self.map_detail(vg);
-        for (_, r) in self.doc.rivers.iter().filter(|(id, r)| !r.hidden && self.doc.group_of_id(**id) == pass.group
-            && self.line_shown(**id, r, detail)) {
+        for id in &layer.rivers {
+            let r = &self.doc.rivers[id];
+            if r.hidden || !self.line_shown(*id, r, detail) { continue; }
             let Some(rs) = r.route else {
                 // a river in a layer is drawn in the turn of its layer
                 // (rivers in no layer are part of the base map, drawn with it)
-                if pass.group.is_some() {
+                if layer.pass.group.is_some() {
                     let st = &self.doc.style;
                     let stroke = Stroke::new(st.river_width, Color32::from_rgba_unmultiplied(st.river[0], st.river[1], st.river[2], st.river[3]));
                     let mut piece: Vec<egui::Pos2> = Vec::new();

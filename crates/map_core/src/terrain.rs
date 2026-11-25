@@ -45,30 +45,41 @@ impl Terrain {
     pub fn shade(&self, radius_km: f64, strength: f64) -> Vec<u8> {
         let (w, h) = (self.w as usize, self.h as usize);
         let mut out = vec![0u8; w * h * 4];
+        if w == 0 || h == 0 { return out; }
         // metres per cell north-south
         let dy = std::f64::consts::PI * radius_km * 1000.0 / h as f64;
         let light = [-0.5f64, 0.5, 0.7];
         let ln = (light[0] * light[0] + light[1] * light[1] + light[2] * light[2]).sqrt();
-        let slope = |i: usize, j: usize| -> (f64, f64) {
+        let dx: Vec<_> = (0..h).map(|j| {
             let lat = 90.0 - (j as f64 + 0.5) / h as f64 * 180.0;
-            let dx = dy * lat.to_radians().cos().max(0.05) * h as f64 * 2.0 / w as f64;
-            let gx = (self.get(i as i64 + 1, j as i64) - self.get(i as i64 - 1, j as i64)) / (2.0 * dx);
-            let gy = (self.get(i as i64, j as i64 - 1) - self.get(i as i64, j as i64 + 1)) / (2.0 * dy);
+            dy * lat.to_radians().cos().max(0.05) * h as f64 * 2.0 / w as f64
+        }).collect();
+        let slope = |i: usize, j: usize| -> (f64, f64) {
+            let west = if i == 0 { w - 1 } else { i - 1 };
+            let east = if i + 1 == w { 0 } else { i + 1 };
+            let height = |x: usize, y: usize| f64::from(self.heights[y * w + x]);
+            let gx = (height(east, j) - height(west, j)) / (2.0 * dx[j]);
+            let gy = (height(i, j.saturating_sub(1)) - height(i, (j + 1).min(h - 1))) / (2.0 * dy);
             (gx, gy)
         };
         // on a world map real slopes are slight: the land's steep slopes
         // (the 95th in a hundred) are drawn as about 50°, the rest in proportion
-        let mut steep: Vec<f64> = (0..w * h).filter(|k| self.heights[*k] > 0).map(|k| {
-            let (gx, gy) = slope(k % w, k / w);
-            gx.hypot(gy)
-        }).collect();
-        steep.sort_by(f64::total_cmp);
-        let p95 = steep.get(steep.len() * 95 / 100).copied().unwrap_or(0.0).max(1e-6);
+        let mut steep = Vec::new();
+        for (j, row) in self.heights.chunks_exact(w).take(h).enumerate() {
+            for (i, &height) in row.iter().enumerate() {
+                if height > 0 {
+                    let (gx, gy) = slope(i, j);
+                    steep.push(gx.hypot(gy));
+                }
+            }
+        }
+        if steep.is_empty() { return out; }
+        let rank = steep.len() * 95 / 100;
+        let p95 = steep.select_nth_unstable_by(rank, f64::total_cmp).1.max(1e-6);
         let exaggerate = 1.2 / p95 * strength;
         for j in 0..h {
             for i in 0..w {
-                let here = self.get(i as i64, j as i64);
-                if here <= 0.0 {
+                if self.heights[j * w + i] <= 0 {
                     continue;
                 }
                 let (gx, gy) = slope(i, j);

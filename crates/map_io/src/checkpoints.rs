@@ -240,7 +240,7 @@ impl Store {
         }
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-        project::from_bytes(&bytes)
+        project::from_owned_bytes(bytes)
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {

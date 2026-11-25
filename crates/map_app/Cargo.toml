@@ -11,6 +11,7 @@ name = "atlas"
 path = "src/main.rs"
 
 [dependencies]
+imbl.workspace = true
 map_perf = { path = "../map_perf" }
 map_core.workspace = true
 map_io.workspace = true

@@ -19,6 +19,8 @@ pub struct GridIndex {
     cells: OrdMap<Cell, OrdSet<u64>>,
     /// Where each id was filed, so removal never depends on stale bboxes.
     of: OrdMap<u64, Vec<Cell>>,
+    /// Number of occupied cells per level, so queries skip empty levels.
+    levels: [usize; MAX_LEVEL as usize + 1],
 }
 
 fn cell_size(level: u8) -> f64 {
@@ -26,8 +28,16 @@ fn cell_size(level: u8) -> f64 {
 }
 
 fn dims(level: u8) -> (i64, i64) {
-    let cs = cell_size(level);
-    ((360.0 / cs).round() as i64, (180.0 / cs).ceil().max(1.0) as i64)
+    let columns = 1i64 << level;
+    (columns, (columns / 2).max(1))
+}
+
+// At most one circuit of the globe. Normalising the start first keeps
+// both the loop and its arithmetic bounded for continuous longitudes.
+fn columns(x0: i64, x1: i64, cols: i64) -> std::ops::Range<i64> {
+    let count = x1.saturating_sub(x0).saturating_add(1).clamp(0, cols);
+    let start = if count == cols { 0 } else { x0.rem_euclid(cols) };
+    start..start + count
 }
 
 /// Column/row ranges covered by `bb` at `level` (columns unwrapped).
@@ -59,10 +69,9 @@ impl GridIndex {
         let (cols, _) = dims(level);
         let (x0, x1, y0, y1) = span(level, bb);
         let mut out = Vec::new();
-        let xs: Vec<i64> = if x1 - x0 + 1 >= cols { (0..cols).collect() } else { (x0..=x1).map(|x| x.rem_euclid(cols)).collect() };
-        for x in xs {
+        for x in columns(x0, x1, cols) {
             for y in y0..=y1 {
-                out.push((level, x as i32, y as i32));
+                out.push((level, (x % cols) as i32, y as i32));
             }
         }
         out.sort();
@@ -72,14 +81,16 @@ impl GridIndex {
 
     pub fn insert(&mut self, id: u64, bb: [f64; 4]) {
         let cells = Self::cells_for(&bb);
-        if self.of.get(&id) == Some(&cells) {
-            return;
+        if let Some(previous) = self.of.get(&id) {
+            if previous == &cells { return; }
+            self.remove(id);
         }
-        self.remove(id);
         for c in &cells {
-            let mut set = self.cells.get(c).cloned().unwrap_or_default();
+            let set = self.cells.entry(*c).or_default();
+            if set.is_empty() {
+                self.levels[c.0 as usize] += 1;
+            }
             set.insert(id);
-            self.cells.insert(*c, set);
         }
         self.of.insert(id, cells);
     }
@@ -87,12 +98,11 @@ impl GridIndex {
     pub fn remove(&mut self, id: u64) {
         let Some(cells) = self.of.remove(&id) else { return };
         for c in cells {
-            if let Some(mut set) = self.cells.get(&c).cloned() {
+            if let Some(set) = self.cells.get_mut(&c) {
                 set.remove(&id);
                 if set.is_empty() {
                     self.cells.remove(&c);
-                } else {
-                    self.cells.insert(c, set);
+                    self.levels[c.0 as usize] -= 1;
                 }
             }
         }
@@ -114,6 +124,7 @@ impl GridIndex {
         }
         let all = !bb.iter().all(|v| v.is_finite());
         for level in 0..=MAX_LEVEL {
+            if self.levels[level as usize] == 0 { continue; }
             let (cols, _) = dims(level);
             let lo = (level, i32::MIN, i32::MIN);
             let hi = (level, i32::MAX, i32::MAX);
@@ -124,21 +135,26 @@ impl GridIndex {
                 continue;
             }
             let (x0, x1, y0, y1) = span(level, &bb);
-            let ncols = (x1 - x0 + 1).min(cols);
-            if ncols * (y1 - y0 + 1) > PROBE_LIMIT {
-                // large query at a fine level: scan the level and filter
-                let wrap_all = x1 - x0 + 1 >= cols;
-                for ((_, x, y), set) in self.cells.range(lo..=hi) {
-                    let (x, y) = (*x as i64, *y as i64);
-                    let in_x = wrap_all || (x0..=x1).any(|c| c.rem_euclid(cols) == x);
-                    if in_x && y >= y0 && y <= y1 {
-                        out.extend(set.iter().copied());
+            let xs = columns(x0, x1, cols);
+            if y1 < y0 || xs.is_empty() { continue; }
+            let ncols = xs.end - xs.start;
+            if ncols * (y1 - y0 + 1) > PROBE_LIMIT || ncols as usize > self.levels[level as usize] {
+                // Occupied cells sort by (level, column, row). A viewport
+                // crossing the seam occupies two contiguous column ranges.
+                for range in [xs.start..xs.end.min(cols), 0..xs.end - cols] {
+                    if range.is_empty() { continue; }
+                    let a = (level, range.start as i32, y0 as i32);
+                    let b = (level, (range.end - 1) as i32, y1 as i32);
+                    for ((_, _, y), set) in self.cells.range(a..=b) {
+                        if (y0..=y1).contains(&i64::from(*y)) {
+                            out.extend(set.iter().copied());
+                        }
                     }
                 }
                 continue;
             }
-            let xs: Vec<i64> = if x1 - x0 + 1 >= cols { (0..cols).collect() } else { (x0..=x1).map(|x| x.rem_euclid(cols)).collect() };
             for x in xs {
+                let x = x % cols;
                 let a = (level, x as i32, y0 as i32);
                 let b = (level, x as i32, y1 as i32);
                 for (_, set) in self.cells.range(a..=b) {
@@ -155,6 +171,25 @@ impl GridIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn broad_wrapped_queries_preserve_snapshots_and_skip_removed_levels() {
+        let mut index = GridIndex::default();
+        for (id, lon) in [(1, 174.0), (2, -175.0), (3, 0.0)] {
+            index.insert(id, [lon, 0.0, lon + 0.001, 0.001]);
+        }
+        let earlier = index.clone();
+        let seam = [160.0, -30.0, 200.0, 30.0];
+        assert_eq!(index.query(seam), [1, 2]);
+        assert_eq!(index.query([-1e300, -90.0, 1e300, 90.0]), [1, 2, 3]);
+        index.insert(1, [30.0, 0.0, 35.0, 5.0]);
+        index.remove(2);
+        index.remove(3);
+        assert!(index.query(seam).is_empty());
+        assert_eq!(earlier.query(seam), [1, 2]);
+        index.remove(1);
+        assert!(index.levels.iter().all(|count| *count == 0));
+    }
 
     fn brute(items: &[(u64, [f64; 4])], q: [f64; 4]) -> Vec<u64> {
         let hit = |a: &[f64; 4], b: &[f64; 4]| {

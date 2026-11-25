@@ -27,6 +27,7 @@ pub fn generate(doc: &Document, project: &Project) -> Result<Generation, String>
     );
     let seas = climate::ocean_faces(doc);
     let edits = RasterEdits::new(project, grid);
+    let coarse_faces = super::face_grid::sample(&doc.topo, climate::W, climate::H, climate::center);
     let mut global_ground: Vec<_> = base
         .iter()
         .copied()
@@ -37,6 +38,7 @@ pub fn generate(doc: &Document, project: &Project) -> Result<Generation, String>
                 doc,
                 &settings,
                 &seas,
+                coarse_faces[i],
                 source,
                 point,
                 existing.and_then(|x| x.surface_edits.get(&i)),
@@ -71,13 +73,15 @@ pub fn generate(doc: &Document, project: &Project) -> Result<Generation, String>
         .collect();
     let mut surface = Vec::with_capacity(grid.len());
     let mut cells = Vec::with_capacity(grid.len());
-    for i in 0..grid.len() {
+    let faces = super::face_grid::sample(&doc.topo, grid.width.into(), grid.height.into(), |i| grid.center(i));
+    for (i, face) in faces.into_iter().enumerate() {
         let at = grid.center(i);
         let global = climate::index(at);
         let sample = terrain(
             doc,
             &settings,
             &seas,
+            face,
             base[global],
             at,
             existing.and_then(|p| p.surface_edits.get(&global)),
@@ -99,13 +103,15 @@ pub fn generate(doc: &Document, project: &Project) -> Result<Generation, String>
     let mut contributing = vec![0.0; grid.len()];
     let mut discharge = vec![0.0; grid.len()];
     let radius = doc.radius().max(1.0);
+    let width = usize::from(grid.width);
+    let row_area: Vec<_> = (0..usize::from(grid.height)).map(|y| grid.cell_area(y * width, radius)).collect();
     let g = &atmosphere.settings.planet;
     let year_seconds = g[climate::Param::Period] * 86_400.;
     for &i in order.iter().rev() {
         let precipitation = f64::from(cells[i][Field::Rain as usize]);
         let temperature = cells[i][Field::Temperature as usize];
         let land = surface[i].land();
-        let area = if land { grid.cell_area(i, radius) } else { 0.0 };
+        let area = if land { row_area[i / width] } else { 0.0 };
         let evap = f64::from((18.0 * temperature + 390.0).max(55.0));
         let runoff_fraction = (precipitation / (precipitation + evap)).clamp(0.0, 1.0);
         let catchment = edits.value(Field::Drainage, i, (contributing[i] + area) as f32);
@@ -122,17 +128,15 @@ pub fn generate(doc: &Document, project: &Project) -> Result<Generation, String>
         }
     }
     for (i, tile) in surface.iter().enumerate() {
-        let slope = neighbors(grid, i).fold(0.0_f32, |steepest, next| {
-            let distance = distance_m(grid.center(i), grid.center(next), radius);
+        let center = grid.center(i);
+        let gradient = neighbors(grid, i).fold(0.0_f64, |steepest, next| {
+            let distance = distance_m(center, grid.center(next), radius);
             let gradient = (cells[i][Field::Elevation as usize]
                 - cells[next][Field::Elevation as usize])
                 .abs();
-            steepest.max(
-                (f64::from(gradient) / distance.max(1.0))
-                    .atan()
-                    .to_degrees() as f32,
-            )
+            steepest.max(f64::from(gradient) / distance.max(1.0))
         });
+        let slope = gradient.atan().to_degrees() as f32;
         let cell = &mut cells[i];
         cell[Field::Slope as usize] = edits.value(Field::Slope, i, slope);
         let (height, temp, rain, runoff) = (
@@ -285,6 +289,7 @@ fn terrain(
     doc: &Document,
     settings: &Settings,
     seas: &HashSet<crate::topo::FaceId>,
+    id: crate::FaceId,
     source: Ground,
     p: LonLat,
     edit: Option<&climate::SurfaceEdit>,
@@ -293,7 +298,7 @@ fn terrain(
     let plate = worldgen::fbm(xyz.map(|x| x * 3.35), 4, settings.seed);
     let detail = worldgen::fbm(xyz.map(|x| x * 17.0), 4, settings.seed ^ 0x71E2_6304);
     let mut ground = source;
-    let id = doc.topo.face_at(p);
+    let explicit = doc.terrain.as_ref().map(|terrain| terrain.at(p.lon, p.lat));
     ground.surface = if id != BACKGROUND {
         if doc.face_kind_at(id, doc.year) == Some(FaceKind::Land) {
             Surface::Land
@@ -304,8 +309,8 @@ fn terrain(
         }
     } else if doc.background_kind() == FaceKind::Land {
         Surface::Land
-    } else if let Some(terrain) = &doc.terrain {
-        if terrain.at(p.lon, p.lat) > 0.0 {
+    } else if let Some(height) = explicit {
+        if height > 0.0 {
             Surface::Land
         } else {
             Surface::Water
@@ -329,7 +334,6 @@ fn terrain(
     }
     let relief =
         settings.relief * (plate.abs() * 0.82 + (0.4 + detail * 0.6).max(0.0).powi(3) * 0.38);
-    let explicit = doc.terrain.as_ref().map(|terrain| terrain.at(p.lon, p.lat));
     let height = match ground.surface {
         Surface::Water => explicit.unwrap_or_else(|| -120.0 - relief).min(0.0),
         Surface::Lake => explicit.unwrap_or(0.0).max(0.0),

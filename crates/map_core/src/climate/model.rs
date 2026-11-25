@@ -83,6 +83,26 @@ fn breeze(p: &Planet, lat: f64, lon: f64, dec: f64) -> (f64, f64) {
         -3. * (2. * bands * relative).sin(),
     )
 }
+
+fn upwind_steps(east: f64, north: f64, cos_lat: f64) -> [(i32, i32); 6] {
+    let length = east.hypot(north).max(0.01);
+    std::array::from_fn(|step| {
+        let k = (step + 1) as f64;
+        (
+            (-east / length * k / cos_lat.max(0.25)).round() as i32,
+            (north / length * k).round() as i32,
+        )
+    })
+}
+
+#[derive(Clone, Copy, Default)]
+struct Forcing {
+    radiation: f64,
+    wind: (f64, f64),
+    migration: f64,
+    upwind: [(i32, i32); 6],
+}
+
 pub fn calculate(p: &Planet, ground: &[Ground]) -> Vec<Cell> {
     use Param::*;
     let atmosphere = p[Pressure].powf(0.35) * p[AirDensity].powf(0.15);
@@ -107,6 +127,12 @@ pub fn calculate(p: &Planet, ground: &[Ground]) -> Vec<Cell> {
         * p[Greenhouse]
         * atmosphere;
     let orbits: [_; 12] = std::array::from_fn(|m| orbit(p, m));
+    let belt = (3. * (24. / p[Spin]).powf(0.2)).clamp(0.6, 5.);
+    let ice_sensitivity = (5772. / p[StarTemp]).powf(-0.45);
+    let lapse_rate = 0.0065 * (p[Gravity] / 9.80665).powf(0.6);
+    let weights: [f64; 6] = std::array::from_fn(|k| (-0.36 * (k + 1) as f64).exp());
+    let total_weight: f64 = weights.iter().sum();
+    let mut forcing = [Forcing::default(); 12];
     let mut cells: Vec<_> = ground
         .iter()
         .map(|&g| Cell {
@@ -118,6 +144,26 @@ pub fn calculate(p: &Planet, ground: &[Ground]) -> Vec<Cell> {
         let pos = center(i);
         let lat = pos.lat.to_radians();
         let lon = (pos.lon - p[Substellar]).to_radians();
+        let cos_lat = lat.cos();
+        // On rotating worlds these fields depend only on latitude and month.
+        // A synchronous world retains a distinct day/night field at each cell.
+        if i % W == 0 || p.locked_rotation {
+            for (input, &(dec, flux)) in forcing.iter_mut().zip(&orbits) {
+                let sun = sunlight(lat, lon, dec, p.locked_rotation);
+                let wind = breeze(p, lat, lon, dec);
+                let migration = if p.locked_rotation {
+                    sun
+                } else {
+                    (0.5 + 0.5 * (2. * belt * (lat - dec * 0.75).abs()).cos()) * cos_lat.max(0.)
+                };
+                *input = Forcing {
+                    radiation: flux * ((1. - mix) * sun + 0.25 * mix),
+                    wind,
+                    migration,
+                    upwind: upwind_steps(wind.0, wind.1, cos_lat),
+                };
+            }
+        }
         let g = ground[i];
         let water = g.water(p[Ocean]);
         let mut eq = [0.; 12];
@@ -130,16 +176,12 @@ pub fn calculate(p: &Planet, ground: &[Ground]) -> Vec<Cell> {
                 _ => 0.,
             })
         .clamp(0.01, 0.96);
-        for (m, &(dec, flux)) in orbits.iter().enumerate() {
-            let sunlight = sunlight(lat, lon, dec, p.locked_rotation);
-            let local = flux * ((1. - mix) * sunlight + 0.25 * mix);
-            let temp = (local * (1. - reflect) / 5.670374419e-8).powf(0.25) - 273.15 + greenhouse;
-            let ice_feedback = ((-temp + 2.) / 20.).clamp(0., 1.)
-                * (4. + 5. * water)
-                * (5772. / p[StarTemp]).powf(-0.45);
-            eq[m] = temp
-                - ice_feedback
-                - 0.0065 * (p[Gravity] / 9.80665).powf(0.6) * f64::from(g.height.max(0.));
+        for (m, input) in forcing.iter().enumerate() {
+            let temp = (input.radiation * (1. - reflect) / 5.670374419e-8).powf(0.25) - 273.15
+                + greenhouse;
+            let ice_feedback =
+                ((-temp + 2.) / 20.).clamp(0., 1.) * (4. + 5. * water) * ice_sensitivity;
+            eq[m] = temp - ice_feedback - lapse_rate * f64::from(g.height.max(0.));
         }
         // Periodic steady state of a first-order surface heat reservoir.
         let reservoir_days = if g.surface == Surface::Lake { 42. } else { 90. };
@@ -148,47 +190,39 @@ pub fn calculate(p: &Planet, ground: &[Ground]) -> Vec<Cell> {
             .min(0.9999999);
         let weighted = eq.iter().fold(0., |v, t| keep * v + (1. - keep) * t);
         let mut temp = weighted / (1. - keep.powi(12));
-        for (m, &(dec, _)) in orbits.iter().enumerate() {
+        let dx = f64::from(ground[neighbour(i, 1, 0)].height - ground[neighbour(i, -1, 0)].height)
+            / 3000.;
+        let dy = f64::from(ground[neighbour(i, 0, -1)].height - ground[neighbour(i, 0, 1)].height)
+            / 3000.;
+        for (m, input) in forcing.iter().enumerate() {
             temp = keep * temp + (1. - keep) * eq[m];
-            let (mut east, mut north) = breeze(p, lat, lon, dec);
+            let (mut east, mut north) = input.wind;
             // Deflect flow along high relief (east/north positive).
-            let dx =
-                f64::from(ground[neighbour(i, 1, 0)].height - ground[neighbour(i, -1, 0)].height)
-                    / 3000.;
-            let dy =
-                f64::from(ground[neighbour(i, 0, -1)].height - ground[neighbour(i, 0, 1)].height)
-                    / 3000.;
             let uphill = (east * dx + north * dy).max(0.) / (1. + dx * dx + dy * dy);
             east -= 0.6 * uphill * dx;
             north -= 0.6 * uphill * dy;
-            let length = east.hypot(north).max(0.01);
             let mut supply = 0.;
-            let mut weight = 0.;
             let mut barrier = 0_f32;
             let mut near = 0.;
-            for k in 1..=6 {
-                let dx = (-east / length * k as f64 / lat.cos().max(0.25)).round() as i32;
-                let dy = (north / length * k as f64).round() as i32;
-                let up = ground[neighbour(i, dx, dy)];
-                let w = (-0.36 * k as f64).exp();
+            let path = if uphill > 0. {
+                upwind_steps(east, north, cos_lat)
+            } else {
+                input.upwind
+            };
+            for (step, &(ox, oy)) in path.iter().enumerate() {
+                let up = ground[neighbour(i, ox, oy)];
+                let w = weights[step];
                 supply += w * (up.water(p[Ocean]) + if up.river { 0.10 } else { 0. });
-                weight += w;
                 barrier = barrier.max(up.height - g.height);
-                if k == 1 {
+                if step == 0 {
                     near = f64::from(g.height - up.height);
                 }
             }
-            let migration = if p.locked_rotation {
-                sunlight(lat, lon, dec, true)
-            } else {
-                let distance = (lat - dec * 0.75).abs();
-                let belt = (3. * (24. / p[Spin]).powf(0.2)).clamp(0.6, 5.);
-                (0.5 + 0.5 * (2. * belt * distance).cos()) * lat.cos().max(0.)
-            };
+            let migration = input.migration;
             let moisture = p[Vapour]
                 * (0.25
                     + 0.32 * water
-                    + 0.80 * supply / weight
+                    + 0.80 * supply / total_weight
                     + if g.river { 0.16 } else { 0. }
                     + if g.forest { 0.13 } else { 0. });
             let orographic = (1. + near.clamp(0., 5000.) / 1800.)

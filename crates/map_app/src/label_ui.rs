@@ -11,7 +11,6 @@ use eframe::egui::{self, epaint::Vertex, Color32, Mesh, Pos2, Rect, RichText, St
 use map_core::doc::LabelPlace;
 use map_core::labels::{name_size, name_spacing, LabelPath};
 use map_core::EntityId;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Largest and smallest automatic name (px); a name that would be smaller
@@ -82,7 +81,8 @@ impl Line {
                     }
                     pieces.last_mut().unwrap().push(p);
                 }
-                let mut best = pieces.into_iter().filter(|p| p.len() >= 2).max_by(|a, b| Bent::new(a.clone()).len().total_cmp(&Bent::new(b.clone()).len()))?;
+                let length = |points: &[Pos2]| points.windows(2).map(|pair| pair[0].distance(pair[1])).sum::<f32>();
+                let mut best = pieces.into_iter().filter(|p| p.len() >= 2).max_by(|a, b| length(a).total_cmp(&length(b)))?;
                 if best.last().unwrap().x < best[0].x {
                     best.reverse();
                 }
@@ -147,7 +147,11 @@ fn bend(galley: &egui::Galley, scale: f32, uv: Vec2, colour: Color32, place: imp
 
 /// The boxes of a bent name's glyphs (each glyph is one quad).
 fn glyph_boxes(mesh: &Mesh, pad: f32) -> Vec<Rect> {
-    mesh.vertices.chunks(4).map(|q| Rect::from_points(&q.iter().map(|v| v.pos).collect::<Vec<_>>()).expand(pad)).collect()
+    mesh.vertices.chunks(4).map(|quad| {
+        let mut rect = Rect::NOTHING;
+        for vertex in quad { rect.extend_with(vertex.pos); }
+        rect.expand(pad)
+    }).collect()
 }
 
 /// A name ready to draw: its line on the view, its glyphs and their size.
@@ -180,31 +184,26 @@ impl App {
             let c = self.doc.style.label;
             Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
         };
-        let paths: HashMap<EntityId, &LabelPath> = self.labels.iter().map(|(e, p)| (*e, p)).collect();
         // placed labels first (they always show), then the automatic ones largest first
-        let mut items: Vec<(EntityId, Option<LabelPlace>)> = self
-            .doc
-            .countries()
-            .into_iter()
-            // a placed label shows only in years its country exists
-            .filter(|e| self.doc.exists_in(*e, self.doc.year))
-            .filter_map(|e| self.doc.entities.get(&e).filter(|x| editing || x.parent.is_none())
-                .and_then(|x| x.label).map(|pl| (e, Some(pl))))
-            .collect();
-        items.extend(self.labels.iter().filter(|(e, _)| self.doc.entities.get(e).is_some_and(|x| x.label.is_none())).map(|(e, _)| (*e, None)));
+        let placed = self.doc.entities.iter().filter(|(_, x)| {
+            x.kind == map_core::EntityKind::Country && x.layer == self.doc.active_layer
+                && x.exists_in(self.doc.year) && (editing || x.parent.is_none())
+        }).filter_map(|(&id, x)| x.label.map(|place| (id, x, Some(place), self.label_cache.path(id))));
+        let automatic = self.labels.iter().filter_map(|(id, path)| {
+            let entity = self.doc.entities.get(id)?;
+            (entity.label.is_none()).then_some((*id, entity, None, Some(path)))
+        });
         // all laid out first, so the glyph atlas holds every glyph when
         // their places in it are read
         let mut laid: Vec<Laid> = Vec::new();
-        for (e, place) in items {
-            let Some(ent) = self.doc.entities.get(&e) else { continue };
+        for (e, ent, place, path) in placed.chain(automatic) {
+            if !editing && (ent.label_hidden || (place.is_none() && path.is_some_and(|path| !line_near_view(vg, path)))) {
+                continue;
+            }
             let tier = map_core::label_type::Tier::administrative(self.doc.ancestors(e).count().saturating_sub(1));
             let style = self.doc.style.label_type(tier);
             let family = self.font_family(style.font, style.bold);
             let font = |size: f32| egui::FontId::new(size, family.clone());
-            if ent.label_hidden && !editing {
-                continue;
-            }
-            let path = paths.get(&e).copied();
             // a local view: names outside its region are faded, like the land
             let outside = self.focus_view.is_some()
                 && self.active_focus().is_some_and(|f| !f.contains(place.map(|p| p.at).or(path.map(|p| p.middle())).unwrap_or(f.center())));
@@ -237,10 +236,6 @@ impl App {
                 }
                 None => {
                     let Some(path) = path else { continue };
-                    // not laid out at all when its line is nowhere near the view
-                    if !editing && !line_near_view(vg, path) {
-                        continue;
-                    }
                     let Some(line) = Line::on(vg, path) else { continue };
                     let (len, room) = line.room(vg, path);
                     let fitted = name_size(len as f64, room as f64, em as f64) as f32;
@@ -289,18 +284,17 @@ impl App {
         }
         let uv = Vec2::new(1.0 / atlas[0] as f32, 1.0 / atlas[1] as f32);
         // city dots, for names to keep off
-        let dots: Vec<Rect> = if self.doc.style.show_cities {
-            self.doc
+        let mut dots = crate::label_boxes::LabelBoxes::default();
+        if self.doc.style.show_cities {
+            let detail = self.map_detail(vg);
+            dots.extend(self.doc
                 .entities
                 .iter()
                 .filter(|(id, x)| x.kind == map_core::EntityKind::City && x.exists_in(self.doc.year)
-                    && self.city_shown(**id, self.map_detail(vg)))
+                    && self.city_shown(**id, detail))
                 .filter_map(|(_, x)| x.pos.and_then(|p| vg.to_screen(p)))
-                .map(|p| Rect::from_center_size(p, Vec2::splat(9.0)))
-                .collect()
-        } else {
-            vec![]
-        };
+                .map(|p| Rect::from_center_size(p, Vec2::splat(9.0))));
+        }
         for Laid { e, place, line, galleys, size, colour, faded } in laid {
             let smooth = (size * 0.5).max(2.0);
             // where it is meant to be, else slid along its line off the city
@@ -311,8 +305,8 @@ impl App {
                 let Some(mesh) = bend(&galley, scale, uv, colour, |x, y| line.place(vg, x + shift, y, smooth)) else { continue };
                 let boxes = glyph_boxes(&mesh, 1.5);
                 // (a dot in the gap between two letters is on the name too)
-                let spans: Vec<Rect> = boxes.windows(2).map(|w| w[0].union(w[1])).chain(boxes.first().copied()).collect();
-                let clear = !spans.iter().any(|g| dots.iter().any(|d| d.intersects(*g)));
+                let clear = !boxes.windows(2).map(|w| w[0].union(w[1])).chain(boxes.first().copied())
+                    .any(|span| dots.intersects(span));
                 if found.is_none() || clear {
                     found = Some((mesh, boxes, shift, galley, scale));
                 }
@@ -348,17 +342,18 @@ impl App {
             // white behind dark names, dark behind light ones (a dark theme)
             let h = map_core::doc::halo_for(self.doc.style.label);
             let halo = Color32::from_rgba_unmultiplied(h[0], h[1], h[2], if faded { 60 } else { 150 });
+            let mut outlined = Mesh::with_texture(mesh.texture_id);
+            outlined.vertices.reserve(mesh.vertices.len() * 9);
+            outlined.indices.reserve(mesh.indices.len() * 9);
             for i in 0..8 {
                 let a = i as f32 * std::f32::consts::TAU / 8.0;
                 let o = Vec2::new(a.cos(), a.sin()) * 1.4;
-                let mut m = mesh.clone();
-                for v in &mut m.vertices {
-                    v.pos += o;
-                    v.color = halo;
-                }
-                painter.add(egui::Shape::mesh(m));
+                let base = outlined.vertices.len() as u32;
+                outlined.vertices.extend(mesh.vertices.iter().map(|v| Vertex { pos: v.pos + o, color: halo, ..*v }));
+                outlined.indices.extend(mesh.indices.iter().map(|index| base + index));
             }
-            painter.add(egui::Shape::mesh(mesh));
+            outlined.append(mesh);
+            painter.add(egui::Shape::mesh(outlined));
             if editing {
                 let strong = self.selected == Some(e) || self.drag_label.is_some_and(|d| d.0 == e);
                 let col = if place.is_some() { Color32::from_rgb(230, 80, 20) } else { Color32::from_gray(120) };

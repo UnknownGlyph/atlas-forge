@@ -78,6 +78,15 @@ impl ChangeSet {
         let mut rivers = BTreeSet::new();
         diff_map(&a.rivers, &b.rivers, &mut rivers, &mut bytes, |r| r.pts.capacity() * 16);
         c.rivers = !rivers.is_empty();
+        // The flattened river/area and its editable Bézier handles are
+        // distinct allocations retained by undo when a curve is replaced.
+        if !a.curves.ptr_eq(&b.curves) {
+            for change in a.curves.diff(&b.curves) {
+                if let DiffItem::Remove(_, curve) | DiffItem::Update { old: (_, curve), .. } = change {
+                    bytes += curve.nodes.capacity() * std::mem::size_of::<crate::curve::CurveNode>();
+                }
+            }
+        }
         if !a.symbols.ptr_eq(&b.symbols) {
             let mut symbols = BTreeSet::new();
             diff_map(&a.symbols, &b.symbols, &mut symbols, &mut bytes, |s| {

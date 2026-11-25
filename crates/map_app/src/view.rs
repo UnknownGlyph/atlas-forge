@@ -872,13 +872,14 @@ impl App {
         let t_a = std::time::Instant::now();
         // drawn features, layer by layer: those in no layer first, then
         // each layer from the bottom of the stack up, with its opacity
-        for pass in self.doc.draw_passes() {
+        let mut layers = self.draw_layers.borrow_mut();
+        for layer in layers.for_document(&self.doc) {
             let mut p = painter.clone();
-            p.set_opacity(pass.opacity);
-            self.draw_areas(&p, vg, &mut taken, pass);
-            self.draw_routes(&p, vg, pass);
-            self.draw_annotations(&p, vg, &mut taken, pass);
-            self.draw_symbols(&p, vg, &mut taken, pass);
+            p.set_opacity(layer.pass.opacity);
+            self.draw_areas(&p, vg, &mut taken, layer);
+            self.draw_routes(&p, vg, layer);
+            self.draw_annotations(&p, vg, &mut taken, layer);
+            self.draw_symbols(&p, vg, &mut taken, layer);
         }
         self.draw_visualization_icons(painter, vg, &mut taken);
         let t_features = t_a.elapsed().as_secs_f32() * 1000.0;

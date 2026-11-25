@@ -34,12 +34,18 @@ pub fn to_bytes(doc: &Document) -> Result<Vec<u8>, String> {
     }
     stored.format_version = version;
     let body = rmp_serde::to_vec_named(&stored).map_err(|e| format!("序列化失败: {e}"))?;
-    let packed = lz4_flex::compress_prepend_size(&body);
+    let size = u32::try_from(body.len()).map_err(|_| "工程超过 LZ4 块格式可记录的长度")?;
+    let capacity = lz4_flex::block::get_maximum_output_size(body.len()) + 16;
+    let mut out = Vec::new();
+    out.try_reserve_exact(capacity).map_err(|e| format!("无法分配压缩缓冲区: {e}"))?;
+    out.resize(capacity, 0);
+    out[..8].copy_from_slice(MAGIC);
+    out[8..12].copy_from_slice(&version.to_le_bytes());
+    out[12..16].copy_from_slice(&size.to_le_bytes());
+    let written = lz4_flex::block::compress_into(&body, &mut out[16..]).map_err(|e| format!("压缩失败: {e}"))?;
     drop(body);
-    let mut out = Vec::with_capacity(packed.len() + 12);
-    out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&version.to_le_bytes());
-    out.extend_from_slice(&packed);
+    out.truncate(16 + written);
+    out.shrink_to_fit();
     Ok(out)
 }
 
@@ -72,6 +78,16 @@ fn content_version(doc: &Document) -> u32 {
 }
 
 pub fn from_bytes(bytes: &[u8]) -> Result<Document, String> {
+    decode(unpack(bytes)?)
+}
+
+pub(crate) fn from_owned_bytes(bytes: Vec<u8>) -> Result<Document, String> {
+    let body = unpack(&bytes)?;
+    drop(bytes);
+    decode(body)
+}
+
+fn unpack(bytes: &[u8]) -> Result<Vec<u8>, String> {
     if bytes.len() < 12 || &bytes[..8] != MAGIC {
         return Err("不是 Atlas 工程文件".into());
     }
@@ -79,7 +95,23 @@ pub fn from_bytes(bytes: &[u8]) -> Result<Document, String> {
     if version > FORMAT_VERSION {
         return Err(format!("文件版本 {version} 高于本程序支持的版本 {FORMAT_VERSION}，请升级软件"));
     }
-    let body = lz4_flex::decompress_size_prepended(&bytes[12..]).map_err(|e| format!("解压失败: {e}"))?;
+    let (size, compressed) = lz4_flex::block::uncompressed_size(&bytes[12..]).map_err(|e| format!("解压失败: {e}"))?;
+    // One LZ4 length-extension byte can describe at most 255 bytes. Reject
+    // impossible size prefixes before reserving or touching their memory.
+    if size > compressed.len().saturating_mul(255) {
+        return Err("解压失败: 声明长度与压缩数据不符".into());
+    }
+    let mut body = Vec::new();
+    body.try_reserve_exact(size).map_err(|e| format!("无法分配解压缓冲区: {e}"))?;
+    body.resize(size, 0);
+    let written = lz4_flex::block::decompress_into(compressed, &mut body).map_err(|e| format!("解压失败: {e}"))?;
+    if written != size {
+        return Err("解压失败: 解压后的长度与文件头不符".into());
+    }
+    Ok(body)
+}
+
+fn decode(body: Vec<u8>) -> Result<Document, String> {
     let mut doc: Document = rmp_serde::from_slice(&body).map_err(|e| format!("文件损坏: {e}"))?;
     drop(body);
     if let Some(book) = doc.book.as_mut() {
@@ -98,6 +130,12 @@ pub fn from_bytes(bytes: &[u8]) -> Result<Document, String> {
 }
 
 fn validate_generated(doc: &Document) -> Result<(), String> {
+    if let Some(terrain) = &doc.terrain {
+        let cells = u64::from(terrain.w) * u64::from(terrain.h);
+        if cells == 0 || cells != terrain.heights.len() as u64 {
+            return Err("地形网格尺寸与高程数据不符".into());
+        }
+    }
     if let Some(p) = &doc.environment { p.validate()?; }
     if let Some(p) = &doc.visualization { p.validate()?; }
     Ok(())
@@ -173,6 +211,12 @@ pub fn backup_path(path: &Path, k: usize) -> std::path::PathBuf {
 /// before that `.bak2`, … up to `keep`; the oldest dropped). A backup that
 /// cannot be made does not stop the save.
 pub fn save_with_backups(path: &Path, doc: &Document, keep: usize) -> Result<(), String> {
+    save_snapshot(path, doc, keep).map(drop)
+}
+
+/// Save with rotating backups, returning the committed bytes for callers
+/// that also send this exact snapshot to another destination.
+pub fn save_snapshot(path: &Path, doc: &Document, keep: usize) -> Result<Vec<u8>, String> {
     let bytes = to_bytes(doc)?;
     if keep > 0 && path.exists() {
         let _ = std::fs::remove_file(backup_path(path, keep));
@@ -184,17 +228,50 @@ pub fn save_with_backups(path: &Path, doc: &Document, keep: usize) -> Result<(),
         }
         let _ = std::fs::copy(path, backup_path(path, 1));
     }
-    crate::recovery::write_atomic(path, &bytes).map_err(|e| format!("保存失败: {e}"))
+    crate::recovery::write_atomic(path, &bytes).map_err(|e| format!("保存失败: {e}"))?;
+    Ok(bytes)
 }
 
 pub fn load(path: &Path) -> Result<Document, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("读取失败: {e}"))?;
-    from_bytes(&bytes)
+    from_owned_bytes(bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_uncompressed_lengths_are_rejected() {
+        let mut tiny = b"ATLASMAP\x01\0\0\0\xff\xff\xff\xff\0".to_vec();
+        assert!(from_bytes(&tiny).is_err());
+        tiny[12..16].copy_from_slice(&4u32.to_le_bytes());
+        assert!(unpack(&tiny).is_err());
+
+        let mut valid = to_bytes(&Document::default()).unwrap();
+        let size = u32::from_le_bytes(valid[12..16].try_into().unwrap());
+        valid[12..16].copy_from_slice(&(size + 1).to_le_bytes());
+        assert!(unpack(&valid).is_err());
+    }
+
+    #[test]
+    fn malformed_terrain_is_rejected_on_root_and_inactive_boards() {
+        use map_core::terrain::Terrain;
+        for (w, h, heights) in [(0, 1, vec![]), (1, 0, vec![]), (2, 2, vec![0, 1, 2])] {
+            let mut bad = Document::default();
+            bad.terrain = Some(Arc::new(Terrain { w, h, heights }));
+            let mut parent = Document::default();
+            WorldBook::edit(&mut parent).add_map(bad.clone());
+            for doc in [bad, parent] {
+                assert!(to_bytes(&doc).unwrap_err().contains("地形"));
+                let mut bytes = MAGIC.to_vec();
+                bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+                let body = rmp_serde::to_vec_named(&doc).unwrap();
+                bytes.extend(lz4_flex::compress_prepend_size(&body));
+                assert!(from_bytes(&bytes).unwrap_err().contains("地形"));
+            }
+        }
+    }
 
     /// Saving keeps the versions it replaces, newest as .bak1, up to `keep`.
     #[test]

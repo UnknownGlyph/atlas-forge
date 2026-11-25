@@ -1,4 +1,5 @@
 //! Coupled, editable environment layers sampled in geographic coordinates.
+mod face_grid;
 mod simulate;
 pub use simulate::generate;
 

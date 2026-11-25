@@ -13,7 +13,44 @@ fn ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1e3
 }
 
+/// Replay the CPU geometry refresh used by both map views, including undo.
+fn scene_refresh() {
+    use map_core::VertexRef;
+    let path = std::env::args_os().nth(2).expect("scene-refresh needs an .atlas project");
+    let doc = map_io::project::load(path.as_ref()).expect("read benchmark project");
+    let mut edited = doc.clone();
+    let changed = doc.topo.edges.iter().filter(|(_, edge)| !edge.pts.is_empty()).any(|(&id, edge)| {
+        let point = edge.pts[0];
+        edited.topo.move_vertex(VertexRef::Pt { edge: id, idx: 0 }, LonLat::new(point.lon + 0.0001, point.lat)).is_ok()
+    });
+    assert!(changed, "benchmark needs a movable boundary point");
+    let mut cache = SceneCache::default();
+    cache.update_geometry(&doc, 0.0);
+    let mut idle = Vec::new();
+    let mut local_edits = Vec::new();
+    for _ in 0..9 {
+        let start = Instant::now();
+        for _ in 0..2_000 {
+            std::hint::black_box(cache.update_geometry(&doc, 0.0));
+        }
+        idle.push(ms(start) * 1000.0 / 2_000.0);
+        let start = Instant::now();
+        for _ in 0..40 {
+            assert!(cache.update_geometry(&edited, 0.0).fill_rebuilt);
+            assert!(cache.update_geometry(&doc, 0.0).fill_rebuilt);
+        }
+        local_edits.push(ms(start) / 80.0);
+    }
+    idle.sort_by(f64::total_cmp);
+    local_edits.sort_by(f64::total_cmp);
+    println!("faces={} edges={} stable_refresh_us={:.3} edited_refresh_ms={:.3}",
+        doc.topo.faces.len(), doc.topo.edges.len(), idle[4], local_edits[4]);
+}
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("scene-refresh") {
+        return scene_refresh();
+    }
     if std::env::args().nth(1).as_deref() == Some("authoring") {
         return authoring();
     }

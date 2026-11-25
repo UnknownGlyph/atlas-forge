@@ -82,11 +82,12 @@ impl App {
     /// Draw the symbols shown in the current year (all of them, the others
     /// faint, with the symbol tool), recording where each is. `taken`
     /// collects their boxes so labels drawn after keep clear.
-    pub fn draw_symbols(&self, painter: &egui::Painter, vg: &ViewGeom, taken: &mut crate::label_boxes::LabelBoxes, pass: map_core::stack::DrawPass) {
+    pub fn draw_symbols(&self, painter: &egui::Painter, vg: &ViewGeom, taken: &mut crate::label_boxes::LabelBoxes, layer: &crate::draw_layers::LayerFeatures) {
         let editing = self.tool == Tool::Symbol;
         let detail = self.map_detail(vg);
         let mut rects = Vec::new();
-        for (id, s) in self.doc.symbols.iter().filter(|(id, _)| self.doc.group_of_id(**id) == pass.group) {
+        for id in &layer.symbols {
+            let s = &self.doc.symbols[id];
             let shown = s.shown_in(self.doc.year);
             if !shown && !editing {
                 continue;
@@ -145,7 +146,7 @@ impl App {
             }
         }
         let slot = &mut self.sym_rects.borrow_mut()[vg.kind.index()];
-        if pass.group.is_none() {
+        if layer.pass.group.is_none() {
             slot.clear();
         }
         slot.extend(rects);

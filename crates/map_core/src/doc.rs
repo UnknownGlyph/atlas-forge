@@ -1047,11 +1047,11 @@ pub struct Document {
     #[serde(default)]
     pub groups: Vec<crate::stack::FeatureGroup>,
     #[serde(default)]
-    pub group_of: std::collections::BTreeMap<LineId, crate::stack::GroupId>,
+    pub group_of: OrdMap<LineId, crate::stack::GroupId>,
     /// Rivers, routes and hatched areas drawn with curves: the curve, by
     /// feature id (its points are the flattened curve; see [`crate::curve`]).
     #[serde(default)]
-    pub curves: std::collections::BTreeMap<LineId, crate::curve::Curve>,
+    pub curves: OrdMap<LineId, crate::curve::Curve>,
     /// Named styles of drawn features, the style each linked feature
     /// follows, and the palette (see [`crate::styles`]).
     #[serde(default)]

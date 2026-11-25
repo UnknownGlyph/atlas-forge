@@ -40,6 +40,27 @@ fn a_curve_of_corners_is_the_polyline() {
 }
 
 #[test]
+fn curve_and_group_snapshots_share_storage_and_preserve_ordered_wire_maps() {
+    use map_core::{change::ChangeSet, stack::GroupId};
+    use std::collections::BTreeMap;
+
+    let mut doc = Document::default();
+    let id = LineId(47);
+    let curve = Curve::corners(&[p(1.0, 2.0), p(3.0, 4.0)], false);
+    doc.curves.insert(id, curve.clone());
+    doc.group_of.insert(id, GroupId(11));
+    let mut snapshot = doc.clone();
+    assert!(snapshot.curves.ptr_eq(&doc.curves) && snapshot.group_of.ptr_eq(&doc.group_of));
+    let wire = serde_json::to_value(&doc).unwrap();
+    assert_eq!(wire["curves"], serde_json::to_value(BTreeMap::from([(id, &curve)])).unwrap());
+    assert_eq!(wire["group_of"], serde_json::to_value(BTreeMap::from([(id, GroupId(11))])).unwrap());
+    snapshot.curves.remove(&id);
+    snapshot.group_of.remove(&id);
+    assert!(ChangeSet::between(&doc, &snapshot).old_bytes >= curve.nodes.len() * std::mem::size_of::<CurveNode>());
+    assert!(doc.curves.contains_key(&id) && doc.group_of.contains_key(&id));
+}
+
+#[test]
 fn flattening_follows_the_curve_closely() {
     let c = Curve::smooth_through(&[p(0.0, 0.0), p(10.0, 8.0), p(20.0, -3.0), p(30.0, 6.0)], false);
     let pts = c.flatten();

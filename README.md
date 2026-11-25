@@ -25,7 +25,7 @@ A world from the new-world wizard (seed 7), exported straight to PNG: hill shadi
 
 Atlas Forge 把陆地、国家、河流与城市画在**同一张共享边界的矢量拓扑**上：两国之间的边界只有一条，改一处，两边一起变。边界、海岸与归属**逐年变化**——在某一年做的修改从那一年起生效，更早的年份保持原样。画好的世界可以直接导出成**成品地图**。二维多投影地图与三维地球共用同一份数据，**完全离线**；可选的 **AI 助手**能在一份草稿上与你共同创作。
 
-> **0.2.4 Alpha** 更新创作工作室的工具条、浅色与深色外观、常用绘图选项和选中卡片，加入应用图标与伊瑟尔三国图文教程。[发布页面](https://github.com/UnknownGlyph/atlas-forge/releases/tag/v0.2.4-alpha) · [创作工作区](docs/CREATION_WORKSPACES.md) · [图文教程](docs/tutorial/ithaer/README.md)
+> **0.2.5 Alpha** 优化大地图分屏浏览、边界编辑、气候与环境生成，以及工程读写。增加损坏工程检查，修复部分自动保存失败后未重试的问题。[发布页面](https://github.com/UnknownGlyph/atlas-forge/releases/tag/v0.2.5-alpha) · [性能对照](docs/BENCHMARKS.md) · [图文教程](docs/tutorial/ithaer/README.md)
 
 > **v0.2.2-alpha** 提供 Windows 便携版。可在同一窗口切换专业界面与羊皮纸创作工作室。新增脚本步骤回放、创作模板和地图涂色，减少放大地图时的屏外渲染开销。[创作工作区](docs/CREATION_WORKSPACES.md)
 
@@ -48,7 +48,7 @@ Atlas Forge 把陆地、国家、河流与城市画在**同一张共享边界的
 
 ### 下载与运行
 
-1. 下载 Windows x64 便携包，解压后运行 `atlas.exe`，无需安装。[0.2.4 Alpha 便携包](https://github.com/UnknownGlyph/atlas-forge/releases/download/v0.2.4-alpha/AtlasForge-0.2.4-alpha-windows-x64.zip) · [其他版本](https://github.com/UnknownGlyph/atlas-forge/releases)
+1. 下载 Windows x64 便携包，解压后运行 `atlas.exe`，无需安装。[0.2.5 Alpha 便携包](https://github.com/UnknownGlyph/atlas-forge/releases/download/v0.2.5-alpha/AtlasForge-0.2.5-alpha-windows-x64.zip) · [其他版本](https://github.com/UnknownGlyph/atlas-forge/releases)
 2. 需要 Windows 10/11 x64，以及支持 DirectX 12、Vulkan 或 OpenGL 的显卡。
 3. 检查程序：`atlas.exe --self-test <文件夹>` 会生成世界、划分国家、修路、保存读回并导出 PNG/SVG/PDF，把报告写到该文件夹的 `自检报告.txt`。
 4. 打开工程：把 `.atlas` 文件拖到 `atlas.exe` 上，或 `atlas.exe 世界.atlas`。压缩包里带一个示例世界。
@@ -119,7 +119,7 @@ assets/fonts       随附字体 Noto Sans SC（SIL OFL 1.1）
 
 Atlas Forge draws land, countries, rivers and cities on **one shared-border vector topology**: there is one border between two countries, and moving it changes both. Borders, coasts and ownership **change year by year**: an edit made in a year takes effect from that year on, and earlier years stay as they were. A finished world exports straight to **finished maps**. The flat map, in several projections, and the 3D globe share the same data, and everything works **offline**; an optional **AI assistant** can co-create with you on a draft.
 
-> **0.2.4 Alpha** refreshes the Creative Studio with an icon toolbar, light and dark appearance, streamlined drawing options and selection cards. It also adds an app icon and an illustrated Ithaer tutorial. [Release](https://github.com/UnknownGlyph/atlas-forge/releases/tag/v0.2.4-alpha) · [Creative Studio](docs/CREATION_WORKSPACES.md) · [Tutorial](docs/tutorial/ithaer/README.md)
+> **0.2.5 Alpha** speeds up large-map navigation, boundary editing, climate and environment generation, and project I/O. It also checks damaged project data and retries failed autosave destinations independently. [Release](https://github.com/UnknownGlyph/atlas-forge/releases/tag/v0.2.5-alpha) · [Benchmarks](docs/BENCHMARKS.md) · [Tutorial](docs/tutorial/ithaer/README.md)
 
 > **v0.2.2-alpha** is available as a portable Windows build, with a single-window parchment studio, script replay, worldbuilding starters, colored brush strokes, and faster map zooming.
 
@@ -135,7 +135,7 @@ Atlas Forge draws land, countries, rivers and cities on **one shared-border vect
 
 ### Download and run
 
-1. Download the Windows x64 portable package, unzip it and run `atlas.exe`. [0.2.4 Alpha package](https://github.com/UnknownGlyph/atlas-forge/releases/download/v0.2.4-alpha/AtlasForge-0.2.4-alpha-windows-x64.zip) · [Other versions](https://github.com/UnknownGlyph/atlas-forge/releases)
+1. Download the Windows x64 portable package, unzip it and run `atlas.exe`. [0.2.5 Alpha package](https://github.com/UnknownGlyph/atlas-forge/releases/download/v0.2.5-alpha/AtlasForge-0.2.5-alpha-windows-x64.zip) · [Other versions](https://github.com/UnknownGlyph/atlas-forge/releases)
 2. It needs Windows 10/11 x64 and a graphics card with DirectX 12, Vulkan or OpenGL.
 3. Checking the program: `atlas.exe --self-test <folder>` makes a world, partitions a country, builds roads, saves and reads back, exports PNG/SVG/PDF, and writes its report to `自检报告.txt` in that folder.
 4. Opening a project: drop a `.atlas` file on `atlas.exe`, or run `atlas.exe world.atlas`. A sample world comes in the zip.

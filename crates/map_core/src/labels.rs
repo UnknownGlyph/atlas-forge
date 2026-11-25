@@ -441,6 +441,11 @@ impl LabelCache {
         n
     }
 
+    /// The cached automatic baseline, also used to size a manually placed name.
+    pub fn path(&self, entity: EntityId) -> Option<&LabelPath> {
+        self.paths.get(&entity)
+    }
+
     /// The lines, the one holding the largest name first.
     pub fn sorted(&self) -> Vec<(EntityId, LabelPath)> {
         let mut v: Vec<_> = self.paths.iter().map(|(e, p)| (*e, p.clone())).collect();

@@ -225,7 +225,7 @@ impl Period {
     pub fn name(self) -> String {
         match self {
             Self::Annual => "全年".into(),
-            Self::Month(n) => format!("{} 月", n + 1),
+            Self::Month(n) => format!("{} 月", n % 12 + 1),
             Self::Season(n) => {
                 ["12–2 月", "3–5 月", "6–8 月", "9–11 月"][usize::from(n) % 4].into()
             }
@@ -254,6 +254,9 @@ impl Scenario {
         ground: &[Ground],
     ) -> Result<Self, String> {
         region.validate()?;
+        if ground.len() != W * H || ground.iter().any(|g| !g.height.is_finite()) {
+            return Err("气候地表网格尺寸或海拔无效".into());
+        }
         let planet = settings.planet.resolve()?;
         Ok(Self {
             cells: Arc::new(calculate(&planet, ground)),
@@ -438,6 +441,7 @@ impl Scenario {
         sums.map(|s| s / total.max(1e-12))
     }
 }
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Project {
     pub settings: Settings,
@@ -490,5 +494,20 @@ impl Default for Project {
             saved: vec![],
             selected: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod grid_input_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_ground_returns_an_error_before_calculation() {
+        let run = |ground: &[Ground]| Scenario::new(Settings::default(), None, Region::default(), ground);
+        assert!(run(&[Ground::default()]).is_err());
+        let mut ground = vec![Ground::default(); W * H];
+        ground[0].height = f32::NAN;
+        assert!(run(&ground).is_err());
+        assert_eq!(Period::Month(255).name(), "4 月");
     }
 }

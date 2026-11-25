@@ -32,11 +32,12 @@ fn rotate(v: Vec2, a: f32) -> Vec2 {
 impl App {
     /// Draw every annotation, recording where each is for the label tool.
     /// `taken` collects their boxes so labels drawn after keep clear.
-    pub fn draw_annotations(&self, painter: &egui::Painter, vg: &ViewGeom, taken: &mut crate::label_boxes::LabelBoxes, pass: map_core::stack::DrawPass) {
+    pub fn draw_annotations(&self, painter: &egui::Painter, vg: &ViewGeom, taken: &mut crate::label_boxes::LabelBoxes, layer: &crate::draw_layers::LayerFeatures) {
         let editing = self.tool == Tool::Label;
         let zoom = (vg.px_per_deg() / Annotation::REF_PX_PER_DEG) as f32;
         let mut rects = Vec::new();
-        for (id, a) in self.doc.annotations.iter().filter(|(id, _)| self.doc.group_of_id(**id) == pass.group) {
+        for id in &layer.annotations {
+            let a = &self.doc.annotations[id];
             // hidden text shows faintly only while editing text
             if a.hidden && !editing {
                 continue;
@@ -111,7 +112,7 @@ impl App {
         }
         // the first pass starts the list anew; later layers lie on top
         let slot = &mut self.ann_rects.borrow_mut()[vg.kind.index()];
-        if pass.group.is_none() {
+        if layer.pass.group.is_none() {
             slot.clear();
         }
         slot.extend(rects);

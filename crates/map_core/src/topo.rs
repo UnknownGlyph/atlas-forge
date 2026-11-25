@@ -379,13 +379,11 @@ impl Topology {
     pub fn rebuild_index(&mut self) {
         self.edge_index = GridIndex::default();
         self.face_index = GridIndex::default();
-        let edges: Vec<(EdgeId, [f64; 4])> = self.edges.iter().map(|(id, e)| (*id, e.bbox)).collect();
-        for (id, bb) in edges {
-            self.edge_index.insert(id.0, bb);
+        for (id, edge) in &self.edges {
+            self.edge_index.insert(id.0, edge.bbox);
         }
-        let faces: Vec<(FaceId, [f64; 4])> = self.faces.iter().filter(|(id, _)| **id != BACKGROUND).map(|(id, f)| (*id, f.bbox)).collect();
-        for (id, bb) in faces {
-            self.face_index.insert(id.0, bb);
+        for (id, face) in &self.faces {
+            if *id != BACKGROUND { self.face_index.insert(id.0, face.bbox); }
         }
     }
 

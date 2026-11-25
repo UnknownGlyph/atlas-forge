@@ -6,13 +6,15 @@ use map_core::doc::Document;
 use map_io::checkpoints::Store;
 use map_io::cloud::{self, Provider};
 use map_io::recovery::{Recovery, RecoveryInfo};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+#[derive(Default)]
 struct Snapshot {
     archived: bool,
+    recovered: bool,
     error: Option<String>,
     cloud: [Option<Result<PathBuf,String>>;2],
 }
@@ -28,6 +30,7 @@ pub struct Autosave {
     last: Instant,
     /// History generation captured by the last snapshot.
     saved_gen: Option<u64>,
+    recovery_gen: Option<u64>,
     attempted_gen: Option<u64>,
     interval: Duration,
     /// The interval was given by ATLAS_AUTOSAVE_SECS (tests): preferences leave it alone.
@@ -53,6 +56,10 @@ impl Autosave {
             .ok()
             .map(Arc::new);
         crate::crash::install(recovery.clone(), prefs.crash_directory());
+        Self::with_recovery(recovery_directory, recovery)
+    }
+
+    fn with_recovery(recovery_directory: PathBuf, recovery: Option<Arc<Recovery>>) -> Self {
         let offers = recovery.as_ref().map(|r| r.orphans()).unwrap_or_default();
         let env: Option<u64> = std::env::var("ATLAS_AUTOSAVE_SECS")
             .ok()
@@ -64,6 +71,7 @@ impl Autosave {
             job: None,
             last: Instant::now(),
             saved_gen: None,
+            recovery_gen: None,
             attempted_gen: None,
             interval: Duration::from_secs(env.unwrap_or(60)),
             fixed: env.is_some(),
@@ -112,12 +120,14 @@ impl Autosave {
     fn wait_job(&mut self) -> Option<String> {
         self.job.take().and_then(|(generation, j)| {
             let result = j.join().unwrap_or_else(|_| Snapshot {
-                archived: false,
                 error: Some("自动保存线程崩溃".into()),
-                cloud: [None,None],
+                ..Default::default()
             });
             if result.archived {
                 self.saved_gen = Some(generation);
+            }
+            if result.recovered {
+                self.recovery_gen = Some(generation);
             }
             self.revision += 1;
             let mut errors:Vec<_>=result.error.into_iter().collect();
@@ -142,6 +152,7 @@ impl Autosave {
             r.clear();
         }
         self.saved_gen = Some(gen);
+        self.recovery_gen = Some(gen);
         self.cloud_gen = [None;2];
         self.cloud_saved_file=None;
         self.attempted_gen = None;
@@ -155,16 +166,15 @@ impl Autosave {
         self.revision += 1;
     }
 
-    pub fn saved_project(&mut self, path: &std::path::Path, generation: u64) -> Result<(), String> {
+    pub fn saved_project(&mut self, path: &Path, generation: u64, bytes: Vec<u8>) -> Result<(), String> {
         self.mark_clean(generation);
         if !self.cloud.is_empty() {
             self.cloud_saved_file=Some((generation,path.to_path_buf()));
             let cloud=self.cloud.clone();
-            let source=path.to_path_buf();
-            self.job=Some((generation,crate::perf_ui::spawn("迁移恢复快照", move||match std::fs::read(&source) {
-                Ok(bytes)=>Snapshot {archived:false,error:None,cloud:cloud_copies(
-                    &cloud,source.file_stem().and_then(|s|s.to_str()).unwrap_or("World"),&bytes)},
-                Err(e)=>Snapshot {archived:false,error:Some(e.to_string()),cloud:[None,None]},
+            let label = path.file_stem().and_then(|s| s.to_str()).unwrap_or("World").to_owned();
+            self.job = Some((generation, crate::perf_ui::spawn("写入云目录副本", move || Snapshot {
+                cloud: cloud_copies(&cloud, &label, &bytes),
+                ..Default::default()
             })));
         }
         let destination = Store::for_project(path);
@@ -198,6 +208,7 @@ impl Autosave {
     /// exists only in memory).
     pub fn mark_unsaved(&mut self) {
         self.saved_gen = None;
+        self.recovery_gen = None;
         self.attempted_gen = None;
         self.last = Instant::now()
             .checked_sub(self.interval)
@@ -210,7 +221,7 @@ impl Autosave {
         &mut self,
         ctx: &egui::Context,
         doc: &Document,
-        original: Option<PathBuf>,
+        original: Option<&Path>,
         gen: u64,
         dirty: bool,
         busy: bool,
@@ -222,14 +233,14 @@ impl Autosave {
         if self.job.is_some() {
             // come back for its result (the window rests while idle)
             ctx.request_repaint_after(Duration::from_millis(500));
+            return err;
         }
-        let capture_local = self.enabled && self.saved_gen != Some(gen);
-        let mut cloud=self.cloud.clone();
-        for (i,p) in Provider::ALL.into_iter().enumerate(){
-            if self.cloud_gen[i]==Some(gen){*cloud.folder_mut(p)=None;}
-        }
-        let manual = self.cloud_saved_file.as_ref().filter(|(year,_)|!dirty&&*year==gen).map(|(_,p)|p.clone());
-        if (!dirty && manual.is_none()) || busy || self.job.is_some() || (!capture_local && cloud.is_empty()) {
+        let manual = self.cloud_saved_file.as_ref().filter(|(generation, _)| !dirty && *generation == gen);
+        if busy || (!dirty && manual.is_none()) { return err; }
+        let archive_due = self.enabled && self.saved_gen != Some(gen);
+        let recovery_due = self.enabled && self.recovery_gen != Some(gen) && self.recovery.is_some();
+        let cloud_due = |i, provider| self.cloud_gen[i] != Some(gen) && self.cloud.folder(provider).is_some();
+        if !archive_due && !recovery_due && !Provider::ALL.into_iter().enumerate().any(|(i, p)| cloud_due(i, p)) {
             return err;
         }
         let elapsed = self.last.elapsed();
@@ -242,9 +253,17 @@ impl Autosave {
             ctx.request_repaint_after(self.interval - elapsed);
             return err;
         }
-        // O(1) clone; serialisation and disk I/O happen off the UI thread
+        // Copy paths and snapshot handles only when a worker is actually due.
+        let mut cloud = cloud::Config::default();
+        for (i, provider) in Provider::ALL.into_iter().enumerate() {
+            if cloud_due(i, provider) {
+                *cloud.folder_mut(provider) = self.cloud.folder(provider).map(Path::to_path_buf);
+            }
+        }
+        let manual = manual.map(|(_, path)| path.clone());
+        let original = original.map(Path::to_path_buf);
         let doc = doc.clone();
-        let rec = self.recovery.clone().filter(|_|capture_local);
+        let rec = self.recovery.clone().filter(|_| recovery_due);
         let store = self.store.clone();
         let keep = self.keep;
         self.job = Some((
@@ -256,22 +275,21 @@ impl Autosave {
                     .to_owned();
                 if let Some(path)=manual {
                     return match std::fs::read(&path) {
-                        Ok(bytes)=>Snapshot {archived:false,error:None,cloud:cloud_copies(&cloud,
-                            path.file_stem().and_then(|s|s.to_str()).unwrap_or(&doc.meta.name), &bytes)},
-                        Err(e)=>Snapshot {archived:false,error:Some(e.to_string()),cloud:[None,None]},
+                        Ok(bytes)=>Snapshot {cloud:cloud_copies(&cloud,
+                            path.file_stem().and_then(|s|s.to_str()).unwrap_or(&doc.meta.name), &bytes), ..Default::default()},
+                        Err(e)=>Snapshot {error:Some(e.to_string()), ..Default::default()},
                     };
                 }
                 let bytes = match map_io::project::to_bytes(&doc) {
                     Ok(bytes) => bytes,
                     Err(error) => {
                         return Snapshot {
-                            archived: false,
                             error: Some(error),
-                            cloud: [None,None],
+                            ..Default::default()
                         }
                     }
                 };
-                let recovery = rec.and_then(|rec| {
+                let recovery = rec.map(|rec| {
                     rec.write_encoded(
                         &bytes,
                         &doc.meta.name,
@@ -279,13 +297,12 @@ impl Autosave {
                         None,
                         store.draft_key().map(str::to_owned),
                     )
-                    .err()
-                    .map(|error| format!("崩溃恢复：{error}"))
                 });
-                let archive = capture_local.then(||store.capture_encoded(&doc.meta.name,&bytes,keep));
+                let recovered = recovery.as_ref().is_some_and(|r| r.is_ok());
+                let archive = archive_due.then(||store.capture_encoded(&doc.meta.name,&bytes,keep));
                 let archived = archive.as_ref().is_some_and(|r|r.is_ok());
                 let errors: Vec<_> = [
-                    recovery,
+                    recovery.and_then(Result::err).map(|error| format!("崩溃恢复：{error}")),
                     archive.and_then(Result::err).map(|error| format!("版本历史：{error}")),
                 ]
                 .into_iter()
@@ -293,6 +310,7 @@ impl Autosave {
                 .collect();
                 Snapshot {
                     archived,
+                    recovered,
                     error: (!errors.is_empty()).then(|| errors.join("；")),
                     cloud: cloud_copies(&cloud, &label, &bytes),
                 }
@@ -423,5 +441,40 @@ impl App {
         } else {
             self.autosave.discard_offer(&session);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retries_only_the_failed_local_destination() {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("atlas-autosave-retry-{}-{now}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let recovery = Arc::new(Recovery::start(&root).unwrap());
+        let metadata = root.join(format!("{}.json", recovery.session()));
+        // A directory at the metadata path causes the final replacement to fail.
+        std::fs::create_dir(&metadata).unwrap();
+        let mut autosave = Autosave::with_recovery(root.clone(), Some(recovery.clone()));
+        autosave.interval = Duration::ZERO;
+        let ctx = egui::Context::default();
+        let doc = Document::default();
+        assert!(autosave.tick(&ctx, &doc, None, 9, true, false).is_none());
+        assert!(autosave.wait_job().unwrap().contains("崩溃恢复"));
+        assert_eq!(autosave.saved_gen, Some(9));
+        assert_eq!(autosave.recovery_gen, None);
+        assert_eq!(autosave.store.list().unwrap().len(), 1);
+        std::fs::remove_dir(&metadata).unwrap();
+        assert!(autosave.tick(&ctx, &doc, None, 9, true, false).is_none());
+        assert!(autosave.wait_job().is_none());
+        assert_eq!(autosave.recovery_gen, Some(9));
+        assert_eq!(autosave.store.list().unwrap().len(), 1);
+        assert_eq!(recovery.load(recovery.session()).unwrap().meta, doc.meta);
+        assert!(metadata.is_file());
+        drop(autosave);
+        Arc::try_unwrap(recovery).ok().unwrap().finish();
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

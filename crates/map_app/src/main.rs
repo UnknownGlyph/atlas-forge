@@ -17,10 +17,13 @@ mod book_ui;
 mod crash;
 mod curve_ui;
 mod draw_ui;
+mod draw_layers;
 mod events_ui;
 mod environment_ui;
 mod features_ui;
 mod focus_ui;
+#[cfg(test)]
+mod frame_replay;
 mod i18n;
 mod fonts_ui;
 mod furniture_ui;

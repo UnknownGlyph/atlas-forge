@@ -4,8 +4,47 @@
 
 use crate::app::App;
 use eframe::egui::{self, RichText};
-use map_core::lifespan::Presence;
-use map_core::{EntityId, EntityKind};
+use imbl::OrdMap;
+use map_core::doc::{Entity, Layer, LayerId, OwnerChanges};
+use map_core::lifespan::{LifespanConflict, Presence};
+use map_core::topo::Face;
+use map_core::{Document, EntityId, EntityKind, FaceId, FaceKind};
+use std::collections::BTreeMap;
+
+#[derive(Default)]
+pub(crate) struct LifespanCache {
+    view: Option<(i32, LayerId)>,
+    entities: OrdMap<EntityId, Entity>,
+    faces: OrdMap<FaceId, Face>,
+    owner_base: OrdMap<FaceId, EntityId>,
+    owner_changes: OrdMap<FaceId, OwnerChanges>,
+    kind_base: OrdMap<FaceId, FaceKind>,
+    kind_changes: OrdMap<FaceId, BTreeMap<i32, FaceKind>>,
+    layers: OrdMap<LayerId, Layer>,
+    conflicts: Vec<LifespanConflict>,
+}
+
+impl LifespanCache {
+    fn for_view(&mut self, doc: &Document, year: i32) -> &[LifespanConflict] {
+        if self.view != Some((year, doc.active_layer))
+            || !self.entities.ptr_eq(&doc.entities) || !self.faces.ptr_eq(&doc.topo.faces)
+            || !self.owner_base.ptr_eq(&doc.owner_base) || !self.owner_changes.ptr_eq(&doc.owner_changes)
+            || !self.kind_base.ptr_eq(&doc.kind_base) || !self.kind_changes.ptr_eq(&doc.kind_changes)
+            || !self.layers.ptr_eq(&doc.layers)
+        {
+            self.conflicts = doc.lifespan_conflicts(year);
+            self.view = Some((year, doc.active_layer));
+            self.entities = doc.entities.clone();
+            self.faces = doc.topo.faces.clone();
+            self.owner_base = doc.owner_base.clone();
+            self.owner_changes = doc.owner_changes.clone();
+            self.kind_base = doc.kind_base.clone();
+            self.kind_changes = doc.kind_changes.clone();
+            self.layers = doc.layers.clone();
+        }
+        &self.conflicts
+    }
+}
 
 impl App {
     /// A short note on an entity's state in the selected year, for lists:
@@ -108,7 +147,7 @@ impl App {
     /// does not exist then; with the fixes for an entity that has ended.
     pub fn lifespan_conflicts_section(&mut self, ui: &mut egui::Ui) {
         let Some(year) = self.doc.year else { return };
-        let conflicts = self.doc.lifespan_conflicts(year);
+        let conflicts = self.lifespan_cache.for_view(&self.doc, year);
         if conflicts.is_empty() {
             return;
         }
@@ -117,7 +156,7 @@ impl App {
         ui.weak(crate::i18n::tr("下列土地或下属在记录中属于该年不存续的实体，因此显示为未分配或无上级；记录本身没有被改动。"));
         let mut action: Option<(EntityId, Option<EntityId>, String)> = None;
         let mut pick: Option<EntityId> = None;
-        for c in &conflicts {
+        for c in conflicts {
             let Some(x) = self.doc.entities.get(&c.entity) else { continue };
             let state = match c.presence {
                 Presence::Ended => format!("{} 年已终止", x.ended.unwrap_or_default()),
@@ -163,5 +202,33 @@ impl App {
                 self.set_status(crate::trf!("已把 {n} 块土地{what}（只改变终止之后的年份，可撤销）"), false);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use map_core::{FaceKind, LonLat};
+
+    #[test]
+    fn conflicts_refresh_after_an_owner_lifespan_year_or_board_changes() {
+        let mut doc = Document::default();
+        let ring = [(0.0, 0.0), (4.0, 0.0), (0.0, 4.0)].map(|(x, y)| LonLat::new(x, y));
+        let face = doc.add_ring_face(&ring, FaceKind::Land).unwrap();
+        let country = doc.add_entity(EntityKind::Country, "country");
+        doc.assign(face, Some(country)).unwrap();
+        doc.set_year(Some(100));
+        let mut cache = LifespanCache::default();
+        assert!(cache.for_view(&doc, 100).is_empty());
+        doc.set_lifespan(country, None, Some(99)).unwrap();
+        assert_eq!(cache.for_view(&doc, 100), doc.lifespan_conflicts(100));
+        assert_eq!(cache.for_view(&doc, 100)[0].faces, [face]);
+        doc.set_year(Some(99));
+        assert!(cache.for_view(&doc, 99).is_empty());
+        doc.set_year(Some(100));
+        assert_eq!(cache.for_view(&doc, 100).len(), 1);
+        let mut blank = Document::default();
+        blank.set_year(Some(100));
+        assert!(cache.for_view(&blank, 100).is_empty());
     }
 }
