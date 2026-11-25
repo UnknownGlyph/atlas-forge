@@ -21,7 +21,7 @@ if (-not $NoBuild) {
     try {
         $env:CARGO_ENCODED_RUSTFLAGS = $flags -join [char]0x1f
         $env:CARGO_TARGET_DIR = $target
-        & "$PSScriptRoot\cargo-msvc.cmd" build --locked --release -p map_app -p map_api -p map_ai -p map_perf
+        & "$PSScriptRoot\cargo-msvc.cmd" build --manifest-path "$root\Cargo.toml" --locked --release -p map_app -p map_api -p map_ai -p map_perf
         if ($LASTEXITCODE -ne 0) { throw "构建失败" }
     } finally {
         $env:CARGO_ENCODED_RUSTFLAGS = $previousFlags
