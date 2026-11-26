@@ -131,3 +131,48 @@ fn artboard_marks_keep_group_opacity_when_the_project_reopens() {
     assert_eq!(pixel.red(), 255);
     assert!((126..=129).contains(&pixel.green()));
 }
+
+#[test]
+fn pixel_marks_survive_the_clipboard_and_share_their_art() {
+    use map_core::features::FeatureRef;
+
+    // two marks drawn with one picture, a third with another
+    let mut flag = PixelArt::new(16, 8).unwrap();
+    flag.stroke([0, 0], [15, 7], 2, [235, 30, 60, 255]);
+    let mut star = PixelArt::new(8, 8).unwrap();
+    star.stroke([0, 4], [7, 4], 1, [250, 200, 40, 255]);
+    let (flag, star) = (Arc::new(flag), Arc::new(star));
+    let mut doc = Document::default();
+    let mut marks = Vec::new();
+    for (lon, art) in [(0.0, &flag), (20.0, &flag), (40.0, &star)] {
+        let id = LineId(doc.topo.alloc());
+        let mut symbol = MapSymbol::new(SymbolKind::Site, LonLat::new(lon, 10.0));
+        symbol.pixels = Some(Arc::clone(art));
+        doc.symbols.insert(id, symbol);
+        marks.push(FeatureRef::Symbol(id));
+    }
+    // through the clipboard as text, as between two windows
+    let text = map_io::clip::to_text(&doc.copy_features(&marks));
+    let clip = map_io::clip::from_text(&text).expect("our own clipboard text");
+    let art = |d: &Document, f: &FeatureRef| d.symbols[&f.id()].pixels.clone().expect("pixel art");
+
+    // into another map: the same pictures, the repeated one held once
+    let mut other = Document::default();
+    let first = other.paste_features(&clip, None).unwrap();
+    assert_eq!(*art(&other, &first[0]), *flag);
+    assert_eq!(*art(&other, &first[2]), *star);
+    assert!(Arc::ptr_eq(&art(&other, &first[0]), &art(&other, &first[1])));
+    assert!(!Arc::ptr_eq(&art(&other, &first[0]), &art(&other, &first[2])));
+    // pasted again there: the pictures that map already holds
+    let again = other.paste_features(&clip, Some(LonLat::new(-60.0, -20.0))).unwrap();
+    for (a, b) in first.iter().zip(&again) {
+        assert!(Arc::ptr_eq(&art(&other, a), &art(&other, b)));
+    }
+    // back into the map they came from: its own pictures
+    let back = doc.paste_features(&clip, None).unwrap();
+    assert!(Arc::ptr_eq(&art(&doc, &back[0]), &flag) && Arc::ptr_eq(&art(&doc, &back[1]), &flag));
+    assert!(Arc::ptr_eq(&art(&doc, &back[2]), &star));
+    // and the copies export like the originals
+    let scene = map_io::scene::build_scene(&other, &theme::evaluate(&other), &map_io::scene::ExportOptions { width: 800, height: 400, ..Default::default() });
+    assert_eq!(scene.pixels.len(), 6);
+}

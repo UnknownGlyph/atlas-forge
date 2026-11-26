@@ -323,6 +323,7 @@ impl Document {
                 }
             });
         }
+        self.share_pasted_pixel_art(&out);
         // the copies follow the same styles, where this document has them as they were
         for (i, (s, look)) in &clip.styles {
             if let (Some(f), Some(st)) = (out.get(*i), self.style(*s)) {
@@ -335,6 +336,40 @@ impl Document {
             self.move_features(&out, from, to)?;
         }
         Ok(out)
+    }
+
+    /// Clipboard text carries every pixel mark's picture in full, so each
+    /// pasted mark would hold its own copy. A pasted picture the document
+    /// already has (or another pasted mark has) uses that one instead, as a
+    /// reopened project does: repeated marks keep one picture in memory and
+    /// one texture in the app's and the PNG renderer's caches (both keyed by
+    /// the picture's address).
+    fn share_pasted_pixel_art(&mut self, pasted: &[FeatureRef]) {
+        let marks: Vec<LineId> = pasted.iter().filter_map(|f| match f {
+            FeatureRef::Symbol(id) if self.symbols.get(id).is_some_and(|s| s.pixels.is_some()) => Some(*id),
+            _ => None,
+        }).collect();
+        if marks.is_empty() {
+            return;
+        }
+        let new: std::collections::BTreeSet<LineId> = marks.iter().copied().collect();
+        let mut known: std::collections::HashSet<std::sync::Arc<crate::pixel_art::PixelArt>> =
+            self.symbols.iter().filter(|(id, _)| !new.contains(id)).filter_map(|(_, s)| s.pixels.clone()).collect();
+        for id in marks {
+            let Some(art) = self.symbols.get(&id).and_then(|s| s.pixels.clone()) else { continue };
+            match known.get(&art) {
+                Some(same) if !std::sync::Arc::ptr_eq(same, &art) => {
+                    let same = std::sync::Arc::clone(same);
+                    if let Some(s) = self.symbols.get_mut(&id) {
+                        s.pixels = Some(same);
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    known.insert(art);
+                }
+            }
+        }
     }
 
     /// Copies of features a little away (`dlon`, `dlat` degrees), returned.
